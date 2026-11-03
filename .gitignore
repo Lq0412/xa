@@ -1,0 +1,17 @@
+# 本地调研副本、下载文件和临时输出
+.output/
+
+# 本地环境配置和凭证
+.env
+.env.*
+!.env.example
+
+# Go 构建产物
+server/bin/
+server/dist/
+
+# 编辑器和系统文件
+.idea/
+.vscode/
+*.swp
+.DS_Store

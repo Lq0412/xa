@@ -1,0 +1,7 @@
+[submodule "reference/vault"]
+	path = reference/vault
+	url = git@github.com:Lq0412/vault.git
+
+[submodule "reference/XE3-ESL"]
+	path = reference/XE3-ESL
+	url = git@github.com:1024XEngineer/XE3-ESL.git
