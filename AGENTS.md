@@ -54,7 +54,7 @@
 
 ### 使用的技术
 
-Java 17、Spring Boot 4、MyBatis-Plus、Redis、Milvus、Elasticsearch、Agentscope、React 18、Vite、TypeScript 和 Tailwind。
+Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 18、Vite、TypeScript、Tailwind、Flutter、SSE、WebSocket 和 Docker Compose。
 
 ### 模块职责
 
@@ -64,15 +64,16 @@ Java 17、Spring Boot 4、MyBatis-Plus、Redis、Milvus、Elasticsearch、Agents
 | `agent` | Agent 执行与会话控制 |
 | `rag` | 检索与质量评测 |
 | `tool` | 工具运行时与 MCP 客户端 |
-| `infra-ai` | 模型与语音服务适配 |
 | `framework` | 通用基础设施 |
 | `system` | 用户与权限管理 |
-| `mcp-server` | MCP 工具服务 |
+| `evaluation` | 评价规则与评分结果 |
+| `infra` | 模型、Realtime、语音、向量和重排序服务适配 |
+| `task` | 异步任务定义、调度和处理 |
 
 ### 依赖与安全规则
 
 - 模块保持单向依赖，禁止循环依赖。
-- `framework` 和 `infra-ai` 不得反向依赖上层业务模块。
+- `framework` 和 `infra` 不得反向依赖上层业务模块。
 - 各领域的数据模型和监控边界保持独立，避免混用业务概念。
 - 禁止在代码中硬编码 API Key、密码或其他凭证；统一通过配置文件或环境变量注入。
 
