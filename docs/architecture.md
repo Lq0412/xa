@@ -2,9 +2,9 @@
 
 ## 1. 产品定位
 
-系统是一个可视化 Agent 管理与运行平台。管理员可以创建多个 Agent，分别配置提示词、模型、工具、知识库、评价规则、记忆策略和使用权限；用户在主对话页选择一个已发布 Agent 进行对话。
+系统是一个可视化 Agent 管理与运行平台。管理员可以创建面向所有用户的公共 Agent，普通用户也可以创建只属于自己的私有 Agent。两类 Agent 都通过配置提示词、模型、工具、知识库、评价规则和记忆策略直接使用。
 
-每个可创建、可发布、可使用的学习任务都是一个 Agent。例如：
+每个可创建、可使用的学习任务都是一个 Agent。例如：
 
 ~~~
 IELTS 口语教练
@@ -17,12 +17,12 @@ IELTS 口语教练
 
 这些名称只是配置，不对应不同的代码模块。“场景”只作为名称、用途和标签存在，不设计固定的 scenario 业务分支。
 
-“主 Agent”如果需要存在，只是设置了 is_default 的普通 Agent，不使用特殊运行逻辑。
+管理员可以设置一个公共 Agent 作为主对话页的默认选择，它仍然是普通 Agent，不使用特殊运行逻辑。
 
 ~~~
-Agent 配置
+Agent 创建与配置
     ↓
-Agent 发布版本
+保存后生成可运行版本
     ↓
 统一 Agent Runtime
     ↓
@@ -32,9 +32,10 @@ Agent 发布版本
 ## 2. 设计原则
 
 - 配置驱动：新增 Agent 只增加配置，不复制运行代码。
-- 版本不可变：发布版本不能修改，会话固定绑定版本。
+- 配置即时生效：保存配置后新会话直接使用最新可运行版本，会话固定绑定已使用的版本。
+- 归属隔离：管理员创建的公共 Agent 面向所有用户，用户创建的 Agent 默认只对创建者可见。
 - 记忆隔离：记忆默认按 workspace_id + user_id + agent_id 隔离。
-- 管理面与运行面分离：管理面编辑和发布，运行面只使用已发布版本。
+- 管理面与运行面分离：管理面保存配置，运行面只使用已生效版本。
 - 高内聚、低耦合：模块拥有自己的领域对象、仓储和用例，不跨模块访问数据库表。
 - 少量核心机制：首期不引入固定场景模块、特殊主 Agent、全局 Agent 单例和独立事件总线。
 
@@ -65,11 +66,30 @@ flowchart LR
 
 系统负责：
 
-- Agent 配置、发布和权限。
+- Agent 配置、生效和权限。
 - 文本对话和语音对话。
 - 工具调用和知识检索。
 - 评价、评分、会话历史和 Agent 记忆。
 - 异步任务、审计和运行监控。
+
+### 3.1 角色与入口
+
+首期只有管理员和普通用户两类角色。
+
+| 入口 | 使用者 | 职责 |
+| --- | --- | --- |
+| Web 管理端 | 管理员 | 管理供应商、模型、工具、知识库和公共 Agent |
+| 移动端 | 普通用户 | 使用公共 Agent、创建私有 Agent、进行文本和实时语音对话 |
+
+管理员负责平台级资源，普通用户只能选择平台已经开放的模型、工具和知识库，不能新增供应商或修改平台凭证。用户可以配置自己的 Agent 名称、头像、角色描述、提示词、模型、可用工具和记忆策略。
+
+### 3.2 Agent 归属和可见性
+
+- 公共 Agent：由管理员创建，所有用户可使用。
+- 私有 Agent：由用户创建，默认只对创建者可见。
+- 公共 Agent 和私有 Agent 使用相同的定义、版本、会话、记忆和 Runtime，不建立两套执行逻辑。
+- 普通用户只能修改自己的私有 Agent；公共 Agent 只能由管理员维护。
+- 首期不开放用户 Agent 的公开分享功能。
 
 ## 4. 进程划分
 
@@ -207,7 +227,7 @@ internal/agent/definition/
 
 ### 6.3 agent
 
-负责 Agent 定义、草稿、版本、提示词、绑定、运行、会话、消息、记忆和对外接口。它不直接创建模型客户端，也不直接连接具体模型供应商。
+负责 Agent 定义、配置、版本、提示词、绑定、运行、会话、消息、记忆和对外接口。它不直接创建模型客户端，也不直接连接具体模型供应商。
 
 ### 6.4 tool
 
@@ -242,6 +262,8 @@ infra 采用“预先适配、统一调用、配置选择”的方式管理模�
 ~~~text
 id
 workspace_id
+owner_type
+owner_id
 name
 avatar
 description
@@ -254,7 +276,7 @@ created_at
 updated_at
 ~~~
 
-is_default 只表示主对话页的默认选择。
+`owner_type` 和 `owner_id` 表示 Agent 归属：管理员创建的 Agent 可以设置为 public，用户创建的 Agent 默认是 private。`is_default` 只表示主对话页的默认选择。
 
 ### 7.2 AgentVersion
 
@@ -272,20 +294,19 @@ runtime_limits
 model_bindings
 config_checksum
 created_by
-published_at
+activated_at
 created_at
 ~~~
 
 状态：
 
 ~~~text
-draft
-published
+active
 offline
 archived
 ~~~
 
-发布后的版本不可修改。
+每次保存有效配置都会生成一个不可变版本。新会话使用最新的 active 版本，已有会话继续使用创建时绑定的版本。
 
 ### 7.3 模型供应商和模型配置
 
@@ -302,7 +323,7 @@ AgentVersionModelBinding
     Agent 版本在 text、realtime、embedding、speech、rerank 等能力上使用的模型
 ~~~
 
-`ModelProvider` 和 `ModelProfile` 是平台可管理的注册信息，`AgentVersionModelBinding` 在发布时固化到版本快照。凭证只保存引用，不把密钥写入 Agent 配置或日志。
+`ModelProvider` 和 `ModelProfile` 是平台可管理的注册信息，`AgentVersionModelBinding` 在保存配置时固化到版本快照。凭证只保存引用，不把密钥写入 Agent 配置或日志。
 
 ### 7.4 AgentPrompt
 
@@ -359,34 +380,31 @@ expires_at
 
 ~~~mermaid
 flowchart LR
-    Create[创建 Agent] --> Draft[编辑草稿]
-    Draft --> Validate[校验配置]
-    Validate --> Preview[预览运行]
-    Preview --> Publish[发布版本]
-    Publish --> Online[用户可使用]
-    Online --> NewDraft[创建新草稿]
-    NewDraft --> Draft
-    Online --> Offline[下线版本]
+    Create[创建 Agent] --> Configure[配置提示词、模型和工具]
+    Configure --> Validate[校验配置]
+    Validate --> Save[保存配置]
+    Save --> Active[立即可用]
+    Active --> Update[修改配置]
+    Update --> Configure
+    Active --> Offline[下线 Agent]
 ~~~
 
-管理员配置名称、描述、头像、标签、提示词、模型、工具、知识库、评价规则、记忆策略和运行限制。
+管理员和普通用户都可以创建 Agent。管理员创建的 Agent 可以设置为公共 Agent，普通用户创建的 Agent 默认只对创建者可见。两类 Agent 使用同一个配置模型和 Agent Runtime。
 
-发布前校验提示词变量、模型、工具版本、工具 Schema、知识库、评价规则、记忆策略和运行限制。配置错误直接返回，不能使用静默默认值。
+创建或修改 Agent 时配置名称、描述、头像、标签、提示词、模型、工具、知识库、评价规则、记忆策略和运行限制。保存时校验提示词变量、模型能力、工具版本、工具 Schema、知识库、评价规则、记忆策略和运行限制；校验失败直接返回错误。
 
-预览使用草稿版本，但不写入正式会话和长期记忆。有副作用的工具默认禁止调用，预览日志与正式日志分开。
+保存成功后生成新的不可变 AgentVersion，并立即作为当前 active 版本使用。新会话使用新版本，已有会话继续使用原版本。预览可以使用未保存配置，但不写入正式会话和长期记忆，有副作用的工具默认禁止调用。
 
-发布过程在事务中完成：
+保存过程在事务中完成：
 
 ~~~text
-校验草稿
+校验配置
 → 生成不可变版本
 → 保存绑定快照
 → 计算配置指纹
-→ 更新当前发布版本
+→ 更新当前 active 版本
 → 写入审计记录
 ~~~
-
-发布新版本后，新会话使用新版本，旧会话继续使用原版本。
 
 ## 9. Agent 运行流程
 
@@ -462,7 +480,7 @@ Eino 是 Agent 执行框架，负责模型调用、工具调用循环、流式�
 
 ### 10.1 运行组件
 
-Agent Runtime 按 Vault 的实现思路拆成四个职责：
+Agent Runtime 拆成四个职责：
 
 ~~~text
 AgentVersion
@@ -517,7 +535,7 @@ type AgentRunner interface {
 
 ### 10.3 模型供应商适配
 
-模型供应商采用 Vault 中的预适配模式：
+模型供应商采用预适配模式：
 
 ~~~text
 AgentVersionModelBinding
@@ -646,7 +664,7 @@ evaluation_results
 async_tasks
 ~~~
 
-agent_version 发布后不可修改，agent_conversation.agent_version_id 不允许自动变化。向量检索首期使用 PostgreSQL 的 pgvector，知识库原始文件和音频存储在对象存储。
+agent_version 生效后不可修改，agent_conversation.agent_version_id 不允许自动变化。向量检索首期使用 PostgreSQL 的 pgvector，知识库原始文件和音频存储在对象存储。
 
 ### Redis
 
@@ -665,11 +683,10 @@ GET    /api/v1/agents
 POST   /api/v1/agents
 GET    /api/v1/agents/{agent_id}
 PATCH  /api/v1/agents/{agent_id}
-GET    /api/v1/agents/{agent_id}/draft
-PUT    /api/v1/agents/{agent_id}/draft
+GET    /api/v1/agents/{agent_id}/config
+PUT    /api/v1/agents/{agent_id}/config
 POST   /api/v1/agents/{agent_id}/validate
 POST   /api/v1/agents/{agent_id}/preview
-POST   /api/v1/agents/{agent_id}/publish
 POST   /api/v1/agents/{agent_id}/offline
 POST   /api/v1/agents/{agent_id}/default
 GET    /api/v1/agents/{agent_id}/versions
@@ -751,7 +768,7 @@ dead
 | 不同 Agent 之间记忆污染 | 记忆键包含 agent_id |
 | 模型调用不属于当前 Agent 的工具 | Runtime 只注册绑定的工具，并在工具侧再次校验 |
 | 预览写入正式数据 | 预览使用独立运行标识，默认不写记忆 |
-| 发布后缓存仍使用旧配置 | 缓存键包含版本和配置指纹 |
+| 保存后缓存仍使用旧配置 | 缓存键包含版本和配置指纹 |
 | worker 重试产生重复结果 | 任务和结果使用幂等键和唯一约束 |
 | 主 Agent 形成特殊分支 | 主 Agent 只是默认选择，不是特殊类型 |
 
@@ -774,7 +791,7 @@ dead
 
 - 跨 Agent 记忆泄漏率为零。
 - 新增 Agent 不需要修改运行代码。
-- 发布新版本不改变旧会话行为。
+- 保存新版本不改变旧会话行为。
 - 工具评分比模型自由生成评分更稳定。
 - 异步评价不阻塞主对话响应。
 - Redis 只影响性能，不影响业务事实。
@@ -791,7 +808,7 @@ dead
 - PostgreSQL 事务和并发约束。
 - SSE、WebSocket 事件顺序和中断。
 - worker 任务幂等。
-- Agent 创建、发布和会话运行的完整链路。
+- Agent 创建、保存和会话运行的完整链路。
 
 启动顺序：
 
