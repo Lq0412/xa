@@ -6,7 +6,10 @@ import "context"
 type Handler interface {
 	ListAgents(ctx context.Context) error
 	CreateAgent(ctx context.Context) error
-	PublishAgent(ctx context.Context) error
+	SaveAgent(ctx context.Context) error
+	EnableAgent(ctx context.Context) error
+	DisableAgent(ctx context.Context) error
+	DeleteAgent(ctx context.Context) error
 	CreateConversation(ctx context.Context) error
 	SendTurn(ctx context.Context) error
 }

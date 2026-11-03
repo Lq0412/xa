@@ -19,14 +19,11 @@ IELTS 口语教练
 
 管理员可以设置一个公共 Agent 作为主对话页的默认选择，它仍然是普通 Agent，不使用特殊运行逻辑。
 
-~~~
-Agent 创建与配置
-    ↓
-保存后生成可运行版本
-    ↓
-统一 Agent Runtime
-    ↓
-模型、工具、知识库、评价和记忆
+~~~mermaid
+flowchart LR
+    Config[Agent 配置] --> Version[保存后生成不可变版本]
+    Version --> Runtime[Agent Runtime]
+    Runtime --> Capabilities[模型、工具、知识库、评价和记忆]
 ~~~
 
 ## 2. 设计原则
@@ -90,6 +87,8 @@ flowchart LR
 - 公共 Agent 和私有 Agent 使用相同的定义、版本、会话、记忆和 Runtime，不建立两套执行逻辑。
 - 普通用户只能修改自己的私有 Agent；公共 Agent 只能由管理员维护。
 - 首期不开放用户 Agent 的公开分享功能。
+- 首期为单一平台空间，普通用户通过邮箱密码注册登录。管理员由部署环境初始化。
+- 公共 Agent 只共享配置；会话、录音、评价和记忆仍归使用者本人。管理端不提供私人内容浏览入口。
 
 ## 4. 进程划分
 
@@ -148,6 +147,7 @@ server/
 │   │   │   ├── engine.go
 │   │   │   ├── context.go
 │   │   │   ├── event.go
+│   │   │   ├── realtime.go
 │   │   │   └── eino/
 │   │   ├── conversation/
 │   │   ├── memory/
@@ -264,6 +264,7 @@ id
 workspace_id
 owner_type
 owner_id
+current_version_id
 name
 avatar
 description
@@ -274,9 +275,12 @@ is_default
 created_by
 created_at
 updated_at
+deleted_at
 ~~~
 
 `owner_type` 和 `owner_id` 表示 Agent 归属：管理员创建的 Agent 可以设置为 public，用户创建的 Agent 默认是 private。`is_default` 只表示主对话页的默认选择。
+
+状态由定义维护：`active`、`offline`、`deleted`。`current_version_id` 指向新会话使用的有效配置，不改变历史会话的版本。
 
 ### 7.2 AgentVersion
 
@@ -284,29 +288,16 @@ updated_at
 
 ~~~text
 id
+workspace_id
 agent_id
 version_number
-status
-prompt_snapshot
-model_snapshot
-memory_policy
-runtime_limits
-model_bindings
+configuration
 config_checksum
 created_by
-activated_at
 created_at
 ~~~
 
-状态：
-
-~~~text
-active
-offline
-archived
-~~~
-
-每次保存有效配置都会生成一个不可变版本。新会话使用最新的 active 版本，已有会话继续使用创建时绑定的版本。
+`configuration` 包含提示词、模型版本绑定、工具、知识库、评价规则、记忆策略和运行限制。每次保存有效配置都生成不可变版本，并原子更新定义的当前版本指针。版本本身没有可变启停状态；已有会话继续使用创建时绑定的版本。
 
 ### 7.3 模型供应商和模型配置
 
@@ -354,7 +345,7 @@ created_at
 updated_at
 ~~~
 
-会话创建后固定 agent_version_id。切换 Agent 时创建新会话。
+会话创建后固定 agent_version_id。切换 Agent 时创建新会话；同一 Agent 的会话可切换文本和 Realtime，同一时刻仅有一个执行通道。轮次记录 request_id、channel、status、开始和结束时间，终态为 completed、failed 或 canceled。
 
 ### 7.6 AgentMemory
 
@@ -393,7 +384,7 @@ flowchart LR
 
 创建或修改 Agent 时配置名称、描述、头像、标签、提示词、模型、工具、知识库、评价规则、记忆策略和运行限制。保存时校验提示词变量、模型能力、工具版本、工具 Schema、知识库、评价规则、记忆策略和运行限制；校验失败直接返回错误。
 
-保存成功后生成新的不可变 AgentVersion，并立即作为当前 active 版本使用。新会话使用新版本，已有会话继续使用原版本。预览可以使用未保存配置，但不写入正式会话和长期记忆，有副作用的工具默认禁止调用。
+保存成功后生成新的不可变 AgentVersion，并更新 current_version_id。新会话使用新版本，已有会话继续使用原版本。修改停用 Agent 的配置不会自动启用它；启用时重新检查当前配置和资源。预览可以使用未保存配置，但不写入正式会话和长期记忆，有副作用的工具默认禁止调用。
 
 保存过程在事务中完成：
 
@@ -402,9 +393,11 @@ flowchart LR
 → 生成不可变版本
 → 保存绑定快照
 → 计算配置指纹
-→ 更新当前 active 版本
+→ 比较客户端持有的旧版本并更新 current_version_id
 → 写入审计记录
 ~~~
+
+停用或删除立即禁止新运行，并取消现有回复和实时连接。版本固定不能绕过 Agent 停用、权限撤销或工具禁用。删除 Agent 保留使用者历史为只读；模型失效时明确报错，不自动替换。
 
 ## 9. Agent 运行流程
 
@@ -439,7 +432,7 @@ sequenceDiagram
     A->>W: 创建评价和记忆任务
 ~~~
 
-一次请求必须携带：
+服务端根据已认证身份和会话加载运行上下文；客户端不能指定其他用户、工作空间或 Agent 版本。文本轮次上下文包含：
 
 ~~~text
 workspace_id
@@ -453,7 +446,7 @@ request_id
 
 ## 10. ReAct Agent 和 Eino
 
-系统对外只有一种 Agent：配置驱动的 ReAct Agent。用户不需要选择 chat、tool_calling 或 workflow 等运行模式。
+系统对外提供配置驱动的 Agent，文本通道采用 Eino ReAct，Realtime 通道采用供应商独立的实时连接。用户只选择已开放的交互通道，不需要选择内部运行模式。
 
 一次运行由模型决定是否调用工具：
 
@@ -467,7 +460,7 @@ request_id
 → 输出最终回复
 ~~~
 
-Eino 是 Agent 执行框架，负责模型调用、工具调用循环、流式事件、Middleware、Callback 和中断恢复。Eino 的 ChatModelAgent 内部处理 ReAct 循环，Runner 负责启动和消费一次运行。
+Eino 负责文本通道的模型调用、工具循环和流式输出。ChatModelAgent 处理 ReAct 循环，Runner 启动并消费一次运行；平台负责取消、持久化、权限检查和连接恢复策略。
 
 本系统自己负责：
 
@@ -480,7 +473,7 @@ Eino 是 Agent 执行框架，负责模型调用、工具调用循环、流式�
 
 ### 10.1 运行组件
 
-Agent Runtime 拆成四个职责：
+文本 Runtime 包含以下职责：
 
 ~~~text
 AgentVersion
@@ -495,7 +488,7 @@ Eino ChatModelAgent + Runner
 ~~~
 
 - PromptResolver：读取当前 Agent 版本的提示词槽位，校验变量并生成最终提示词。
-- ToolCatalog：读取 Agent 版本绑定的工具，校验工具权限和版本，生成本次运行的工具目录。
+- ToolCatalog：接收 Agent 侧转换的 Selection，校验工具权限和版本，生成目录。工具模块不导入 Agent 绑定类型。
 - ReActAgentProvider：根据 Agent 版本、提示词指纹和工具目录指纹创建或复用 Eino Agent。
 - Runner：为当前用户会话执行一次 ReAct 运行，并把 Eino 事件转换成系统事件。
 
@@ -509,7 +502,7 @@ model_revision
 knowledge_revision
 ~~~
 
-Agent 实例只保存不可变配置和运行组件，不能保存用户消息、用户记忆和会话状态。用户数据通过每次运行的 RuntimeContext 传入，会话状态由本系统持久化。
+Agent 实例只保存不可变配置和运行组件，不能保存用户消息、记忆和会话状态。RuntimeContext 携带身份和追踪信息，ContextSnapshot 携带本次历史、记忆和检索结果，context.Context 通过函数参数传递。
 
 ### 10.2 适配边界
 
@@ -518,7 +511,6 @@ Eino 类型只出现在以下适配包：
 ~~~text
 internal/agent/runtime/eino/
 internal/infra/model/
-internal/infra/realtime/
 internal/tool/runtime/
 internal/rag/retrieval/
 ~~~
@@ -529,9 +521,13 @@ internal/rag/retrieval/
 type AgentRunner interface {
     Run(ctx context.Context, input RunInput) (<-chan Event, error)
 }
+
+type RealtimeRunner interface {
+    Open(ctx context.Context, input RealtimeInput) (RealtimeSession, error)
+}
 ~~~
 
-这样可以使用 Eino 实现 ReAct Agent，同时避免 Eino 类型扩散到 AgentDefinition、Conversation 和 Memory 等领域代码。
+RealtimeSession 提供 Send、Events 和 Close，负责一条实时连接的完整生命周期；infra/realtime 不依赖 Eino。两种通道通过平台事件及持久化的已确认历史衔接。
 
 ### 10.3 模型供应商适配
 
@@ -668,7 +664,7 @@ agent_version 生效后不可修改，agent_conversation.agent_version_id 不允
 
 ### Redis
 
-只保存流式连接状态、取消标记、并发锁、限流计数、运行缓存和短期数据。Redis 丢失不能破坏 PostgreSQL 中的业务事实。
+只保存流式连接状态、取消通知、执行租约、限流计数、运行缓存和短期数据。PostgreSQL 唯一约束负责最终去重；Redis 丢失不能破坏业务事实。Redis 不可用时停止接收需要协调的运行，不能绕过并发限制继续执行。
 
 ### 对象存储
 
@@ -682,12 +678,13 @@ agent_version 生效后不可修改，agent_conversation.agent_version_id 不允
 GET    /api/v1/agents
 POST   /api/v1/agents
 GET    /api/v1/agents/{agent_id}
-PATCH  /api/v1/agents/{agent_id}
 GET    /api/v1/agents/{agent_id}/config
 PUT    /api/v1/agents/{agent_id}/config
 POST   /api/v1/agents/{agent_id}/validate
 POST   /api/v1/agents/{agent_id}/preview
 POST   /api/v1/agents/{agent_id}/offline
+POST   /api/v1/agents/{agent_id}/enable
+DELETE /api/v1/agents/{agent_id}
 POST   /api/v1/agents/{agent_id}/default
 GET    /api/v1/agents/{agent_id}/versions
 ~~~
@@ -700,6 +697,8 @@ POST   /api/v1/conversations
 GET    /api/v1/conversations
 GET    /api/v1/conversations/{conversation_id}
 POST   /api/v1/conversations/{conversation_id}/turns
+POST   /api/v1/conversations/{conversation_id}/cancel
+DELETE /api/v1/conversations/{conversation_id}
 GET    /api/v1/conversations/{conversation_id}/stream
 WS     /api/v1/conversations/{conversation_id}/voice
 ~~~
@@ -730,7 +729,15 @@ message.completed
 evaluation.queued
 turn.completed
 turn.failed
+turn.canceled
+realtime.opened
+realtime.closed
+audio.delta
+transcript.delta
+audio.interrupted
 ~~~
+
+保存、资源归属、并发与数据关系约束见 [领域与接口约定](domain-contracts.md)。本节为业务接口设计，当前进程仅注册健康检查，尚未注册业务路由。
 
 ## 15. 异步任务
 
@@ -785,18 +792,22 @@ dead
 | 知识检索 | 绑定知识库并检索 | 不执行检索 | 正确率、无依据回答比例 |
 | 流式输出 | SSE 或 WebSocket | 一次性返回 | 首 Token 延迟、最终内容一致性 |
 | 异步评价 | worker 异步执行 | 请求内同步执行 | 用户响应延迟、评价完整率 |
-| Redis | 保存短时状态和缓存 | 禁用 Redis | 正确性、数据完整性、延迟 |
+| Redis | 保存短时协调状态和缓存 | 停止 Redis 后重启恢复 | 新运行拒绝率、重复执行数、业务事实完整性 |
 
-关键验收结果：
+待验证的目标：
 
 - 跨 Agent 记忆泄漏率为零。
 - 新增 Agent 不需要修改运行代码。
 - 保存新版本不改变旧会话行为。
-- 工具评分比模型自由生成评分更稳定。
+- 用实测指标判断工具评分相对模型自由评分的一致性和依据完整度。
 - 异步评价不阻塞主对话响应。
-- Redis 只影响性能，不影响业务事实。
+- Redis 故障不丢失业务事实；运行入口应明确不可用，恢复后不重复执行工具。
+
+本批仅验证运行基础与依赖故障，不宣称 Agent、评分或记忆机制的消融实验已完成。
 
 ## 19. 测试和启动
+
+本地命令、端口和健康检查见 [启动说明](startup.md)。
 
 测试覆盖：
 

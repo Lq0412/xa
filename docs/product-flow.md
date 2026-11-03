@@ -4,10 +4,11 @@
 
 系统由一个 Go server 支撑两个使用入口：
 
-~~~text
-Web 管理端 ──┐
-             ├── Go server ── Agent Runtime
-移动端      ──┘
+~~~mermaid
+flowchart LR
+    Web[Web 管理端] --> Server[Go server]
+    Mobile[移动端] --> Server
+    Server --> Runtime[Agent Runtime]
 ~~~
 
 Web 管理端负责平台资源和公共 Agent，移动端负责普通用户使用 Agent，也允许普通用户创建自己的私有 Agent。
@@ -31,14 +32,16 @@ Web 管理端负责平台资源和公共 Agent，移动端负责普通用户使�
 
 每个 Agent 都有明确的创建者和可见范围：
 
-~~~text
-Agent
-├── owner_type: admin | user
-├── owner_id
-└── visibility: public | private
-~~~
+| 字段 | 含义 |
+| --- | --- |
+| owner_type | admin 或 user |
+| owner_id | 创建者身份 |
+| visibility | public 或 private |
+| current_version_id | 新会话使用的配置版本 |
 
 公共 Agent 和私有 Agent 使用同一套配置、版本、会话、记忆和运行逻辑。归属和可见范围只影响谁能查看、修改和使用 Agent。
+
+公共 Agent 不共享使用者的会话、录音、评价和记忆。普通用户只能读取自己的数据，管理员不因管理公共 Agent 而获得私人内容的浏览权限。
 
 管理员可以设置一个公共 Agent 作为默认 Agent。默认 Agent 仍然是普通 Agent，不使用特殊运行逻辑。
 
@@ -65,7 +68,9 @@ flowchart LR
 - 记忆策略和评价规则。
 - 运行限制。
 
-保存配置时进行校验。校验成功后生成新的不可变版本，并立即作为当前 active 版本使用。新会话使用最新版本，已有会话继续使用创建时绑定的版本。
+保存配置时进行校验。成功后生成不可变版本并更新 current_version_id，新会话使用该版本，已有会话继续使用创建时绑定的版本。修改已停用 Agent 不会自动启用；重新启用时再次校验资源。
+
+停用或删除会取消当前回复和实时连接，历史仍可查看。旧版本不能绕过当前的停用、权限撤销或工具禁用。
 
 ## 5. 用户使用流程
 
@@ -119,6 +124,8 @@ sequenceDiagram
 ~~~
 
 Realtime 通道和文本通道共用 Agent 配置、工具权限、会话记忆和评价任务，但拥有独立的连接生命周期和事件协议。
+
+切换通道前先取消或结束当前执行并关闭原连接。同一会话只允许一个通道运行，使用已确认历史衔接上下文；语音中断后未播放的音频不能记为已交付回复。断线重连创建新的实时连接，不自动重放未确认音频。
 
 ## 6. 工具使用
 

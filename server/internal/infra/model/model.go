@@ -1,6 +1,9 @@
 package model
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Request 是对话模型请求的统一内部表示。
 type Request struct {
@@ -11,8 +14,17 @@ type Request struct {
 
 // Message 是模型上下文中的一条消息。
 type Message struct {
-	Role    string
-	Content string
+	Role       string
+	Content    string
+	ToolCalls  []ToolCall
+	ToolCallID string
+}
+
+// ToolCall 保留模型调用标识，使跨通道历史能关联调用与真实工具结果。
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments json.RawMessage
 }
 
 // Tool 描述模型可请求的工具。

@@ -10,7 +10,7 @@ type Slot struct {
 	Scope     string
 }
 
-// Snapshot 是发布时固化的提示词配置。
+// Snapshot 是保存有效配置时固化的提示词配置。
 type Snapshot struct {
 	Slots    []Slot
 	Rendered string

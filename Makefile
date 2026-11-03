@@ -1,0 +1,38 @@
+SHELL := /bin/bash
+# WSL 使用原生 Linux Docker 客户端，避免 Windows 客户端误解析挂载路径。
+DOCKER ?= /usr/bin/docker
+COMPOSE = $(DOCKER) compose --env-file .env -f resources/docker/compose.yaml
+export GOTMPDIR := $(CURDIR)/.output/go-tmp
+export TMPDIR := $(GOTMPDIR)
+
+.PHONY: env deps-up deps-down deps-status server worker check integration prepare
+env:
+	bash scripts/init-env.sh
+
+deps-up:
+	$(COMPOSE) up -d --wait postgres redis object-store
+	bash scripts/run.sh init-storage
+
+deps-down:
+	$(COMPOSE) down
+
+deps-status:
+	$(COMPOSE) ps -a
+
+server:
+	bash scripts/run.sh server
+
+worker:
+	bash scripts/run.sh worker
+
+prepare:
+	mkdir -p .output/go-tmp
+
+check: prepare
+	cd server && test -z "$$(gofmt -l .)"
+	cd server && go test ./...
+	cd server && go vet ./...
+	cd server && go build ./...
+
+integration: prepare
+	set -a; source .env; set +a; cd server && go test -race -tags=integration -count=1 ./internal/bootstrap

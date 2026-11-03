@@ -3,12 +3,23 @@ package catalog
 import (
 	"context"
 
-	"linq-bs/server/internal/agent/binding"
+	"encoding/json"
+	"linq-bs/server/internal/framework/auth"
+	"time"
 )
 
-// Catalog 根据 Agent 版本绑定生成本次运行可用的工具目录。
+// Catalog 校验当前主体的权限和工具版本，不依赖 Agent 的领域对象。
 type Catalog interface {
-	Build(ctx context.Context, bindings []binding.ToolBinding) (Snapshot, error)
+	Build(ctx context.Context, actor auth.Principal, selections []Selection) (Snapshot, error)
+}
+
+// Selection 由调用方转换绑定生成，固定版本不能跳过当前权限检查。
+type Selection struct {
+	VersionID     string
+	Timeout       time.Duration
+	MaxCalls      int
+	AllowedRoles  []string
+	Configuration json.RawMessage
 }
 
 // Snapshot 是经过权限、版本和参数 Schema 校验的工具目录。
