@@ -1,6 +1,6 @@
 # 本地启动
 
-当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查。Agent、账号、任务处理器仍为接口骨架，Web 和移动端尚未建立工程。
+当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口。文本模型、Realtime、邮件验证和异步任务处理器仍未接入，Web 和移动端尚未建立工程。
 
 ## 1. 环境
 
@@ -54,6 +54,17 @@ curl --fail http://127.0.0.1:18081/health/ready
 ```
 
 `live` 表示 HTTP 进程存活；`ready` 实际检查数据库、Redis 和桶访问，任一失败返回 503。它不代表尚未接入的模型或业务接口可用。
+
+server 启动时会执行幂等的身份和 Agent 表迁移。若配置 `XA_ADMIN_EMAIL` 与 `XA_ADMIN_PASSWORD`，首次启动会初始化管理员；两项必须同时配置，密码不会写入日志。
+
+已接入的接口包括：
+
+- `POST /api/v1/auth/register`、`POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me`
+- `GET /api/v1/available-agents`
+- `GET/POST /api/v1/agents`、`GET /api/v1/agents/{agent_id}`、`GET/PUT /api/v1/agents/{agent_id}/config`
+- `POST /api/v1/agents/{agent_id}/enable`、`POST /api/v1/agents/{agent_id}/offline`、`DELETE /api/v1/agents/{agent_id}`
+
+登录返回的令牌通过 `Authorization: Bearer <token>` 传递。普通用户只能创建和修改自己的私有 Agent；公共 Agent 只能由管理员维护。
 
 ## 4. 验证和停止
 

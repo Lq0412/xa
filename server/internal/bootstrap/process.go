@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	redisclient "github.com/redis/go-redis/v9"
 	"linq-bs/server/internal/framework/config"
 	httpserver "linq-bs/server/internal/framework/http"
 	"linq-bs/server/internal/framework/postgres"
@@ -16,6 +19,12 @@ import (
 )
 
 func run(ctx context.Context, name, address string, cfg config.Config, logger *slog.Logger) (runErr error) {
+	return runWithHandler(ctx, name, address, cfg, logger, nil)
+}
+
+type handlerFactory func(*pgxpool.Pool, *redisclient.Client, []httpserver.Check) (http.Handler, error)
+
+func runWithHandler(ctx context.Context, name, address string, cfg config.Config, logger *slog.Logger, factory handlerFactory) (runErr error) {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -27,6 +36,9 @@ func run(ctx context.Context, name, address string, cfg config.Config, logger *s
 		return err
 	}
 	defer db.Close()
+	if err := postgres.Migrate(startupCtx, db); err != nil {
+		return err
+	}
 	cache, err := redis.Open(startupCtx, cfg.Redis)
 	if err != nil {
 		return err
@@ -43,11 +55,19 @@ func run(ctx context.Context, name, address string, cfg config.Config, logger *s
 		{Name: "redis", Ping: func(ctx context.Context) error { return cache.Ping(ctx).Err() }},
 		{Name: "object_store", Ping: objects.Ping},
 	}
+	handler := httpserver.HealthHandler(checks, cfg.HealthTimeout, logger)
+	if factory != nil {
+		handler, err = factory(db, cache, checks)
+		if err != nil {
+			return err
+		}
+	}
 	listener, err := (&net.ListenConfig{}).Listen(startupCtx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("监听 %s 地址失败: %w", name, err)
 	}
 	cancel()
 	logger.Info("进程已启动", "process", name, "address", listener.Addr().String())
-	return httpserver.Serve(ctx, listener, httpserver.HealthHandler(checks, cfg.HealthTimeout, logger), cfg.ShutdownTimeout)
+	handler = httpserver.WithRequestID(handler)
+	return httpserver.Serve(ctx, listener, handler, cfg.ShutdownTimeout)
 }

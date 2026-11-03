@@ -15,12 +15,19 @@ import (
 // Config 是进程启动所需的配置快照。
 type Config struct {
 	HTTP            HTTPConfig        `envPrefix:"XA_HTTP_"`
+	Admin           AdminConfig       `envPrefix:"XA_ADMIN_"`
 	Postgres        PostgresConfig    `envPrefix:"XA_POSTGRES_"`
 	Redis           RedisConfig       `envPrefix:"XA_REDIS_"`
 	ObjectStore     ObjectStoreConfig `envPrefix:"XA_S3_"`
 	StartupTimeout  time.Duration     `env:"XA_STARTUP_TIMEOUT" envDefault:"15s"`
 	ShutdownTimeout time.Duration     `env:"XA_SHUTDOWN_TIMEOUT" envDefault:"10s"`
 	HealthTimeout   time.Duration     `env:"XA_HEALTH_TIMEOUT" envDefault:"3s"`
+}
+
+// AdminConfig 是首次部署时可选的管理员初始化凭证；密码只从环境注入。
+type AdminConfig struct {
+	Email    string `env:"EMAIL"`
+	Password string `env:"PASSWORD"`
 }
 
 // HTTPConfig 分开配置业务进程和 worker 的健康接口地址。
@@ -90,6 +97,12 @@ func (c Config) Validate() error {
 	}
 	if c.HTTP.ServerAddress == c.HTTP.WorkerAddress {
 		return fmt.Errorf("server 和 worker 不能使用相同监听地址")
+	}
+	if (c.Admin.Email == "") != (c.Admin.Password == "") {
+		return fmt.Errorf("管理员邮箱和密码必须同时配置")
+	}
+	if len(c.Admin.Password) > 0 && len(c.Admin.Password) < 8 {
+		return fmt.Errorf("管理员密码至少需要 8 个字符")
 	}
 	if c.StartupTimeout <= 0 || c.ShutdownTimeout <= 0 || c.HealthTimeout <= 0 {
 		return fmt.Errorf("启动、关闭和健康检查超时必须大于零")

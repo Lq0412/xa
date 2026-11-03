@@ -29,6 +29,7 @@ type Saved struct {
 type Service interface {
 	Save(ctx context.Context, actor auth.Principal, input SaveInput) (Saved, error)
 	Get(ctx context.Context, actor auth.Principal, agentID string) (AgentDefinition, error)
+	GetVersion(ctx context.Context, actor auth.Principal, agentID, versionID string) (AgentVersion, error)
 	List(ctx context.Context, actor auth.Principal) ([]AgentDefinition, error)
 	Validate(ctx context.Context, actor auth.Principal, input SaveInput) error
 	Enable(ctx context.Context, actor auth.Principal, agentID string) error
