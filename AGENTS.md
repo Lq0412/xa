@@ -82,7 +82,7 @@ Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、Re
 - 创建分支、提交代码、处理 Issue 或 PR 前，先阅读对应项目的 `CONTRIBUTING.md`。
 - 创建或更新 PR 前，阅读并使用对应项目的 `.github/pull_request_template.md`。
 - 禁止直接推送受保护的 `main` 分支，禁止添加 `Co-authored-by` 等 AI 自动签名。
-- 分支命名使用 `<type>/<slug>`，提交信息使用 `<type>(<scope>): <subject>`，例如 `feat(agent): add practice session`。
+- 分支命名使用 `<type>/<slug>`；提交信息和 PR 规则遵循根目录 `CONTRIBUTING.md`。
 - PR 必须说明功能变化、实现方式、实际验证命令和关联 Issue；涉及界面变化时附上截图或录屏。
 - 等待 CI 和 Review 完成后再合并；存在未解决意见或失败检查时，只报告实际状态。
 - 以疑问句结尾的消息只回答问题本身，不附加反问或额外方案。
