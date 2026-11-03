@@ -157,6 +157,7 @@ server/
 │   │
 │   ├── infra/
 │   │   ├── model/
+│   │   ├── realtime/
 │   │   ├── speech/
 │   │   ├── embedding/
 │   │   ├── rerank/
@@ -222,7 +223,15 @@ internal/agent/definition/
 
 ### 6.7 infra
 
-负责对话模型、语音识别、语音合成、向量模型、重排序模型、供应商路由、超时、取消、错误转换和调用指标。它不包含 Agent 提示词、学习场景和评分规则。
+负责对话模型、Realtime 模型、语音识别、语音合成、向量模型、重排序模型、供应商路由、超时、取消、错误转换和调用指标。它不包含 Agent 提示词、学习场景和评分规则。
+
+infra 采用“预先适配、统一调用、配置选择”的方式管理模型供应商：
+
+- 代码中为每种能力注册供应商适配器，集中处理鉴权、请求格式、流式事件和错误差异。
+- 配置中登记供应商、模型和能力，Agent 版本只保存模型绑定，不保存供应商调用细节。
+- 运行时通过能力接口选择适配器，Agent 不直接依赖具体供应商 SDK。
+
+文本模型、Realtime 模型、Embedding、语音和重排序分别使用独立能力接口。Realtime 会话是有状态的连接实例，不能复用文本模型的单轮调用接口；上游事件必须先转换成平台统一事件。
 
 ## 7. 核心领域模型
 
@@ -260,6 +269,7 @@ prompt_snapshot
 model_snapshot
 memory_policy
 runtime_limits
+model_bindings
 config_checksum
 created_by
 published_at
@@ -277,7 +287,24 @@ archived
 
 发布后的版本不可修改。
 
-### 7.3 AgentPrompt
+### 7.3 模型供应商和模型配置
+
+模型配置分为三层：
+
+~~~text
+ModelProvider
+    供应商身份、协议类型、端点和凭证引用
+
+ModelProfile
+    模型标识、能力、上下文限制、参数和版本
+
+AgentVersionModelBinding
+    Agent 版本在 text、realtime、embedding、speech、rerank 等能力上使用的模型
+~~~
+
+`ModelProvider` 和 `ModelProfile` 是平台可管理的注册信息，`AgentVersionModelBinding` 在发布时固化到版本快照。凭证只保存引用，不把密钥写入 Agent 配置或日志。
+
+### 7.4 AgentPrompt
 
 提示词采用槽位管理：
 
@@ -292,7 +319,7 @@ first_message
 
 每个槽位包含内容、启用状态、顺序、变量和作用范围。解析器负责校验变量、合并槽位和生成提示词指纹。
 
-### 7.4 AgentConversation
+### 7.5 AgentConversation
 
 ~~~text
 id
@@ -308,7 +335,7 @@ updated_at
 
 会话创建后固定 agent_version_id。切换 Agent 时创建新会话。
 
-### 7.5 AgentMemory
+### 7.6 AgentMemory
 
 ~~~text
 id
@@ -473,6 +500,7 @@ Eino 类型只出现在以下适配包：
 ~~~text
 internal/agent/runtime/eino/
 internal/infra/model/
+internal/infra/realtime/
 internal/tool/runtime/
 internal/rag/retrieval/
 ~~~
@@ -486,6 +514,38 @@ type AgentRunner interface {
 ~~~
 
 这样可以使用 Eino 实现 ReAct Agent，同时避免 Eino 类型扩散到 AgentDefinition、Conversation 和 Memory 等领域代码。
+
+### 10.3 模型供应商适配
+
+模型供应商采用 Vault 中的预适配模式：
+
+~~~text
+AgentVersionModelBinding
+    ↓
+ModelResolver
+    ↓
+ProviderRegistry
+    ↓
+供应商适配器
+    ↓
+统一能力接口
+~~~
+
+平台为每种能力定义独立接口：
+
+~~~text
+TextModelProvider
+RealtimeProvider
+EmbeddingProvider
+SpeechProvider
+RerankProvider
+~~~
+
+同一供应商可以实现多个能力适配器，也可以只支持其中一种能力。适配器负责供应商协议、鉴权、请求参数、流式事件和错误转换；Agent、会话和评价模块只使用统一能力接口。
+
+新增 Agent、切换已注册模型、增加已支持供应商的新模型都只需要配置。遇到全新的供应商协议时，只增加一次对应能力适配器，完成注册后后续 Agent 仍然只通过配置使用。
+
+文本通道使用 Eino 的模型接口执行 ReAct 循环。Realtime 通道使用独立的 `RealtimeProvider` 创建一条有状态实时会话，并将音频、转写、打断和回复事件转换为平台事件。两种通道共享 Agent 版本、工具权限、会话记忆和评价任务，但不共用同一个运行接口。
 
 ## 11. 工具和记忆
 
@@ -575,6 +635,9 @@ agent_memories
 
 tool_definitions
 tool_versions
+model_providers
+model_profiles
+agent_version_model_bindings
 knowledge_bases
 knowledge_documents
 knowledge_chunks
