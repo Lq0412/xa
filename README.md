@@ -2,7 +2,7 @@
 
 Agent 管理与运行平台，后端使用 Go。通过配置创建公共或私有 Agent，支持英语陪练及其他学习任务。
 
-当前已建立 server、worker 运行基础，并完成账号注册登录、Redis 会话、公共与私有 Agent 管理接口。Web 和移动端暂为空目录；文本模型、Realtime 和邮件验证仍待接入。
+当前已建立 server、worker 运行基础，完成账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及基于 Ant Design Pro v6.0.3 的 Web 管理端。移动端、文本模型、Realtime 和邮件验证仍待接入。
 
 目录说明：
 
@@ -20,4 +20,4 @@ make deps-up
 make server
 ```
 
-另开终端运行 `make worker`，再开一个终端运行 `make web`，浏览器访问 `http://127.0.0.1:5173`。配置、端口和验证命令见 [启动说明](docs/startup.md)，后续安排见 [开发计划](docs/development-plan.md)。
+另开终端运行 `make worker`，Web 首次运行先执行 `make web-install`，再运行 `make web`，浏览器访问 `http://127.0.0.1:8000`。配置、端口和验证命令见 [启动说明](docs/startup.md)，后续安排见 [开发计划](docs/development-plan.md)。

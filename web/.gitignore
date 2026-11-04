@@ -1,0 +1,8 @@
+# 依赖、构建缓存及日志不进入版本库。
+node_modules/
+dist/
+src/.umi*/
+.turbopack/
+.vite/
+*.log
+.claude/settings.local.json

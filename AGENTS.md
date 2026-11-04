@@ -55,7 +55,7 @@
 
 ### 使用的技术
 
-Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 18、Vite、TypeScript、Tailwind、Flutter、SSE、WebSocket 和 Docker Compose。
+Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 19、Ant Design Pro v6、Ant Design 6、Umi Max 4、TypeScript、Tailwind、Flutter、SSE、WebSocket 和 Docker Compose。
 
 ### 模块职责
 
@@ -108,7 +108,7 @@ git -c user.name="Lq0412" \
 
 - 终端使用 Bash，默认编码为 UTF-8；命令和路径按当前 WSL 环境执行。
 - Go 后端的工作目录是 `server/`。修改 Go 文件后运行 `gofmt`，提交前运行 `go test ./...`、`go vet ./...` 和 `go build ./...`。
-- 当前 `web/` 和 `mobile/` 只是空目录，尚未建立前端工程；在对应目录出现 `package.json` 或 Flutter 工程文件前，不执行前端构建命令。
+- `web/` 使用 Ant Design Pro v6；检查命令和页面约定见 `web/AGENTS.md`。`mobile/` 尚未建立工程，不执行 Flutter 构建命令。
 - Docker 只用于仓库中已经声明的镜像、Dockerfile 或 Compose 配置；没有对应文件时，不假设存在固定的服务、端口或 Compose profile。
 - 启动服务前先确认属于本项目的旧进程，避免重复启动；服务端口和启动命令以项目实际配置为准。
 - 启停服务、初始化存储或排查运行问题前，先阅读 `docs/startup.md`；修改基础依赖接入时运行 `make integration`，使用实际容器验证。

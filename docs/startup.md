@@ -1,10 +1,11 @@
 # 本地启动
 
-当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口。文本模型、Realtime、邮件验证和异步任务处理器仍未接入，Web 和移动端尚未建立工程。
+当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及 Ant Design Pro v6 Web 管理端。文本模型、Realtime、邮件验证、异步任务处理器和移动端仍未接入。
 
 ## 1. 环境
 
 - WSL / Linux、Bash、Go 1.26 或更新版本、Make、OpenSSL；race 检查需要 GCC 等 C 编译器。
+- Web 使用 Node.js 22 或更新版本和 npm；框架为 React 19、Ant Design 6 与 Umi Max 4。
 - Docker Engine 与 Compose。WSL 使用 `/usr/bin/docker` 原生客户端；其他安装路径通过 `make DOCKER=/path/to/docker ...` 指定。
 - Go module 位于 `server/`；下列 Make 命令均在仓库根目录运行。
 
@@ -23,6 +24,7 @@ make deps-status
 | 服务 | 默认本机地址 |
 | --- | --- |
 | server | `127.0.0.1:18080` |
+| Web 开发服务 | `127.0.0.1:8000` |
 | worker 健康接口 | `127.0.0.1:18081` |
 | PostgreSQL | `127.0.0.1:15432` |
 | Redis | `127.0.0.1:16379` |
@@ -52,7 +54,9 @@ make web-install
 make web
 ```
 
-浏览器访问 `http://127.0.0.1:5173`。Vite 开发服务器会把 `/api` 和 `/health` 请求转发到 `127.0.0.1:18080`，因此需要先启动 server。当前页面支持注册、登录、Agent 列表、创建、编辑、启停和删除；登录令牌仅用于本地开发页面。
+浏览器访问 `http://127.0.0.1:8000`。Umi 开发服务器会把 `/api/` 和 `/health/` 请求转发到 `127.0.0.1:18080`，因此需要先启动 server。若后端使用其他地址，通过 `XA_API_PROXY` 指定。当前页面支持注册、登录、Agent 筛选、查看、创建、编辑、启停和删除；普通用户只能编辑自己的私有 Agent，公共 Agent 只读。
+
+Web 使用 ProLayout 侧边导航、ProTable 列表和 ModalForm 编辑窗，框架来源为 Ant Design Pro v6.0.3。刷新页面会向后端恢复会话，编辑使用版本校验防止覆盖并发修改。真实浏览器验收方法见 [Web 说明](../web/README.md)。
 
 配置无效或任一依赖无法连接时，进程直接退出且返回非零状态。worker 当前只运行依赖检查和生命周期，尚不领取业务任务。
 
@@ -84,6 +88,8 @@ make web-build
 ```
 
 集成测试需要已启动的真实依赖，验证事务、缓存、对象上传读取删除、依赖异常、HTTP 启停和端口冲突。使用实际项目文件作为存储内容；测试创建的对象和缓存键会清理，不删除业务数据。
+
+`make check` 同时执行 Web 的 Biome、TypeScript、antd 检查和构建。Web 浏览器验收另外运行 `cd web && npm test`，需要已有测试账号通过 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入，并保持 Web 和 server 启动。
 
 前台进程使用 `Ctrl+C`，或向对应进程发送 `SIGTERM`。进程停止接收请求，取消正在运行的健康检查，等待 HTTP 退出，再释放外部连接。关闭超时会返回错误。
 
