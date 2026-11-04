@@ -26,7 +26,7 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 	if input.AgentID == "" {
 		definition := AgentDefinition{
 			ID: "agt_" + uuid.NewString(), WorkspaceID: actor.WorkspaceID, OwnerID: actor.UserID,
-			OwnerType: ownerType(actor), Name: strings.TrimSpace(input.Name), Avatar: strings.TrimSpace(input.Avatar),
+			OwnerType: ownerType(input.Visibility), Name: strings.TrimSpace(input.Name), Avatar: strings.TrimSpace(input.Avatar),
 			Description: strings.TrimSpace(input.Description), Tags: append([]string(nil), input.Tags...),
 			Visibility: input.Visibility, Status: StatusActive, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
 		}
@@ -60,6 +60,10 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 	definition.Description = strings.TrimSpace(input.Description)
 	definition.Tags = append([]string(nil), input.Tags...)
 	definition.Visibility = input.Visibility
+	definition.OwnerType = ownerType(input.Visibility)
+	if definition.OwnerType == "user" {
+		definition.OwnerID = actor.UserID
+	}
 	definition.UpdatedAt = now
 	version, err := newVersion(definition, input.Configuration, actor.UserID, now, currentVersion.VersionNumber+1)
 	if err != nil {
@@ -138,8 +142,8 @@ func newVersion(definition AgentDefinition, configuration Configuration, actorID
 	}, nil
 }
 
-func ownerType(actor auth.Principal) string {
-	if auth.HasRole(actor, "admin") {
+func ownerType(visibility Visibility) string {
+	if visibility == VisibilityPublic {
 		return "system"
 	}
 	return "user"

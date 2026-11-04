@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"linq-bs/server/internal/framework/workspace"
 )
 
 var (
@@ -76,7 +77,7 @@ func (s *ServiceImpl) Register(ctx context.Context, credentials Credentials) (Us
 	if len([]rune(displayName)) > 80 {
 		return User{}, ErrInvalid
 	}
-	if _, _, err := s.repository.FindByEmail(ctx, "default", email); err == nil {
+	if _, _, err := s.repository.FindByEmail(ctx, workspace.DefaultWorkspaceID, email); err == nil {
 		return User{}, ErrConflict
 	} else if !errors.Is(err, ErrNotFound) {
 		return User{}, err
@@ -85,7 +86,7 @@ func (s *ServiceImpl) Register(ctx context.Context, credentials Credentials) (Us
 	if err != nil {
 		return User{}, fmt.Errorf("生成密码摘要: %w", err)
 	}
-	newUser := User{ID: newID(), WorkspaceID: "default", Email: email, DisplayName: displayName, Role: "user", Status: "active"}
+	newUser := User{ID: newID(), WorkspaceID: workspace.DefaultWorkspaceID, Email: email, DisplayName: displayName, Role: "user", Status: "active"}
 	if err := s.repository.Save(ctx, newUser, string(hash)); err != nil {
 		if errors.Is(err, ErrConflict) {
 			return User{}, ErrConflict
@@ -100,7 +101,7 @@ func (s *ServiceImpl) Authenticate(ctx context.Context, email, password string) 
 	if err != nil || password == "" {
 		return User{}, ErrBadSecret
 	}
-	user, hash, err := s.repository.FindByEmail(ctx, "default", normalized)
+	user, hash, err := s.repository.FindByEmail(ctx, workspace.DefaultWorkspaceID, normalized)
 	if errors.Is(err, ErrNotFound) {
 		return User{}, ErrBadSecret
 	}

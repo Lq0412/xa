@@ -12,23 +12,29 @@ import (
 	"linq-bs/server/internal/framework/auth"
 )
 
+func visibleAgentPredicate(userParam, adminParam int) string {
+	return fmt.Sprintf(`(d.visibility = 'public' OR (d.owner_type = 'user' AND d.owner_id = $%d) OR (d.owner_type = 'system' AND $%d))`, userParam, adminParam)
+}
+
 // PGRepository 将可见性、归属和版本指针检查放进 SQL 与事务，避免只依赖调用方判断。
 type PGRepository struct{ pool *pgxpool.Pool }
 
 func NewPGRepository(pool *pgxpool.Pool) *PGRepository { return &PGRepository{pool: pool} }
 
 func (r *PGRepository) Find(ctx context.Context, actor auth.Principal, agentID string) (AgentDefinition, error) {
-	return r.scanDefinition(ctx, r.pool.QueryRow(ctx, definitionQuery()+`
+	query := definitionQuery() + `
 		WHERE d.id = $2 AND d.workspace_id = $1 AND d.deleted_at IS NULL
-		AND (d.visibility = 'public' OR (d.owner_type = 'user' AND d.owner_id = $3) OR (d.owner_type = 'system' AND $4))`,
+		AND ` + visibleAgentPredicate(3, 4)
+	return r.scanDefinition(ctx, r.pool.QueryRow(ctx, query,
 		actor.WorkspaceID, agentID, actor.UserID, auth.HasRole(actor, "admin")))
 }
 
 func (r *PGRepository) List(ctx context.Context, actor auth.Principal) ([]AgentDefinition, error) {
-	rows, err := r.pool.Query(ctx, definitionQuery()+`
+	query := definitionQuery() + `
 		WHERE d.workspace_id = $1 AND d.deleted_at IS NULL
-		AND (d.visibility = 'public' OR (d.owner_type = 'user' AND d.owner_id = $2) OR (d.owner_type = 'system' AND $3))
-		ORDER BY d.updated_at DESC`, actor.WorkspaceID, actor.UserID, auth.HasRole(actor, "admin"))
+		AND ` + visibleAgentPredicate(2, 3) + `
+		ORDER BY d.updated_at DESC`
+	rows, err := r.pool.Query(ctx, query, actor.WorkspaceID, actor.UserID, auth.HasRole(actor, "admin"))
 	if err != nil {
 		return nil, fmt.Errorf("查询 Agent 列表: %w", err)
 	}
@@ -50,12 +56,13 @@ func (r *PGRepository) List(ctx context.Context, actor auth.Principal) ([]AgentD
 func (r *PGRepository) FindVersion(ctx context.Context, actor auth.Principal, agentID, versionID string) (AgentVersion, error) {
 	var version AgentVersion
 	var configuration []byte
-	err := r.pool.QueryRow(ctx, `
+	query := `
 		SELECT v.id, v.workspace_id, v.agent_id, v.version_number, v.configuration,
 		       v.config_checksum, v.created_by, v.created_at
 		FROM agent_versions v JOIN agent_definitions d ON d.id = v.agent_id
 		WHERE v.workspace_id = $1 AND v.agent_id = $2 AND v.id = $3 AND d.deleted_at IS NULL
-		AND (d.visibility = 'public' OR (d.owner_type = 'user' AND d.owner_id = $4) OR (d.owner_type = 'system' AND $5))`,
+		AND ` + visibleAgentPredicate(4, 5)
+	err := r.pool.QueryRow(ctx, query,
 		actor.WorkspaceID, agentID, versionID, actor.UserID, auth.HasRole(actor, "admin")).
 		Scan(&version.ID, &version.WorkspaceID, &version.AgentID, &version.VersionNumber, &configuration,
 			&version.ConfigChecksum, &version.CreatedBy, &version.CreatedAt)
@@ -72,7 +79,7 @@ func (r *PGRepository) FindVersion(ctx context.Context, actor auth.Principal, ag
 }
 
 func (r *PGRepository) SaveRevision(ctx context.Context, actor auth.Principal, saved Saved, expectedVersionID string) error {
-	if err := checkManageForSave(actor, saved.Definition); err != nil {
+	if err := checkManage(actor, saved.Definition); err != nil {
 		return err
 	}
 	configuration, err := json.Marshal(saved.Version.Configuration)
@@ -142,7 +149,7 @@ func (r *PGRepository) SetStatus(ctx context.Context, actor auth.Principal, agen
 	if err != nil {
 		return err
 	}
-	if err := checkManageForSave(actor, definition); err != nil {
+	if err := checkManage(actor, definition); err != nil {
 		return err
 	}
 	var deletedAt any
@@ -186,13 +193,6 @@ func scanDefinitionRow(row definitionScanner) (AgentDefinition, error) {
 		return AgentDefinition{}, fmt.Errorf("解析 Agent 标签: %w", err)
 	}
 	return definition, nil
-}
-
-func checkManageForSave(actor auth.Principal, definition AgentDefinition) error {
-	if definition.WorkspaceID != actor.WorkspaceID || (definition.OwnerType == "user" && definition.OwnerID != actor.UserID) || (definition.OwnerType == "system" && !auth.HasRole(actor, "admin")) {
-		return ErrForbidden
-	}
-	return nil
 }
 
 func isUniqueViolation(err error) bool {

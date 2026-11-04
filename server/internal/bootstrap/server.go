@@ -42,7 +42,16 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	}
 	userService := user.NewService(users)
 	sessions := auth.NewRedisSessionStore(cache, 24*time.Hour)
-	resolver := auth.NewRedisResolver(sessions)
+	resolver := auth.NewRedisResolver(sessions, func(ctx context.Context, userID string) (auth.Principal, error) {
+		current, err := userService.Get(ctx, userID)
+		if err != nil {
+			return auth.Principal{}, err
+		}
+		if current.Status != "active" {
+			return auth.Principal{}, auth.ErrUnauthenticated
+		}
+		return auth.Principal{UserID: current.ID, WorkspaceID: current.WorkspaceID, Roles: []string{current.Role}}, nil
+	})
 	agents := agentdefinition.NewService(agentdefinition.NewPGRepository(db))
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
 	agentHandler := &agenthttp.ManagementHandler{Agents: agents}

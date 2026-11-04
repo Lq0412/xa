@@ -38,7 +38,13 @@ make deps-status
 
 ## 3. 启动进程
 
-先用 `ss -ltnp` 检查项目配置的端口，确认没有旧的本项目进程；不要终止其他项目的服务。在两个终端分别执行：
+先执行一次数据库迁移，再用 `ss -ltnp` 检查项目配置的端口，确认没有旧的本项目进程；不要终止其他项目的服务：
+
+```bash
+make migrate
+```
+
+server 和 worker 启动时只检查迁移版本；版本不是最新时会直接退出。在两个终端分别执行：
 
 ```bash
 make server
@@ -80,7 +86,7 @@ curl --fail http://127.0.0.1:18081/health/ready
 
 `live` 表示 HTTP 进程存活；`ready` 实际检查数据库、Redis 和桶访问，任一失败返回 503。它不代表尚未接入的模型或业务接口可用。
 
-server 启动时会执行幂等的身份和 Agent 表迁移。若配置 `XA_ADMIN_EMAIL` 与 `XA_ADMIN_PASSWORD`，首次启动会初始化管理员；两项必须同时配置，密码不会写入日志。
+独立的 `migrate` 命令会执行身份、Agent 表和数据修正迁移。若配置 `XA_ADMIN_EMAIL` 与 `XA_ADMIN_PASSWORD`，server 首次启动会初始化管理员；两项必须同时配置，密码不会写入日志。
 
 已接入的接口包括：
 

@@ -36,7 +36,7 @@ func runWithHandler(ctx context.Context, name, address string, cfg config.Config
 		return err
 	}
 	defer db.Close()
-	if err := postgres.Migrate(startupCtx, db); err != nil {
+	if err := postgres.CheckMigrations(startupCtx, db); err != nil {
 		return err
 	}
 	cache, err := redis.Open(startupCtx, cfg.Redis)

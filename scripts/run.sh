@@ -3,8 +3,8 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 case "${1:-}" in
-  server|worker|init-storage) process_name=$1 ;;
-  *) printf '%s\n' '用法：bash scripts/run.sh server|worker|init-storage' >&2; exit 1 ;;
+  server|worker|migrate|init-storage) process_name=$1 ;;
+  *) printf '%s\n' '用法：bash scripts/run.sh server|worker|migrate|init-storage' >&2; exit 1 ;;
 esac
 set -a
 source .env

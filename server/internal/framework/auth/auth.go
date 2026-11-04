@@ -42,6 +42,9 @@ type Resolver interface {
 	Resolve(ctx context.Context) (Principal, error)
 }
 
+// PrincipalLookup 从数据库读取用户当前状态和角色，避免把权限事实长期留在会话缓存中。
+type PrincipalLookup func(context.Context, string) (Principal, error)
+
 // Authorizer 校验主体对资源和动作的权限。
 type Authorizer interface {
 	Authorize(ctx context.Context, principal Principal, resource string, action string) error
@@ -124,7 +127,39 @@ func sessionKey(token string) string { return "xa:session:" + token }
 // RedisResolver 从请求上下文解析登录主体，未登录时直接返回明确错误。
 type RedisResolver struct{ store SessionStore }
 
-func NewRedisResolver(store SessionStore) *RedisResolver { return &RedisResolver{store: store} }
+type databaseResolver struct {
+	store  SessionStore
+	lookup PrincipalLookup
+}
+
+func NewRedisResolver(store SessionStore, lookups ...PrincipalLookup) *RedisResolver {
+	if len(lookups) == 0 {
+		return &RedisResolver{store: store}
+	}
+	return &RedisResolver{store: &databaseResolver{store: store, lookup: lookups[0]}}
+}
+
+func (r *databaseResolver) Create(ctx context.Context, principal Principal) (string, error) {
+	return r.store.Create(ctx, principal)
+}
+func (r *databaseResolver) Resolve(ctx context.Context, token string) (Principal, error) {
+	principal, err := r.store.Resolve(ctx, token)
+	if err != nil {
+		return Principal{}, err
+	}
+	current, err := r.lookup(ctx, principal.UserID)
+	if err != nil {
+		_ = r.store.Delete(ctx, token)
+		if errors.Is(err, ErrUnauthenticated) {
+			return Principal{}, ErrUnauthenticated
+		}
+		return Principal{}, err
+	}
+	return current, nil
+}
+func (r *databaseResolver) Delete(ctx context.Context, token string) error {
+	return r.store.Delete(ctx, token)
+}
 
 func (r *RedisResolver) Resolve(ctx context.Context) (Principal, error) {
 	token, ok := sessionToken(ctx)

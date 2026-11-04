@@ -8,6 +8,7 @@ import (
 	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/framework/auth"
 	frameworkhttp "linq-bs/server/internal/framework/http"
+	"linq-bs/server/internal/framework/workspace"
 )
 
 // ManagementHandler 暴露 Agent 配置管理接口；调用者身份始终从认证上下文读取。
@@ -41,7 +42,7 @@ func (h *ManagementHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *ManagementHandler) Available(w http.ResponseWriter, r *http.Request) {
 	principal, ok := frameworkhttp.Principal(r.Context())
 	if !ok {
-		principal = auth.Principal{WorkspaceID: "default"}
+		principal = auth.Principal{WorkspaceID: workspace.DefaultWorkspaceID}
 	}
 	list, err := h.Agents.List(r.Context(), principal)
 	if err != nil {

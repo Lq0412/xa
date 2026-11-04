@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"linq-bs/server/internal/framework/auth"
+	"linq-bs/server/internal/framework/workspace"
 )
 
 type memoryRepository struct {
@@ -67,7 +68,7 @@ func (r *memoryRepository) SetStatus(_ context.Context, _ auth.Principal, agentI
 func TestServiceSavesPrivateAgentAndRejectsPublicUser(t *testing.T) {
 	repository := &memoryRepository{definitions: map[string]AgentDefinition{}, versions: map[string]AgentVersion{}}
 	service := NewService(repository)
-	actor := auth.Principal{UserID: "user-1", WorkspaceID: "default", Roles: []string{"user"}}
+	actor := auth.Principal{UserID: "user-1", WorkspaceID: workspace.DefaultWorkspaceID, Roles: []string{"user"}}
 	saved, err := service.Save(context.Background(), actor, SaveInput{Name: "我的教练", Visibility: VisibilityPrivate})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +84,7 @@ func TestServiceSavesPrivateAgentAndRejectsPublicUser(t *testing.T) {
 func TestServiceVersionConflictDoesNotOverwrite(t *testing.T) {
 	repository := &memoryRepository{definitions: map[string]AgentDefinition{}, versions: map[string]AgentVersion{}, conflicts: true}
 	service := NewService(repository)
-	actor := auth.Principal{UserID: "admin-1", WorkspaceID: "default", Roles: []string{"admin"}}
+	actor := auth.Principal{UserID: "admin-1", WorkspaceID: workspace.DefaultWorkspaceID, Roles: []string{"admin"}}
 	if _, err := service.Save(context.Background(), actor, SaveInput{Name: "公共教练", Visibility: VisibilityPublic}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("配置冲突未返回: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+	"linq-bs/server/internal/framework/workspace"
 )
 
 // PGRepository 将用户查询限制在已知工作空间，避免业务层遗漏租户条件。
@@ -60,9 +61,9 @@ func (r *PGRepository) EnsureAdmin(ctx context.Context, email, password string) 
 	}
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO users (id, workspace_id, email, password_hash, display_name, role, status)
-		VALUES ($1, 'default', lower($2), $3, 'Administrator', 'admin', 'active')
+		VALUES ($1, $2, lower($3), $4, 'Administrator', 'admin', 'active')
 		ON CONFLICT (workspace_id, email) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = 'admin', status = 'active', updated_at = now()`,
-		"usr_"+uuid.NewString(), email, string(hash))
+		"usr_"+uuid.NewString(), workspace.DefaultWorkspaceID, email, string(hash))
 	if err != nil {
 		return fmt.Errorf("初始化管理员: %w", err)
 	}

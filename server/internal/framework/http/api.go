@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"linq-bs/server/internal/framework/auth"
+	"linq-bs/server/internal/framework/workspace"
 )
 
 type requestIDKey struct{}
@@ -58,7 +59,7 @@ func OptionalPrincipal(resolver auth.Resolver, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := auth.BearerToken(r.Header.Get("Authorization"))
 		if !ok {
-			next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), auth.Principal{WorkspaceID: "default"})))
+			next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), auth.Principal{WorkspaceID: workspace.DefaultWorkspaceID})))
 			return
 		}
 		principal, err := resolver.Resolve(auth.WithSessionToken(r.Context(), token))
