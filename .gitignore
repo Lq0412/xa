@@ -13,6 +13,8 @@ server/dist/
 # Web 依赖和构建产物
 web/node_modules/
 web/dist/
+web-user/node_modules/
+web-user/dist/
 # Utoo 在仓库根目录生成的中间编译资源
 /dist/
 

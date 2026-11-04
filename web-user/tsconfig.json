@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "esnext", "moduleResolution": "bundler", "jsx": "react-jsx",
+    "esModuleInterop": true, "strict": true, "noImplicitReturns": true,
+    "skipLibCheck": true, "resolveJsonModule": true, "types": ["node"],
+    "paths": { "@/*": ["./src/*"], "@@/*": ["./src/.umi/*"] }
+  },
+  "include": ["src", "config"],
+  "exclude": ["node_modules", "dist", "src/.umi-production"]
+}

@@ -2,16 +2,17 @@
 
 ## 1. 产品结构
 
-系统由一个 Go server 支撑两个使用入口：
+系统由一个 Go server 支撑独立的 Web 用户端、Web 管理端和后续移动端：
 
 ~~~mermaid
 flowchart LR
     Web[Web 管理端] --> Server[Go server]
-    Mobile[移动端] --> Server
+    UserWeb[Web 用户端] --> Server
+    Mobile[移动端：最后接入] --> Server
     Server --> Runtime[Agent Runtime]
 ~~~
 
-Web 管理端负责平台资源和公共 Agent，移动端负责普通用户使用 Agent，也允许普通用户创建自己的私有 Agent。
+Web 管理端负责平台资源和公共 Agent。独立 Web 用户端提供公开 Agent 列表、私有 Agent 创建和对话；先在 Web 完成全部能力和验收，最后开发移动端。
 
 系统不为英语面试、IELTS、旅行等内容建立固定业务模块。它们都是 Agent 的名称、描述、提示词、工具和记忆配置。
 
@@ -22,7 +23,7 @@ Web 管理端负责平台资源和公共 Agent，移动端负责普通用户使�
 | 角色 | 主要入口 | 可以做什么 |
 | --- | --- | --- |
 | 管理员 | Web 管理端 | 管理平台模型、工具、知识库，创建和维护公共 Agent |
-| 普通用户 | 移动端 | 使用公共 Agent，创建和维护自己的私有 Agent，进行对话 |
+| 普通用户 | Web 用户端，后续接入移动端 | 使用公共 Agent，创建和维护自己的私有 Agent，进行对话 |
 
 管理员创建的 Agent 可以对所有用户开放。普通用户创建的 Agent 默认只对创建者可见，首期不支持公开分享。
 
@@ -76,19 +77,19 @@ flowchart LR
 
 ### 5.1 选择 Agent
 
-移动端展示：
+Web 用户端的 Agent 列表展示：
 
 - 管理员创建的公共 Agent。
 - 当前用户创建的私有 Agent。
 
-用户选择 Agent 后创建会话。会话固定绑定当时的 Agent 版本，之后修改 Agent 配置不会改变这条会话的运行规则。
+用户可从列表创建私有 Agent，或选择现有 Agent 进入独立对话页。对话采用窄导航、会话列表、消息与输入区、可收起的 Agent 详情栏。功能完成后，创建的会话固定绑定当时的 Agent 版本，之后修改 Agent 配置不会改变这条会话的运行规则。当前对话布局只读取 Agent 资料，运行和历史仍待开发。
 
 ### 5.2 文本对话
 
 ~~~mermaid
 sequenceDiagram
     participant U as 用户
-    participant M as 移动端
+    participant M as Web 用户端
     participant S as server
     participant R as Agent Runtime
 
@@ -108,7 +109,7 @@ sequenceDiagram
 ~~~mermaid
 sequenceDiagram
     participant U as 用户
-    participant M as 移动端
+    participant M as Web 用户端
     participant S as server
     participant R as Realtime Runtime
 
@@ -151,7 +152,7 @@ Agent 配置绑定
 ~~~text
 管理员创建公共 Agent
 → 保存配置并立即生效
-→ 用户在移动端查看公共 Agent
+→ 用户在 Web 用户端查看公共 Agent
 → 用户创建私有 Agent
 → 用户选择 Agent
 → 进行文本或 Realtime 对话

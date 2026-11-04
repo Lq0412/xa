@@ -1,4 +1,6 @@
-// 业务路由沿用 Pro 的登录页和管理页组织方式。
+import { adminModules } from './modules';
+
+// 管理端独立导航；未实现模块也有可访问页面，便于检查完整产品结构。
 export default [
   {
     path: '/user',
@@ -17,14 +19,20 @@ export default [
     ],
   },
   {
-    path: '/agents',
-    name: 'agents',
-    icon: 'robot',
-    component: './agents',
+    path: '/overview',
+    name: '平台概览',
+    icon: 'dashboard',
+    component: './overview',
   },
+  ...adminModules.map((item) => ({
+    path: item.path,
+    name: item.name,
+    icon: item.icon,
+    component: item.available ? './agents' : './module',
+  })),
   {
     path: '/',
-    redirect: '/agents',
+    redirect: '/overview',
   },
   {
     component: './exception/404',

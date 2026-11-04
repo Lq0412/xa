@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "src/**",
+      "config/**",
+      "package.json",
+      "!src/.umi",
+      "!src/.umi-production"
+    ]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space" },
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "javascript": {
+    "jsxRuntime": "transparent",
+    "formatter": { "quoteStyle": "single" }
+  }
+}

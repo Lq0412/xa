@@ -180,7 +180,7 @@ test('真实会话与 Agent 创建、筛选、编辑、版本冲突、启停和�
   }
 });
 
-test('登录错误、注册重复账号和已撤销会话均有明确反馈', async ({
+test('登录错误、用户端注册入口和已撤销会话均有明确反馈', async ({
   page,
   request,
 }) => {
@@ -190,13 +190,14 @@ test('登录错误、注册重复账号和已撤销会话均有明确反馈', as
   await page.getByRole('button', { name: /登\s*录/ }).click();
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page).toHaveURL(/\/user\/login/);
-  await page.getByRole('link', { name: '还没有账号？注册' }).click();
+  await page.getByRole('link', { name: '用户注册与使用入口' }).click();
   await expect(page).toHaveURL(/\/user\/register/);
-  await page.getByRole('textbox', { name: '邮箱' }).fill(credentials.email);
-  await page.getByLabel('密码', { exact: true }).fill(randomUUID());
-  await page.getByRole('button', { name: '注册并登录' }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
-  await page.getByRole('link', { name: '已有账号？返回登录' }).click();
+  await expect(page.getByText('前往用户端创建账号')).toBeVisible();
+  await expect(page.getByRole('link', { name: '前往注册' })).toHaveAttribute(
+    'href',
+    /:8002\/register$/,
+  );
+  await page.getByRole('link', { name: '返回管理员登录' }).click();
   await signIn(page);
   await page.goto('/missing-page');
   await expect(page.getByText('访问的页面不存在')).toBeVisible();

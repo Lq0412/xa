@@ -8,7 +8,7 @@ const settings: ProLayoutProps = {
   contentWidth: 'Fluid',
   fixedHeader: true,
   fixSiderbar: true,
-  title: 'xa Agent',
+  title: 'xa 管理控制台',
   logo: '/logo.svg',
 };
 

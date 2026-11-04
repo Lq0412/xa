@@ -40,7 +40,7 @@ export default function LoginPage() {
         <LoginForm<{ email: string; password: string; display_name?: string }>
           className={styles.card}
           logo={<img alt="xa" src="/logo.svg" />}
-          title="xa Agent"
+          title="xa 管理控制台"
           subTitle="登录 Agent 管理平台"
           submitter={{ searchConfig: { submitText: '登录' } }}
           onFinish={async (values) => {
@@ -61,7 +61,7 @@ export default function LoginPage() {
               return false;
             }
           }}
-          actions={<Link to="/user/register">还没有账号？注册</Link>}
+          actions={<Link to="/user/register">用户注册与使用入口</Link>}
         >
           {error && (
             <Alert

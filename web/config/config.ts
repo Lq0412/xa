@@ -11,7 +11,12 @@ export default defineConfig({
   outputPath:
     process.env.NODE_ENV === 'development' ? '../.output/web-dev' : 'dist',
   publicPath: '/',
-  title: 'xa Agent',
+  title: 'xa 管理控制台',
+  define: {
+    'process.env.XA_USER_WEB_URL':
+      process.env.XA_USER_WEB_URL ||
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:8002' : ''),
+  },
   routes,
   proxy,
   fastRefresh: true,

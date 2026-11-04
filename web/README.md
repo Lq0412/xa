@@ -2,7 +2,7 @@
 
 基于 Ant Design Pro v6.0.3 官方模板，使用 React 19、Ant Design 6、Umi Max 4 和 ProComponents 3。保留上游 MIT 许可证（LICENSE）。
 
-页面使用标准 ProLayout、ProTable、ModalForm 和 LoginForm。业务路由为登录、注册与 Agent 管理，连接 xa 的真实账号、Redis 会话和 Agent 管理接口。
+页面使用标准 ProLayout、ProTable、ModalForm 和 LoginForm。管理员登录后可操作真实 Agent 管理，并浏览平台概览、模型、知识库、工具、评价、任务、用户和监控审计等顶层模块。尚未接入业务的模块提供明确的待开发页面。普通用户使用独立的 `web-user/` 工程。
 
 ## 启动
 
@@ -13,7 +13,7 @@ make web-install
 make web
 ```
 
-访问 `http://127.0.0.1:8000`。开发代理默认连接 `http://127.0.0.1:18080`，可通过 `XA_API_PROXY` 修改。管理员使用部署配置中的账号登录；普通用户可注册，公共 Agent 对普通用户只读。
+访问 `http://localhost:8000`。开发代理默认连接 `http://127.0.0.1:18080`，可通过 `XA_API_PROXY` 修改。管理员使用部署配置中的账号登录，普通用户注册与使用入口在独立用户端。
 
 ## 开发与验证
 
@@ -30,7 +30,7 @@ npm run build
 
 ## 浏览器验收
 
-`npm test` 使用 Playwright 连接已经启动的 Web 和 server，不替换网络响应。首次运行先执行 `npx playwright install --with-deps chromium`，需要安装 Chromium 及系统依赖。测试使用环境变量 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 指定已有的测试账号；凭证不得写入文件或提交。默认地址为 `http://127.0.0.1:8000`，可用 `XA_WEB_URL` 修改。
+`npm test` 使用 Playwright 连接已经启动的两个 Web 和 server，不替换网络响应。首次运行先执行 `npx playwright install --with-deps chromium`，需要安装 Chromium 及系统依赖。测试使用环境变量 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 指定已有的管理员测试账号；凭证不得写入文件或提交。管理端默认 `http://127.0.0.1:8000`，用户端默认 `http://127.0.0.1:8002`，分别可用 `XA_WEB_URL`、`XA_USER_WEB_URL` 修改。
 
 测试会创建并删除自己的 Agent，覆盖登录、刷新恢复会话、筛选、编辑配置保留、启停、删除和退出。输出保存在仓库根目录 `.output/web-e2e/`，不采集截图、录屏或包含凭证的 trace。
 
@@ -38,4 +38,4 @@ npm run build
 
 `npm run build` 输出 `dist/`，开发资源输出到仓库根目录 `.output/web-dev/`，两者可同时运行。安装时 `prepare` 生成 Umi 类型；日常 lint 不重新清空生成目录，以免干扰运行中的开发服务。
 
-生产静态服务器需要将页面路由回退到 `index.html`，并将 `/api/` 和 `/health/` 代理到 server；开发代理不会包含在构建产物中。
+生产静态服务器需要将页面路由回退到 `index.html`，并将 `/api/` 和 `/health/` 代理到 server；开发代理不会包含在构建产物中。构建时用 `XA_USER_WEB_URL` 指定独立用户端地址，未配置时不展示跨端链接，生产产物不内置本机地址。

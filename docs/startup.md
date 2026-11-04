@@ -1,6 +1,6 @@
 # 本地启动
 
-当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及 Ant Design Pro v6 Web 管理端。文本模型、Realtime、邮件验证、异步任务处理器和移动端仍未接入。
+当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及两个独立 Web 前端。管理端提供全部顶层模块入口，用户端提供真实 Agent 列表、创建与对话布局。文本模型、Realtime、邮件验证、异步任务处理器和移动端仍未接入。
 
 ## 1. 环境
 
@@ -24,7 +24,8 @@ make deps-status
 | 服务 | 默认本机地址 |
 | --- | --- |
 | server | `127.0.0.1:18080` |
-| Web 开发服务 | `127.0.0.1:8000` |
+| Web 管理端 | `localhost:8000` |
+| Web 用户端 | `localhost:8002` |
 | worker 健康接口 | `127.0.0.1:18081` |
 | PostgreSQL | `127.0.0.1:15432` |
 | Redis | `127.0.0.1:16379` |
@@ -54,7 +55,18 @@ make web-install
 make web
 ```
 
-浏览器访问 `http://127.0.0.1:8000`。Umi 开发服务器会把 `/api/` 和 `/health/` 请求转发到 `127.0.0.1:18080`，因此需要先启动 server。若后端使用其他地址，通过 `XA_API_PROXY` 指定。当前页面支持注册、登录、Agent 筛选、查看、创建、编辑、启停和删除；普通用户只能编辑自己的私有 Agent，公共 Agent 只读。
+管理端访问 `http://localhost:8000`，使用管理员账号登录。现有 Agent 管理支持筛选、查看、创建、编辑、启停和删除；模型、知识库等模块提供页面占位。
+
+Web 用户端在独立终端启动：
+
+```bash
+make web-user-install
+make web-user
+```
+
+用户端访问 `http://localhost:8002`，支持匿名浏览公共 Agent、注册登录、查看和创建自己的私有 Agent，并进入对话布局。会话、模型调用、语音、记忆和学习反馈明确标为待开发。Windows 访问 WSL 优先使用 `localhost`，本机曾出现 IPv4 `127.0.0.1` 转发失败、`localhost` 正常的情况。
+
+两个前端的 Umi 开发服务器均将 `/api/` 和 `/health/` 请求转发到 `127.0.0.1:18080`，后端地址通过 `XA_API_PROXY` 配置。管理端默认提供到 `http://localhost:8002` 的用户端入口，用户端为管理员提供到 `http://localhost:8000` 的后台入口；可分别通过 `XA_USER_WEB_URL` 和 `XA_ADMIN_WEB_URL` 覆盖。两个入口共用账号，各自登录，不通过跳转 URL 传递令牌。
 
 Web 使用 ProLayout 侧边导航、ProTable 列表和 ModalForm 编辑窗，框架来源为 Ant Design Pro v6.0.3。刷新页面会向后端恢复会话，编辑使用版本校验防止覆盖并发修改。真实浏览器验收方法见 [Web 说明](../web/README.md)。
 
@@ -89,7 +101,7 @@ make web-build
 
 集成测试需要已启动的真实依赖，验证事务、缓存、对象上传读取删除、依赖异常、HTTP 启停和端口冲突。使用实际项目文件作为存储内容；测试创建的对象和缓存键会清理，不删除业务数据。
 
-`make check` 同时执行 Web 的 Biome、TypeScript、antd 检查和构建。Web 浏览器验收另外运行 `cd web && npm test`，需要已有测试账号通过 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入，并保持 Web 和 server 启动。
+`make check` 同时执行两个 Web 工程的 Biome、TypeScript、antd 检查和构建。浏览器验收统一运行 `cd web && npm test`，需要管理员测试账号通过 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入，并保持两个 Web 和 server 启动。可用 `XA_WEB_URL`、`XA_USER_WEB_URL` 覆盖测试访问地址。
 
 前台进程使用 `Ctrl+C`，或向对应进程发送 `SIGTERM`。进程停止接收请求，取消正在运行的健康检查，等待 HTTP 退出，再释放外部连接。关闭超时会返回错误。
 

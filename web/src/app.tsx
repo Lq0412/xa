@@ -34,7 +34,20 @@ export async function getInitialState(): Promise<{
 /** 使用 ProLayout 提供导航、账号菜单、折叠侧栏和响应式布局。 */
 export const layout: RunTimeLayoutConfig = ({ initialState }) => ({
   ...defaultSettings,
-  menu: { locale: true },
+  menu: { locale: false },
+  actionsRender: () =>
+    process.env.XA_USER_WEB_URL
+      ? [
+          <Button
+            key="user-web"
+            href={process.env.XA_USER_WEB_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            打开用户端 ↗
+          </Button>,
+        ]
+      : [],
   avatarProps: {
     icon: <UserOutlined />,
     title:
@@ -60,6 +73,25 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => ({
             <Button type="primary" onClick={() => window.location.reload()}>
               重新加载
             </Button>
+          }
+        />
+      );
+    }
+    if (
+      initialState?.currentUser &&
+      initialState.currentUser.role !== 'admin'
+    ) {
+      return (
+        <Result
+          status="403"
+          title="此入口仅供管理员使用"
+          subTitle="请前往用户端浏览 Agent 和管理自己的内容。"
+          extra={
+            process.env.XA_USER_WEB_URL ? (
+              <Button type="primary" href={process.env.XA_USER_WEB_URL}>
+                前往用户端
+              </Button>
+            ) : undefined
           }
         />
       );
