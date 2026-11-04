@@ -7,11 +7,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisclient "github.com/redis/go-redis/v9"
+	"linq-bs/server/internal/agent/conversation"
 	agentdefinition "linq-bs/server/internal/agent/definition"
 	agenthttp "linq-bs/server/internal/agent/transport/http"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/config"
 	frameworkhttp "linq-bs/server/internal/framework/http"
+	"linq-bs/server/internal/infra/provider"
 	systemhttp "linq-bs/server/internal/system/transport/http"
 	"linq-bs/server/internal/system/user"
 	"log/slog"
@@ -55,6 +57,7 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	agents := agentdefinition.NewService(agentdefinition.NewPGRepository(db))
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
 	agentHandler := &agenthttp.ManagementHandler{Agents: agents}
+	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL), ModelName: s.config.ChatModel}}
 
 	mux := http.NewServeMux()
 	health := frameworkhttp.HealthHandler(checks, s.config.HealthTimeout, s.logger)
@@ -72,5 +75,9 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("POST /api/v1/agents/{agent_id}/enable", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Enable)))
 	mux.Handle("POST /api/v1/agents/{agent_id}/offline", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Disable)))
 	mux.Handle("DELETE /api/v1/agents/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Delete)))
+	mux.Handle("POST /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Create)))
+	mux.Handle("GET /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.List)))
+	mux.Handle("GET /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Messages)))
+	mux.Handle("POST /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Send)))
 	return mux, nil
 }

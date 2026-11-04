@@ -19,9 +19,18 @@ type Config struct {
 	Postgres        PostgresConfig    `envPrefix:"XA_POSTGRES_"`
 	Redis           RedisConfig       `envPrefix:"XA_REDIS_"`
 	ObjectStore     ObjectStoreConfig `envPrefix:"XA_S3_"`
+	Bailian         BailianConfig     `envPrefix:"XA_BAILIAN_"`
+	ChatModel       string            `env:"XA_CHAT_MODEL" envDefault:"qwen3.7-plus"`
+	LightModel      string            `env:"XA_LIGHT_MODEL" envDefault:"qwen3.8-flash"`
 	StartupTimeout  time.Duration     `env:"XA_STARTUP_TIMEOUT" envDefault:"15s"`
 	ShutdownTimeout time.Duration     `env:"XA_SHUTDOWN_TIMEOUT" envDefault:"10s"`
 	HealthTimeout   time.Duration     `env:"XA_HEALTH_TIMEOUT" envDefault:"3s"`
+}
+
+// BailianConfig 保存阿里百炼 OpenAI 兼容接口配置。
+type BailianConfig struct {
+	APIKey  string `env:"API_KEY,required,notEmpty"`
+	BaseURL string `env:"BASE_URL,required,notEmpty"`
 }
 
 // AdminConfig 是首次部署时可选的管理员初始化凭证；密码只从环境注入。
@@ -117,6 +126,12 @@ func (c Config) Validate() error {
 	}
 	if c.Redis.Password == "" || c.ObjectStore.AccessKey == "" || c.ObjectStore.SecretKey == "" {
 		return fmt.Errorf("Redis 和对象存储凭证不能为空")
+	}
+	if c.Bailian.APIKey == "" || c.Bailian.BaseURL == "" {
+		return fmt.Errorf("阿里百炼配置不能为空")
+	}
+	if _, err := url.ParseRequestURI(c.Bailian.BaseURL); err != nil {
+		return fmt.Errorf("阿里百炼 BaseURL 无效")
 	}
 	u, err := url.Parse("https://" + c.ObjectStore.Endpoint)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {

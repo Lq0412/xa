@@ -1,6 +1,6 @@
 # 本地启动
 
-当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及两个独立 Web 前端。管理端提供平台概览和 Agent 管理，用户端提供真实 Agent 列表、创建与对话布局。文本模型、Realtime、邮件验证、异步任务处理器和移动端仍未接入。
+当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及两个独立 Web 前端。用户端已接入阿里百炼流式文本对话。
 
 ## 1. 环境
 
@@ -18,6 +18,8 @@ make deps-status
 ```
 
 `make env` 根据 `.env.example` 创建权限为 600 的 `.env` 并生成随机本地凭证；已有文件不会覆盖。不要提交 `.env`。运行脚本会将其中的变量导入进程，直接运行二进制时需自行注入环境变量。
+
+用户端文本对话需要配置 `XA_BAILIAN_API_KEY` 和 `XA_BAILIAN_BASE_URL`；模型名默认分别为 `XA_CHAT_MODEL=qwen3.7-plus` 与 `XA_LIGHT_MODEL=qwen3.8-flash`。缺少百炼配置时 server 和 worker 会在启动校验阶段直接退出。密钥只放在本地 `.env`，不会写入日志或版本库。
 
 `make deps-up` 等待三个依赖 healthy，再初始化 S3 存储桶。新 PostgreSQL 数据卷自动启用 pgvector；不会创建业务表。启动后端前必须确认依赖健康且桶初始化成功。
 

@@ -63,4 +63,4 @@ check: prepare
 
 integration: prepare
 	bash scripts/run.sh migrate
-	set -a; source .env; set +a; cd server && go test -race -tags=integration -count=1 ./internal/bootstrap
+	set -a; source .env; set +a; cd server && go test -race -tags=integration -count=1 ./...

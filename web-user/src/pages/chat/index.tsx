@@ -1,250 +1,169 @@
 import {
   ArrowUpOutlined,
-  AudioOutlined,
-  CloseOutlined,
-  InfoCircleOutlined,
-  MenuOutlined,
   PlusOutlined,
   RobotOutlined,
-  SearchOutlined,
 } from '@ant-design/icons';
-import { Link, useLocation } from '@umijs/max';
-import { Alert, Avatar, Button, Input, Spin, Tabs, Tag, Tooltip } from 'antd';
+import { useLocation } from '@umijs/max';
+import { Alert, Avatar, Button, Input, List, Spin } from 'antd';
 import { useEffect, useState } from 'react';
-import { type Agent, errorMessage, getAgent } from '@/services/api';
+import {
+  type Agent,
+  type ChatMessage,
+  type Conversation,
+  createConversation,
+  errorMessage,
+  getAgent,
+  listConversations,
+  listMessages,
+  streamMessage,
+} from '@/services/api';
 
-/** 对话页先提供会话栏、消息区和详情栏；运行接口接入前禁止发送假消息。 */
+/** 用户端对话页负责会话选择、历史恢复和 SSE 增量展示。 */
 export default function ChatPage() {
-  const { search } = useLocation();
-  const agentId = new URLSearchParams(search).get('agent');
+  const agentID = new URLSearchParams(useLocation().search).get('agent');
   const [agent, setAgent] = useState<Agent>();
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversation, setConversation] = useState<Conversation>();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [details, setDetails] = useState(
-    () => window.matchMedia('(min-width: 1201px)').matches,
-  );
-  const [sessionsOpen, setSessionsOpen] = useState(false);
-  const [revision, setRevision] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 使用户点击重试时重新读取同一个 Agent。
   useEffect(() => {
-    let disposed = false;
-    setAgent(undefined);
-    setError('');
-    setLoading(Boolean(agentId));
-    if (agentId)
-      getAgent(agentId)
-        .then((result) => {
-          if (!disposed) setAgent(result);
-        })
-        .catch((cause) => {
-          if (!disposed) setError(errorMessage(cause));
-        })
-        .finally(() => {
-          if (!disposed) setLoading(false);
-        });
-    return () => {
-      disposed = true;
-    };
-  }, [agentId, revision]);
-
+    if (agentID)
+      getAgent(agentID)
+        .then(setAgent)
+        .catch((e) => setError(errorMessage(e)));
+    listConversations()
+      .then((r) => setConversations(r.conversations))
+      .catch((e) => setError(errorMessage(e)));
+  }, [agentID]);
+  useEffect(() => {
+    if (conversation)
+      listMessages(conversation.id)
+        .then((r) => setMessages(r.messages))
+        .catch((e) => setError(errorMessage(e)));
+  }, [conversation]);
+  const newChat = async () => {
+    if (!agent) return;
+    const c = await createConversation(agent.id);
+    setConversations((v) => [c, ...v]);
+    setConversation(c);
+    setMessages([]);
+  };
+  const send = async () => {
+    if (!conversation || !input.trim() || sending) return;
+    const text = input.trim();
+    setInput('');
+    setMessages((v) => [
+      ...v,
+      {
+        id: `local-${Date.now()}`,
+        conversation_id: conversation.id,
+        role: 'user',
+        content: text,
+        status: 'completed',
+      },
+      {
+        id: `assistant-${Date.now()}`,
+        conversation_id: conversation.id,
+        role: 'assistant',
+        content: '',
+        status: 'pending',
+      },
+    ]);
+    setSending(true);
+    try {
+      await streamMessage(
+        conversation.id,
+        text,
+        (d) =>
+          setMessages((v) => {
+            const a = [...v];
+            const i = a.length - 1;
+            a[i] = { ...a[i], content: a[i].content + d };
+            return a;
+          }),
+        () => {},
+      );
+      setMessages(await listMessages(conversation.id).then((r) => r.messages));
+      setConversations(await listConversations().then((r) => r.conversations));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSending(false);
+    }
+  };
   return (
     <div className="chat-layout">
-      <aside
-        className={`conversation-sidebar ${sessionsOpen ? 'is-open' : ''}`}
-        aria-label="会话列表"
-      >
-        <div className="conversation-search">
-          <Input
-            prefix={<SearchOutlined />}
-            placeholder="搜索会话"
-            aria-label="搜索会话"
-            disabled
-          />
-          <Button
-            type="text"
-            className="mobile-only"
-            icon={<CloseOutlined />}
-            aria-label="关闭会话列表"
-            onClick={() => setSessionsOpen(false)}
-          />
-        </div>
-        <Link
-          className="new-conversation"
-          to="/chat"
-          onClick={() => setSessionsOpen(false)}
-        >
-          <PlusOutlined /> 新对话
-        </Link>
-        <div className="sidebar-label">
-          最近会话 <span>待开发</span>
-        </div>
-        <p className="sidebar-note">会话历史接入后，将在这里显示。</p>
-        <Link className="sidebar-explore" to="/explore">
-          浏览全部 Agent →
-        </Link>
+      <aside className="conversation-sidebar">
+        <Button type="primary" icon={<PlusOutlined />} onClick={newChat} block>
+          新建会话
+        </Button>
+        <List
+          dataSource={conversations}
+          renderItem={(c) => (
+            <List.Item
+              onClick={() => setConversation(c)}
+              style={{ cursor: 'pointer' }}
+            >
+              {c.title || '新对话'}
+            </List.Item>
+          )}
+        />
       </aside>
-      <section className="conversation-main" aria-label="对话区域">
+      <section className="conversation-main">
         <header className="conversation-header">
-          <div className="conversation-identity">
-            <Button
-              type="text"
-              className="mobile-only"
-              icon={<MenuOutlined />}
-              aria-label="打开会话列表"
-              onClick={() => setSessionsOpen(true)}
-            />
-            <Avatar
-              size={30}
-              icon={<RobotOutlined />}
-              src={agent?.avatar || undefined}
-            />
-            <span>{agent?.name || '新对话'}</span>
-            <Tag>待开发</Tag>
-          </div>
-          <Tooltip title="Agent 详情">
-            <Button
-              type="text"
-              icon={<InfoCircleOutlined />}
-              aria-label="Agent 详情"
-              aria-expanded={details}
-              onClick={() => setDetails((value) => !value)}
-            />
-          </Tooltip>
+          <Avatar icon={<RobotOutlined />} src={agent?.avatar || undefined} />
+          <span>{agent?.name || '选择 Agent'}</span>
         </header>
+        {error && (
+          <Alert
+            type="error"
+            message={error}
+            closable
+            onClose={() => setError('')}
+          />
+        )}
         <div className="conversation-body">
-          {loading ? (
-            <Spin />
-          ) : error ? (
-            <Alert
-              type="error"
-              title="无法读取 Agent"
-              description={error}
-              showIcon
-              action={
-                <Button onClick={() => setRevision((value) => value + 1)}>
-                  重试
-                </Button>
-              }
-            />
-          ) : (
+          {!conversation ? (
             <div className="conversation-welcome">
-              <Avatar
-                size={64}
-                shape="square"
-                icon={<RobotOutlined />}
-                src={agent?.avatar || undefined}
-              />
-              <h1>{agent ? agent.name : '选择一位 Agent'}</h1>
-              <p>
-                {agent
-                  ? agent.description || '这个 Agent 暂未填写介绍。'
-                  : '从公共 Agent 中选择，或创建自己的助手。'}
-              </p>
-              <Link to="/explore">{agent ? '切换 Agent' : '浏览 Agent'} →</Link>
+              <Spin spinning={!agent} />
+              <h1>{agent?.name || '选择 Agent 后开始对话'}</h1>
+              <p>{agent?.description}</p>
             </div>
+          ) : (
+            messages.map((m) => (
+              <div key={m.id} className={`chat-message ${m.role}`}>
+                <b>{m.role === 'user' ? '你' : agent?.name || '助手'}</b>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+              </div>
+            ))
           )}
         </div>
         <div className="composer-area">
-          <div className="message-composer">
-            <Input.TextArea
-              aria-label="消息"
-              disabled
-              autoSize={{ minRows: 1, maxRows: 4 }}
-              placeholder={
-                agent
-                  ? '文本对话待开发，暂不能发送消息'
-                  : '选择 Agent 后开始对话'
+          <Input.TextArea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onPressEnter={(e) => {
+              if (!e.shiftKey) {
+                e.preventDefault();
+                send();
               }
-            />
-            <div className="composer-controls">
-              <Tooltip title="实时语音待开发">
-                <Button
-                  type="text"
-                  disabled
-                  icon={<AudioOutlined />}
-                  aria-label="语音对话"
-                />
-              </Tooltip>
-              <Button
-                type="primary"
-                shape="circle"
-                icon={<ArrowUpOutlined />}
-                disabled
-                aria-label="发送消息"
-              />
-            </div>
-          </div>
-          <p className="composer-note">文本与实时语音对话待开发</p>
+            }}
+            disabled={!conversation || sending}
+            placeholder="输入消息，按 Enter 发送"
+            autoSize={{ minRows: 1, maxRows: 5 }}
+          />
+          <Button
+            type="primary"
+            shape="circle"
+            icon={<ArrowUpOutlined />}
+            onClick={send}
+            disabled={!conversation || sending || !input.trim()}
+            loading={sending}
+          />
         </div>
       </section>
-      {details && (
-        <aside className="agent-details" aria-label="Agent 资料">
-          <Button
-            className="details-close"
-            type="text"
-            icon={<CloseOutlined />}
-            aria-label="关闭 Agent 详情"
-            onClick={() => setDetails(false)}
-          />
-          <div className="details-identity">
-            <Avatar
-              size={88}
-              src={agent?.avatar || undefined}
-              icon={<RobotOutlined />}
-            />
-            <h2>{agent?.name || 'Agent 详情'}</h2>
-            <span className="muted">
-              {agent
-                ? agent.visibility === 'public'
-                  ? '公共 Agent'
-                  : '私有 Agent'
-                : '选择 Agent 后查看资料'}
-            </span>
-          </div>
-          <Tabs
-            defaultActiveKey="about"
-            centered
-            items={[
-              {
-                key: 'about',
-                label: '简介',
-                children: (
-                  <div className="details-section">
-                    <p>
-                      {agent?.description ||
-                        '这里展示所选 Agent 的介绍和标签。'}
-                    </p>
-                    <div className="agent-tags">
-                      {(agent?.tags ?? []).map((tag) => (
-                        <Tag key={tag}>{tag}</Tag>
-                      ))}
-                    </div>
-                    {agent?.status === 'offline' && (
-                      <Alert type="warning" title="此 Agent 已停用" showIcon />
-                    )}
-                  </div>
-                ),
-              },
-              {
-                key: 'capabilities',
-                label: '能力',
-                children: (
-                  <div className="details-section">
-                    {['文本对话', '实时语音', '工具与知识库', '记忆与评价'].map(
-                      (name) => (
-                        <div className="capability-row" key={name}>
-                          <span>{name}</span>
-                          <Tag>待开发</Tag>
-                        </div>
-                      ),
-                    )}
-                  </div>
-                ),
-              },
-            ]}
-          />
-        </aside>
-      )}
     </div>
   );
 }

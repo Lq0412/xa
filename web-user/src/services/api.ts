@@ -99,6 +99,67 @@ export const listAgents = (mine: boolean) =>
 /** 对话页按 ID 从后端读取可见 Agent，禁止相信 URL 中的名称或归属。 */
 export const getAgent = (id: string) =>
   request<Agent>(`/agents/${encodeURIComponent(id)}`);
+export type Conversation = {
+  id: string;
+  agent_id: string;
+  title: string;
+  updated_at: string;
+};
+export type ChatMessage = {
+  id: string;
+  conversation_id: string;
+  role: string;
+  content: string;
+  status: string;
+};
+export const listConversations = () =>
+  request<{ conversations: Conversation[] }>('/conversations');
+export const createConversation = (agent_id: string) =>
+  request<Conversation>('/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ agent_id }),
+  });
+export const listMessages = (id: string) =>
+  request<{ messages: ChatMessage[] }>(`/conversations/${id}/messages`);
+export async function streamMessage(
+  id: string,
+  content: string,
+  onDelta: (value: string) => void,
+  onDone: (value: unknown) => void,
+) {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const response = await fetch(
+    `/api/v1/conversations/${encodeURIComponent(id)}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ content }),
+    },
+  );
+  if (!response.ok || !response.body)
+    throw new ApiError(response.status, '发送消息失败');
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const part = await reader.read();
+    buffer += part.value ?? '';
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() ?? '';
+    for (const chunk of chunks) {
+      const event = chunk.match(/^event: (.+)$/m)?.[1];
+      const data = chunk.match(/^data: (.+)$/m)?.[1];
+      if (!data) continue;
+      const parsed = JSON.parse(data);
+      if (event === 'delta') onDelta(parsed.delta);
+      else if (event === 'done') onDone(parsed);
+      else if (event === 'error') throw new Error(parsed.message);
+    }
+    if (part.done) break;
+  }
+}
 /** 用户端创建仅限私有 Agent，平台资源凭证不进入表单。 */
 export const createAgent = (
   name: string,
