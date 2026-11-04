@@ -1,3 +1,5 @@
+当前方向以 docs/ROADMAP.md 为准
+
 # 开发计划与业务规则
 
 本文记录已确定的业务规则和开发顺序。领域边界见 [架构设计](architecture.md)，数据关系和接口约定见 [领域与接口约定](domain-contracts.md)。

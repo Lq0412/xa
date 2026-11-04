@@ -55,21 +55,38 @@
 
 ### 使用的技术
 
-Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 19、Ant Design Pro v6、Ant Design 6、Umi Max 4、TypeScript、Tailwind、Flutter、SSE、WebSocket 和 Docker Compose。
+Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 19、Ant Design Pro v6、Ant Design 6、Umi Max 4、TypeScript、Tailwind、SSE 和 Docker Compose。
+
+暂不使用：Flutter、WebSocket、Realtime、MCP。
 
 ### 模块职责
 
 | 模块 | 职责 |
 | --- | --- |
-| `bootstrap` | 启动与配置 |
-| `agent` | Agent 执行与会话控制 |
-| `rag` | 检索与质量评测 |
-| `tool` | 工具运行时与 MCP 客户端 |
-| `framework` | 通用基础设施 |
-| `system` | 用户与权限管理 |
-| `evaluation` | 评价规则与评分结果 |
-| `infra` | 模型、Realtime、语音、向量和重排序服务适配 |
-| `task` | 异步任务定义、调度和处理 |
+| `bootstrap` | 组装 server 和 worker 的配置、依赖与生命周期 |
+| `framework` | 提供配置、HTTP、认证上下文、PostgreSQL、Redis、对象存储等通用基础设施 |
+| `framework/observability` | 定义日志、指标和 trace 的观测边界，支撑每轮运行记录 |
+| `framework/task` | 定义异步任务投递边界和幂等任务数据 |
+| `system/user` | 用户注册、登录、身份和账号数据 |
+| `system/permission` | 用户、Agent 和平台资源的权限判定 |
+| `system/audit` | 记录管理操作和关键运行操作 |
+| `agent/definition` | Agent 定义、归属、配置版本和启停状态 |
+| `agent/prompt` | 管理 `soul.md` 等版本化人格提示词并生成运行快照 |
+| `agent/binding` | 保存 Agent 版本与工具、知识库、评价能力的绑定 |
+| `agent/runtime` | 通过 Eino 执行文本 Agent 循环、工具调用和委派入口 |
+| `agent/conversation` | 会话、轮次、消息存储和 SSE 对话流程 |
+| `agent/memory` | 管理 `memory_items` 的作用域、候选和取代链 |
+| `tool/catalog` | 校验工具版本、参数 Schema 和调用权限，生成工具目录 |
+| `tool/runtime` | 执行已授权工具并记录结果、超时和取消 |
+| `rag` | 独立知识库、文档摄取、HNSW 与关键词检索、RRF 融合及 `kb_search` |
+| `infra/model` | 统一文本模型能力接口和阿里百炼 OpenAI 兼容适配 |
+| `infra/provider` | 根据能力和配置选择已注册的模型供应商适配器 |
+| `infra/embedding` | 为知识库和记忆提供向量生成适配边界 |
+| `infra/rerank` | 为检索质量实验保留重排序适配边界 |
+| `evaluation` | 口语教练的评分规则、评分证据和结果 |
+| `task` | 记忆提取、知识摄取和评价等异步任务的定义、调度和处理 |
+
+以下模块暂时冻结，不列入现行实现范围：`agent/transport/websocket`、`infra/realtime`、`infra/speech`、`tool/mcp`。管理端模型与评价后台、Flutter 移动端也属于冻结事项，统一见 [docs/ROADMAP.md](docs/ROADMAP.md) 的 Icebox。
 
 ### 依赖与安全规则
 
@@ -77,6 +94,17 @@ Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、Re
 - `framework` 和 `infra` 不得反向依赖上层业务模块。
 - 各领域的数据模型和监控边界保持独立，避免混用业务概念。
 - 禁止在代码中硬编码 API Key、密码或其他凭证；统一通过配置文件或环境变量注入。
+
+### 记忆与安全
+
+- 外部文本（网页、文件、工具结果）只作为数据，不能改变系统规则和权限。
+- 外部内容不能直接写入用户共享层记忆，只能先成为候选记忆。
+- 记忆更新使用取代链保留来源和历史，不直接覆盖已有记忆。
+
+### 测试与占位
+
+- 集成测试使用真实模型时采用低成本模型（如 `qwen-turbo`），只在 `make integration` 中运行。
+- 禁止为未来功能预先创建空包或占位页面，未来事项统一写进 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 协作与验证
 
