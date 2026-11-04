@@ -123,6 +123,7 @@ function Dashboard({ token, user, onSignOut }: { token: string; user: User; onSi
 
   const selected = useMemo(() => agents.find((agent) => agent.id === selectedId) || null, [agents, selectedId])
   const isAdmin = user.role === 'admin'
+  const canManageSelected = !selected || isAdmin || (selected.owner_type === 'user' && selected.owner_id === user.id)
 
   const loadAgents = useCallback(async () => {
     setLoading(true)
@@ -176,10 +177,7 @@ function Dashboard({ token, user, onSignOut }: { token: string; user: User; onSi
     setSaving(true)
     setError('')
     setMessage('正在保存…')
-    const nextConfiguration: Configuration = {
-      ...configuration,
-      prompts: form.prompt.trim() ? [{ name: 'system', content: form.prompt.trim(), enabled: true, order: 0, variables: [], scope: 'agent' }] : [],
-    }
+    const nextConfiguration = updatePrompt(configuration, form.prompt)
     try {
       const result = selected
         ? await api.saveAgent(token, selected.id, versionId, form, nextConfiguration)
@@ -230,8 +228,8 @@ function Dashboard({ token, user, onSignOut }: { token: string; user: User; onSi
       </header>
       <main className="workspace">
         <aside className="sidebar">
-          <div className="sidebar-heading"><div><span className="eyebrow">CONFIGURATION</span><h2>我的 Agents</h2></div><button className="icon-button" onClick={startCreate} aria-label="新建 Agent">+</button></div>
-          <p className="muted">公共 Agent 和你创建的私有 Agent 会显示在这里。</p>
+          <div className="sidebar-heading"><div><span className="eyebrow">CONFIGURATION</span><h2>Agent 列表</h2></div><button className="icon-button" onClick={startCreate} aria-label="新建 Agent">+</button></div>
+          <p className="muted">公共 Agent 可查看；你创建的私有 Agent 可以继续编辑。</p>
           <div className="agent-list">
             {loading && <div className="empty-state">正在读取…</div>}
             {!loading && agents.length === 0 && <div className="empty-state"><strong>还没有 Agent</strong><span>创建第一个配置开始使用。</span></div>}
@@ -249,16 +247,16 @@ function Dashboard({ token, user, onSignOut }: { token: string; user: User; onSi
           <form className="panel editor-card" onSubmit={save}>
             <div className="section-heading"><div><h3>基本信息</h3><p>这些内容会显示在 Agent 列表和选择页面。</p></div>{selected && <span className={`large-status ${selected.status}`}>{selected.status === 'active' ? '运行中' : '已停用'}</span>}</div>
             <div className="form-grid">
-              <label>名称<input required maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：英语面试教练" /></label>
-              <label>可见范围<select value={form.visibility} disabled={!isAdmin} onChange={(event) => setForm({ ...form, visibility: event.target.value as AgentForm['visibility'] })}><option value="private">私有 Agent</option><option value="public">公共 Agent</option></select>{!isAdmin && <small className="field-note">普通用户只能创建私有 Agent</small>}</label>
+              <label>名称<input required maxLength={120} disabled={!canManageSelected} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：英语面试教练" /></label>
+              <label>可见范围<select value={form.visibility} disabled={!isAdmin || Boolean(selected)} onChange={(event) => setForm({ ...form, visibility: event.target.value as AgentForm['visibility'] })}><option value="private">私有 Agent</option><option value="public">公共 Agent</option></select>{!isAdmin && <small className="field-note">普通用户只能创建私有 Agent</small>}</label>
             </div>
-            <label>描述<textarea rows={3} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="说明这个 Agent 适合做什么" /></label>
-            <label>标签<span className="label-hint">用逗号分隔</span><input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="英语, 面试, 口语" /></label>
+            <label>描述<textarea rows={3} maxLength={2000} disabled={!canManageSelected} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="说明这个 Agent 适合做什么" /></label>
+            <label>标签<span className="label-hint">用逗号分隔</span><input disabled={!canManageSelected} value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="英语, 面试, 口语" /></label>
             <div className="section-heading prompt-heading"><div><h3>系统提示词</h3><p>先配置 Agent 的核心行为，模型和工具绑定会在后续阶段接入。</p></div><span className="config-state">{form.prompt.length} 字符</span></div>
-            <textarea className="prompt-editor" rows={11} value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder="你是一名耐心的英语教练…" />
+            <textarea className="prompt-editor" rows={11} disabled={!canManageSelected} value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder="你是一名耐心的英语教练…" />
             {message && <div className="alert success">{message}</div>}
             {error && <div className="alert error">{error}</div>}
-            <div className="editor-actions"><button className="primary-button" disabled={saving}>{saving ? '保存中…' : '保存配置'}</button>{selected && <><button type="button" className="secondary-button" onClick={() => void setStatus(selected.status !== 'active')}>{selected.status === 'active' ? '停用 Agent' : '重新启用'}</button><button type="button" className="danger-button" onClick={() => void remove()}>删除</button></>}</div>
+            <div className="editor-actions">{canManageSelected ? <><button className="primary-button" disabled={saving}>{saving ? '保存中…' : '保存配置'}</button>{selected && <><button type="button" className="secondary-button" onClick={() => void setStatus(selected.status !== 'active')}>{selected.status === 'active' ? '停用 Agent' : '重新启用'}</button><button type="button" className="danger-button" onClick={() => void remove()}>删除</button></>}</> : <span className="read-only-note">公共 Agent 配置仅供查看，由管理员维护</span>}</div>
           </form>
         </section>
       </main>
@@ -272,4 +270,19 @@ function readError(cause: unknown) {
   }
   if (cause instanceof Error) return cause.message
   return '请求失败，请稍后重试'
+}
+
+// 编辑简化后的主提示词时保留其他配置字段和已有提示词片段，避免页面保存造成配置丢失。
+function updatePrompt(configuration: Configuration, content: string): Configuration {
+  const prompts = [...(configuration.prompts || [])]
+  const index = prompts.findIndex((prompt) => prompt.enabled)
+  if (!content.trim()) {
+    return { ...configuration, prompts: [] }
+  }
+  if (index === -1) {
+    prompts.push({ name: 'system', content: content.trim(), enabled: true, order: 0, variables: [], scope: 'agent' })
+  } else {
+    prompts[index] = { ...prompts[index], content: content.trim(), enabled: true }
+  }
+  return { ...configuration, prompts }
 }

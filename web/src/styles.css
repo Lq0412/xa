@@ -27,6 +27,7 @@ button:disabled { cursor: wait; opacity: .6; }
 .status-dot { width: 9px; height: 9px; display: inline-block; border-radius: 99px; background: #39bf88; box-shadow: 0 0 0 5px #e1f6ed; }
 label { display: grid; gap: 8px; margin: 18px 0; color: #44516a; font-size: 13px; font-weight: 700; }
 input, textarea, select { width: 100%; border: 1px solid #dce4f0; border-radius: 12px; padding: 12px 14px; color: #172033; background: #fbfcff; outline: none; transition: border-color .18s, box-shadow .18s; }
+input:disabled, textarea:disabled, select:disabled { color: #768298; background: #f3f6fa; cursor: not-allowed; }
 input:focus, textarea:focus, select:focus { border-color: #7187e8; box-shadow: 0 0 0 4px #e9edff; }
 textarea { resize: vertical; line-height: 1.6; }
 .primary-button, .secondary-button, .danger-button { border: 0; border-radius: 11px; padding: 12px 17px; font-weight: 750; }
@@ -83,6 +84,7 @@ textarea { resize: vertical; line-height: 1.6; }
 .prompt-editor { margin-top: 15px; min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .editor-actions { justify-content: flex-start; gap: 10px; margin-top: 24px; }
 .editor-actions .primary-button { width: auto; }
+.read-only-note { color: #6f7d94; font-size: 13px; }
 .large-status.active { color: #267b5a; background: #e6f7ef; }
 .large-status.offline { color: #8a6070; background: #fff0f2; }
 
