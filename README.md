@@ -20,4 +20,4 @@ make deps-up
 make server
 ```
 
-另开终端运行 `make worker`。配置、端口和验证命令见 [启动说明](docs/startup.md)，后续安排见 [开发计划](docs/development-plan.md)。
+另开终端运行 `make worker`，再开一个终端运行 `make web`，浏览器访问 `http://127.0.0.1:5173`。配置、端口和验证命令见 [启动说明](docs/startup.md)，后续安排见 [开发计划](docs/development-plan.md)。

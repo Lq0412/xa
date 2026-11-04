@@ -5,7 +5,7 @@ COMPOSE = $(DOCKER) compose --env-file .env -f resources/docker/compose.yaml
 export GOTMPDIR := $(CURDIR)/.output/go-tmp
 export TMPDIR := $(GOTMPDIR)
 
-.PHONY: env deps-up deps-down deps-status server worker check integration prepare
+.PHONY: env deps-up deps-down deps-status server worker web web-install web-build check integration prepare
 env:
 	bash scripts/init-env.sh
 
@@ -24,6 +24,15 @@ server:
 
 worker:
 	bash scripts/run.sh worker
+
+web-install:
+	cd web && npm install
+
+web:
+	cd web && npm run dev
+
+web-build:
+	cd web && npm run build
 
 prepare:
 	mkdir -p .output/go-tmp

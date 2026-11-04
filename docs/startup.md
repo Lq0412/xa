@@ -45,6 +45,15 @@ make server
 make worker
 ```
 
+Web 管理端在第三个终端启动：
+
+```bash
+make web-install
+make web
+```
+
+浏览器访问 `http://127.0.0.1:5173`。Vite 开发服务器会把 `/api` 和 `/health` 请求转发到 `127.0.0.1:18080`，因此需要先启动 server。当前页面支持注册、登录、Agent 列表、创建、编辑、启停和删除；登录令牌仅用于本地开发页面。
+
 配置无效或任一依赖无法连接时，进程直接退出且返回非零状态。worker 当前只运行依赖检查和生命周期，尚不领取业务任务。
 
 ```bash
@@ -71,6 +80,7 @@ server 启动时会执行幂等的身份和 Agent 表迁移。若配置 `XA_ADMI
 ```bash
 make check
 make integration
+make web-build
 ```
 
 集成测试需要已启动的真实依赖，验证事务、缓存、对象上传读取删除、依赖异常、HTTP 启停和端口冲突。使用实际项目文件作为存储内容；测试创建的对象和缓存键会清理，不删除业务数据。

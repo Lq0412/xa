@@ -10,6 +10,10 @@
 server/bin/
 server/dist/
 
+# Web 依赖和构建产物
+web/node_modules/
+web/dist/
+
 # 编辑器和系统文件
 .idea/
 .vscode/
