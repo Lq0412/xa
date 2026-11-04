@@ -2,7 +2,7 @@
 
 基于 Ant Design Pro v6.0.3 官方模板，使用 React 19、Ant Design 6、Umi Max 4 和 ProComponents 3。保留上游 MIT 许可证（LICENSE）。
 
-页面使用标准 ProLayout、ProTable、ModalForm 和 LoginForm。管理员登录后可操作真实 Agent 管理，并浏览平台概览、模型、知识库、工具、评价、任务、用户和监控审计等顶层模块。尚未接入业务的模块提供明确的待开发页面。普通用户使用独立的 `web-user/` 工程。
+页面使用标准 ProLayout、ProTable、ModalForm 和 LoginForm。管理员登录后可使用平台概览和真实 Agent 管理；尚未实现的模块统一记录在 ROADMAP 的 Icebox 中。普通用户使用独立的 `web-user/` 工程。
 
 ## 启动
 

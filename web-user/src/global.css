@@ -247,26 +247,18 @@ h2 {
 .agent-card-bottom > span {
   color: #999;
 }
-.directory-empty,
-.personal-empty {
+.directory-empty {
   padding: 90px 20px;
 }
-.directory-empty h2,
-.personal-empty h2 {
+.directory-empty h2 {
   margin: 12px 0;
   color: #4b4b4b;
 }
-.directory-empty p,
-.personal-empty p {
+.directory-empty p {
   color: #999;
   font-size: 13px;
   line-height: 1.8;
 }
-.feature-outline {
-  border-top: 1px solid #ededed;
-  border-bottom: 1px solid #ededed;
-}
-.feature-outline > div,
 .capability-row {
   padding: 19px 0;
   display: flex;
@@ -274,27 +266,6 @@ h2 {
   align-items: center;
   font-size: 14px;
   gap: 12px;
-}
-.feature-outline > div + div {
-  border-top: 1px solid #f3f3f3;
-}
-.empty-feature-icon {
-  text-align: center;
-  color: #aaa;
-  font-size: 25px;
-  margin-bottom: 20px;
-}
-.settings-section {
-  padding: 25px 0;
-  border-top: 1px solid #ededed;
-}
-.settings-section h2 {
-  margin-bottom: 24px;
-}
-.section-heading {
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
 }
 .chat-main {
   overflow: hidden;
@@ -578,8 +549,7 @@ h2 {
   .agent-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .directory-empty,
-  .personal-empty {
+  .directory-empty {
     padding: 50px 0;
   }
   .conversation-sidebar {

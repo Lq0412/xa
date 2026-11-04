@@ -1,12 +1,9 @@
 import {
   AppstoreOutlined,
-  BookOutlined,
   CommentOutlined,
-  HistoryOutlined,
   LogoutOutlined,
   SettingOutlined,
   TeamOutlined,
-  TrophyOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { history, Link, Outlet, useLocation, useModel } from '@umijs/max';
@@ -19,9 +16,6 @@ const navigation = [
   { path: '/chat', name: '对话', icon: <CommentOutlined /> },
   { path: '/explore', name: '发现 Agent', icon: <AppstoreOutlined /> },
   { path: '/my-agents', name: '我的 Agent', icon: <TeamOutlined /> },
-  { path: '/history', name: '会话历史', icon: <HistoryOutlined /> },
-  { path: '/memory', name: '个人记忆', icon: <BookOutlined /> },
-  { path: '/feedback', name: '学习反馈', icon: <TrophyOutlined /> },
 ];
 
 /** 所有受保护页面共用身份守卫；接口仍由服务端校验最终权限。 */
@@ -30,14 +24,7 @@ export default function AppLayout() {
   const { initialState, setInitialState } = useModel('@@initialState');
   const user = initialState?.currentUser;
   const { message } = App.useApp();
-  const requiresLogin = [
-    '/my-agents',
-    '/chat',
-    '/history',
-    '/memory',
-    '/feedback',
-    '/settings',
-  ].includes(pathname);
+  const requiresLogin = ['/my-agents', '/chat'].includes(pathname);
   useEffect(() => {
     if (requiresLogin && !user && !initialState?.sessionError)
       history.replace(
@@ -90,15 +77,19 @@ export default function AppLayout() {
               </a>
             </Tooltip>
           )}
-          <Tooltip title={user ? '账号设置' : '登录'} placement="right">
-            <Link
-              to={user ? '/settings' : '/login'}
-              className={`rail-link ${pathname === '/settings' ? 'active' : ''}`}
-              aria-label={user ? '账号设置' : '登录'}
-            >
-              <Avatar size={30} icon={<UserOutlined />} />
-            </Link>
-          </Tooltip>
+          {user ? (
+            <Tooltip title={user.display_name || user.email} placement="right">
+              <span className="rail-link" role="img" aria-label="当前账号">
+                <Avatar size={30} icon={<UserOutlined />} />
+              </span>
+            </Tooltip>
+          ) : (
+            <Tooltip title="登录" placement="right">
+              <Link to="/login" className="rail-link" aria-label="登录">
+                <Avatar size={30} icon={<UserOutlined />} />
+              </Link>
+            </Tooltip>
+          )}
           {user && (
             <Tooltip title="退出登录" placement="right">
               <Button

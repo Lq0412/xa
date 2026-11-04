@@ -1,6 +1,6 @@
 # 本地启动
 
-当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及两个独立 Web 前端。管理端提供全部顶层模块入口，用户端提供真实 Agent 列表、创建与对话布局。文本模型、Realtime、邮件验证、异步任务处理器和移动端仍未接入。
+当前可运行内容：server、worker 生命周期，PostgreSQL、Redis、S3 真实连接和健康检查；账号注册登录、Redis 会话、公共与私有 Agent 管理接口，以及两个独立 Web 前端。管理端提供平台概览和 Agent 管理，用户端提供真实 Agent 列表、创建与对话布局。文本模型、Realtime、邮件验证、异步任务处理器和移动端仍未接入。
 
 ## 1. 环境
 
@@ -55,7 +55,7 @@ make web-install
 make web
 ```
 
-管理端访问 `http://localhost:8000`，使用管理员账号登录。现有 Agent 管理支持筛选、查看、创建、编辑、启停和删除；模型、知识库等模块提供页面占位。
+管理端访问 `http://localhost:8000`，使用管理员账号登录。现有 Agent 管理支持筛选、查看、创建、编辑、启停和删除；平台概览提供管理入口，未实现模块不列入菜单。
 
 Web 用户端在独立终端启动：
 
@@ -64,7 +64,7 @@ make web-user-install
 make web-user
 ```
 
-用户端访问 `http://localhost:8002`，支持匿名浏览公共 Agent、注册登录、查看和创建自己的私有 Agent，并进入对话布局。会话、模型调用、语音、记忆和学习反馈明确标为待开发。Windows 访问 WSL 优先使用 `localhost`，本机曾出现 IPv4 `127.0.0.1` 转发失败、`localhost` 正常的情况。
+用户端访问 `http://localhost:8002`，支持匿名浏览公共 Agent、注册登录、查看和创建自己的私有 Agent，并进入对话布局。对话页尚未接入模型调用，发送操作禁用；会话历史、个人记忆、学习反馈和账号设置的占位页面与导航已移除。Windows 访问 WSL 优先使用 `localhost`，本机曾出现 IPv4 `127.0.0.1` 转发失败、`localhost` 正常的情况。
 
 两个前端的 Umi 开发服务器均将 `/api/` 和 `/health/` 请求转发到 `127.0.0.1:18080`，后端地址通过 `XA_API_PROXY` 配置。管理端默认提供到 `http://localhost:8002` 的用户端入口，用户端为管理员提供到 `http://localhost:8000` 的后台入口；可分别通过 `XA_USER_WEB_URL` 和 `XA_ADMIN_WEB_URL` 覆盖。两个入口共用账号，各自登录，不通过跳转 URL 传递令牌。
 

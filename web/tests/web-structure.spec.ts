@@ -8,7 +8,7 @@ if (!email || !password)
   throw new Error('请设置管理员 XA_E2E_EMAIL 和 XA_E2E_PASSWORD');
 const userUrl = process.env.XA_USER_WEB_URL || 'http://127.0.0.1:8002';
 
-test('管理端模块导航、分区和直接刷新均可使用', async ({ page, request }) => {
+test('管理端仅展示可用模块，已删除页面返回 404', async ({ page, request }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/overview');
@@ -20,29 +20,26 @@ test('管理端模块导航、分区和直接刷新均可使用', async ({ page,
     localStorage.getItem('xa.web.session'),
   );
   try {
-    const pages = [
-      ['/models', '模型与供应商', '供应商'],
-      ['/knowledge', '知识库', '文档与分块'],
-      ['/tools', '工具与 MCP', 'MCP 服务'],
-      ['/evaluation', '评价规则', '规则验证'],
-      ['/tasks', '任务管理', '任务类型'],
-      ['/users', '用户与权限', '资源权限'],
-      ['/operations', '运行监控与审计', '审计日志'],
-    ];
-    for (const [path, label, tab] of pages) {
-      await page
-        .getByRole('menu')
-        .getByRole('link', { name: new RegExp(label) })
-        .click();
-      await expect(page).toHaveURL(new RegExp(`${path}$`));
-      await page.getByRole('tab', { name: tab, exact: true }).click();
-      await page.reload();
-      await expect(
-        page.getByRole('tab', { name: tab, exact: true }),
-      ).toHaveAttribute('aria-selected', 'true');
-      await expect(
-        page.getByText(`${tab}待开发`, { exact: true }),
-      ).toBeVisible();
+    const menu = page.getByRole('menu');
+    await expect(menu.getByRole('link')).toHaveCount(2);
+    await expect(menu.getByRole('link', { name: /平台概览/ })).toBeVisible();
+    await page.getByRole('link', { name: '进入 Agent 管理' }).click();
+    await expect(page).toHaveURL(/\/agents$/);
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: '新建 Agent', exact: true }),
+    ).toBeVisible();
+    for (const path of [
+      '/models',
+      '/knowledge',
+      '/tools',
+      '/evaluation',
+      '/tasks',
+      '/users',
+      '/operations',
+    ]) {
+      await page.goto(path);
+      await expect(page.getByText('404', { exact: true })).toBeVisible();
     }
     expect(errors).toEqual([]);
   } finally {
@@ -56,7 +53,7 @@ test('管理端模块导航、分区和直接刷新均可使用', async ({ page,
   }
 });
 
-test('用户端真实 Agent 创建、独立会话、对话布局与各模块入口', async ({
+test('用户端真实 Agent 创建、独立会话、对话布局与可用入口', async ({
   page,
   request,
 }) => {
@@ -146,10 +143,14 @@ test('用户端真实 Agent 创建、独立会话、对话布局与各模块入�
       ['feedback', '学习反馈'],
       ['settings', '账号设置'],
     ]) {
-      await page.goto(`${userUrl}/${path}`);
       await expect(
-        page.getByRole('heading', { name: new RegExp(title) }).first(),
-      ).toBeVisible();
+        page.getByRole('navigation', { name: '主导航' }).getByRole('link', {
+          name: title,
+          exact: true,
+        }),
+      ).toHaveCount(0);
+      await page.goto(`${userUrl}/${path}`);
+      await expect(page.getByText('页面不存在', { exact: true })).toBeVisible();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,

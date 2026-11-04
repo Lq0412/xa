@@ -1,6 +1,4 @@
-import { adminModules } from './modules';
-
-// 管理端独立导航；未实现模块也有可访问页面，便于检查完整产品结构。
+// 管理端导航只列出已接入的页面。
 export default [
   {
     path: '/user',
@@ -24,12 +22,12 @@ export default [
     icon: 'dashboard',
     component: './overview',
   },
-  ...adminModules.map((item) => ({
-    path: item.path,
-    name: item.name,
-    icon: item.icon,
-    component: item.available ? './agents' : './module',
-  })),
+  {
+    path: '/agents',
+    name: 'Agent 管理',
+    icon: 'robot',
+    component: './agents',
+  },
   {
     path: '/',
     redirect: '/overview',

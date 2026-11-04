@@ -1,48 +1,17 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { Link } from '@umijs/max';
-import { Card, Table, Tag, Typography } from 'antd';
-import { adminModules } from '../../../config/modules';
+import { Card } from 'antd';
 
-/** 概览展示模块的实际开发状态，不以虚构统计数据填充管理看板。 */
+/** 概览提供已接入管理功能的入口。 */
 export default function OverviewPage() {
   return (
     <PageContainer
       title="平台概览"
-      content="管理 Agent 所需的模型、知识、工具及平台资源。"
+      content="维护 Agent 的资料、提示词和可用状态。"
     >
-      <Card
-        title="功能模块"
-        extra={<Typography.Text type="secondary">当前建设进度</Typography.Text>}
-      >
-        <Table
-          dataSource={adminModules}
-          rowKey="path"
-          pagination={false}
-          scroll={{ x: 720 }}
-          columns={[
-            {
-              title: '模块',
-              dataIndex: 'name',
-              width: 180,
-              render: (name, item) => <Link to={item.path}>{name}</Link>,
-            },
-            { title: '职责', dataIndex: 'description' },
-            {
-              title: '状态',
-              width: 130,
-              render: (_, item) => (
-                <Tag color={item.available ? 'blue' : 'default'}>
-                  {item.available ? '基础功能可用' : '待开发'}
-                </Tag>
-              ),
-            },
-            {
-              title: '入口',
-              width: 80,
-              render: (_, item) => <Link to={item.path}>进入</Link>,
-            },
-          ]}
-        />
+      <Card title="Agent 管理">
+        <p>查看和搜索 Agent，创建或编辑资料与提示词，管理启停状态。</p>
+        <Link to="/agents">进入 Agent 管理</Link>
       </Card>
     </PageContainer>
   );
