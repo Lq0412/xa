@@ -80,6 +80,7 @@ export default function ChatPage() {
         setEditor({ agent: session.agent });
       }}
       memoryCue={session.memoryCue}
+      conversationId={session.conversationID || undefined}
       onClose={detailsInline ? () => details.setOpen(false) : undefined}
       onSaved={saved}
     />

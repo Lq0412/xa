@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@/components/Icon';
 import { Markdown } from '@/components/Markdown';
 import { Button } from '@/components/ui/button';
@@ -12,22 +12,64 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { type AgentVersion, ApiError, errorMessage } from '@/services/api';
 import {
+  containsCredential,
+  countMemories,
+  createMemory,
   deleteMemory,
   getMemoryMarkdown,
+  getMemoryStats,
   listMemories,
   listMemoryEvents,
+  type MemoryCreate,
   type MemoryEdit,
   type MemoryItem,
   type MemoryPolicyResult,
+  type MemoryStats,
   type MemoryView,
   readMemoryPolicy,
+  restoreMemory,
+  retryMemoryJob,
   saveMemoryPolicy,
   updateMemory,
 } from '@/services/memory';
 
 /** 回复结束后抽取是异步的，稍等再读一次列表。 */
 const REFRESH_AFTER_TURN_MS = 3000;
+/** 侧栏一页大约一屏，剩下的靠底部滚动继续加载。 */
+const PAGE_SIZE = 8;
 const namespacePattern = /^[a-z][a-z0-9_.-]{0,63}$/;
+
+const kindLabels: Record<string, string> = {
+  fact: '事实',
+  preference: '偏好',
+  episode: '经历',
+  procedure: '习惯/流程',
+};
+
+const kindTones: Record<string, string> = {
+  fact: 'bg-zinc-100 text-zinc-600',
+  preference: 'bg-violet-50 text-violet-700',
+  episode: 'bg-sky-50 text-sky-700',
+  procedure: 'bg-amber-50 text-amber-800',
+};
+
+const opLabels: Record<string, string> = {
+  ADD: '新增',
+  UPDATE: '更新',
+  SUPERSEDE: '取代',
+  DELETE: '删除',
+  ARCHIVE: '归档',
+  RESTORE: '恢复',
+  MERGE: '合并',
+};
+
+const statusViews = [
+  { id: 'active', label: '生效' },
+  { id: 'archived', label: '已归档' },
+  { id: 'deleted', label: '已删除' },
+] as const;
+
+type StatusView = (typeof statusViews)[number]['id'];
 
 export type MemoryCue = { agentId: string; seq: number };
 
@@ -44,9 +86,24 @@ function sourceLabel(source: string) {
   return source;
 }
 
+function kindLabel(kind: string) {
+  return kindLabels[kind] ?? kind;
+}
+
+function opLabel(op: string) {
+  return opLabels[op] ?? op;
+}
+
+function retentionPercent(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(Math.min(1, Math.max(0, value)) * 100);
+}
+
 function validateDraft(draft: MemoryEdit) {
   if (draft.content.trim() === '') return '请填写记忆内容';
   if ([...draft.content].length > 2000) return '记忆内容不能超过 2000 字';
+  if (containsCredential(draft.content))
+    return '这段内容包含密码或证件号，不能保存';
   if (!namespacePattern.test(draft.namespace)) return '命名空间格式不正确';
   if (
     !Number.isInteger(draft.importance) ||
@@ -54,6 +111,34 @@ function validateDraft(draft: MemoryEdit) {
     draft.importance > 10
   ) {
     return '重要度需要是 1 到 10 的整数';
+  }
+  return '';
+}
+
+function validateCreate(draft: MemoryCreate) {
+  const message = validateDraft({
+    content: draft.content,
+    namespace: draft.namespace,
+    importance: draft.importance,
+    pinned: draft.pinned ?? false,
+  });
+  if (message) return message;
+  if (
+    draft.kind != null &&
+    draft.kind !== 'fact' &&
+    draft.kind !== 'preference' &&
+    draft.kind !== 'episode' &&
+    draft.kind !== 'procedure'
+  ) {
+    return '类型不正确';
+  }
+  if (draft.scope === 'agent' && !draft.agent_id) return '请选择这个 Agent';
+  if (
+    draft.scope != null &&
+    draft.scope !== 'user' &&
+    draft.scope !== 'agent'
+  ) {
+    return '保存位置不正确';
   }
   return '';
 }
@@ -72,6 +157,13 @@ function groupByNamespace(items: MemoryItem[]) {
     else groups.set(item.namespace, [item]);
   }
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+function belongsToAgent(item: MemoryItem, agentId: string) {
+  return (
+    item.scope === 'user' ||
+    (item.scope === 'agent' && item.agent_id === agentId)
+  );
 }
 
 function Switch({
@@ -145,7 +237,7 @@ function Toast({ message }: { message: string }) {
 
 type MemoryController = ReturnType<typeof useAgentMemory>;
 
-/** 共享层和当前 Agent 分开请求；对话结束后延迟刷新一次。 */
+/** 两层记忆一次分页读取；对话结束后延迟刷新一次。 */
 export function useAgentMemory({
   agentId,
   version,
@@ -162,9 +254,15 @@ export function useAgentMemory({
   onConflict: () => void;
 }) {
   const [revision, setRevision] = useState(0);
-  const [userItems, setUserItems] = useState<MemoryItem[]>([]);
-  const [agentItems, setAgentItems] = useState<MemoryItem[]>([]);
+  const [status, setStatus] = useState<StatusView>('active');
+  const [items, setItems] = useState<MemoryItem[]>([]);
+  const [remembered, setRemembered] = useState<MemoryItem[]>([]);
+  const [nextCursor, setNextCursor] = useState('');
   const [loaded, setLoaded] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [activeCount, setActiveCount] = useState<number | null>(null);
+  const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [policySaving, setPolicySaving] = useState(false);
@@ -172,6 +270,8 @@ export function useAgentMemory({
   const [preview, setPreview] = useState(false);
   const [markdown, setMarkdown] = useState<MemoryView>();
   const [markdownLoading, setMarkdownLoading] = useState(false);
+  const generation = useRef(0);
+  const loadingMoreRef = useRef(false);
   const onPolicySavedRef = useRef(onPolicySaved);
   const onConflictRef = useRef(onConflict);
   const versionRef = useRef(version);
@@ -179,6 +279,24 @@ export function useAgentMemory({
   onConflictRef.current = onConflict;
   versionRef.current = version;
   const policy = readMemoryPolicy(version?.configuration.memory_policy);
+  const visibleItems = useMemo(() => {
+    const seen = new Set(items.map((item) => item.id));
+    const head = remembered.filter(
+      (item) =>
+        item.status === status &&
+        !seen.has(item.id) &&
+        belongsToAgent(item, agentId),
+    );
+    return [...head, ...items.filter((item) => item.status === status)];
+  }, [agentId, items, remembered, status]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agentId 变化时要丢掉上一名 Agent 的列表，不能等下次刷新。
+  useEffect(() => {
+    setRemembered([]);
+    setStatus('active');
+    setActiveCount(null);
+    setStats(null);
+  }, [agentId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -196,24 +314,61 @@ export function useAgentMemory({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision 在对话结束、编辑和重试后触发重新读取。
   useEffect(() => {
+    const current = ++generation.current;
     const controller = new AbortController();
     setError('');
-    Promise.all([
-      listMemories({ scope: 'user' }, controller.signal),
-      listMemories({ scope: 'agent', agent_id: agentId }, controller.signal),
-    ])
-      .then(([users, agents]) => {
-        if (controller.signal.aborted) return;
-        setUserItems(users);
-        setAgentItems(agents);
+    listMemories(
+      {
+        scope: 'all_visible',
+        agent_id: agentId,
+        status,
+        limit: PAGE_SIZE,
+        cursor: '',
+      },
+      controller.signal,
+    )
+      .then((page) => {
+        if (controller.signal.aborted || generation.current !== current) return;
+        setItems(page.items);
+        setNextCursor(page.nextCursor);
         setLoaded(true);
       })
       .catch((cause) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation.current !== current) return;
         setError(errorMessage(cause));
       });
     return () => controller.abort();
+  }, [agentId, revision, status]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 变化后重新统计生效条数，卡片不随筛选改变。
+  useEffect(() => {
+    const controller = new AbortController();
+    countMemories(
+      { scope: 'all_visible', agent_id: agentId, status: 'active' },
+      controller.signal,
+    )
+      .then((total) => {
+        if (!controller.signal.aborted) setActiveCount(total);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) setError(errorMessage(cause));
+      });
+    return () => controller.abort();
   }, [agentId, revision]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 打开详情和刷新后读取统计。
+  useEffect(() => {
+    if (!detailOpen) return;
+    const controller = new AbortController();
+    getMemoryStats(controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) setStats(value);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) setError(errorMessage(cause));
+      });
+    return () => controller.abort();
+  }, [agentId, detailOpen, revision]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 开关和 revision 变化后重新读取 memory.md。
   useEffect(() => {
@@ -240,6 +395,53 @@ export function useAgentMemory({
     setNotice('该记忆已被更新，已刷新');
     setRevision((value) => value + 1);
   };
+  const notify = (message: string) => setNotice(message);
+  const changeStatus = (next: StatusView) => {
+    setStatus(next);
+    setLoaded(false);
+    setItems([]);
+    setNextCursor('');
+  };
+  const remember = (item: MemoryItem) => {
+    setRemembered((current) => [
+      item,
+      ...current.filter((entry) => entry.id !== item.id),
+    ]);
+    setRevision((value) => value + 1);
+  };
+  const forget = (id: string) => {
+    setRemembered((current) => current.filter((item) => item.id !== id));
+  };
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMoreRef.current) return;
+    const current = generation.current;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setError('');
+    try {
+      const page = await listMemories({
+        scope: 'all_visible',
+        agent_id: agentId,
+        status,
+        limit: PAGE_SIZE,
+        cursor: nextCursor,
+      });
+      if (generation.current !== current) return;
+      setItems((currentItems) => {
+        const seen = new Set(currentItems.map((item) => item.id));
+        return [
+          ...currentItems,
+          ...page.items.filter((item) => !seen.has(item.id)),
+        ];
+      });
+      setNextCursor(page.nextCursor);
+    } catch (cause) {
+      if (generation.current === current) setError(errorMessage(cause));
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [agentId, nextCursor, status]);
   const toggle = async () => {
     const current = versionRef.current;
     if (!current || !editable || policySaving) return;
@@ -265,12 +467,72 @@ export function useAgentMemory({
       setPolicySaving(false);
     }
   };
+  const saveAdvanced = async (input: {
+    decay_enabled: boolean;
+    recall_top_k: number;
+  }) => {
+    const current = versionRef.current;
+    if (!current || !editable || policySaving) return;
+    if (
+      !Number.isInteger(input.recall_top_k) ||
+      input.recall_top_k < 1 ||
+      input.recall_top_k > 50
+    ) {
+      setError('召回条数需要是 1 到 50 的整数');
+      return;
+    }
+    setPolicySaving(true);
+    setError('');
+    try {
+      const enabled = readMemoryPolicy(
+        current.configuration.memory_policy,
+      ).enabled;
+      const result = await saveMemoryPolicy(agentId, {
+        expected_version_id: current.id,
+        enabled,
+        recall_top_k: input.recall_top_k,
+        decay_enabled: input.decay_enabled,
+      });
+      onPolicySavedRef.current(result);
+      setNotice('已保存');
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        onConflictRef.current();
+        reportConflict();
+        return;
+      }
+      setError(errorMessage(cause));
+    } finally {
+      setPolicySaving(false);
+    }
+  };
+  const retryDead = async () => {
+    if (!stats || stats.deadJobIDs.length === 0 || retrying) return;
+    setRetrying(true);
+    setError('');
+    try {
+      for (const id of stats.deadJobIDs) {
+        await retryMemoryJob(id);
+      }
+      setNotice('已重新排队');
+      setRevision((value) => value + 1);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return {
-    userItems,
-    agentItems,
+    items: visibleItems,
     loaded,
-    count: userItems.length + agentItems.length,
+    count: activeCount,
+    hasMore: nextCursor !== '',
+    loadingMore,
+    status,
+    changeStatus,
+    stats,
+    retrying,
     error,
     notice,
     policy,
@@ -284,11 +546,17 @@ export function useAgentMemory({
     editable,
     refresh,
     reportConflict,
+    notify,
+    remember,
+    forget,
+    loadMore,
     toggle,
+    saveAdvanced,
+    retryDead,
   };
 }
 
-/** 模块页上的记忆卡片。开关不进入详情。 */
+/** 模块页上的记忆卡片。只显示条数，开关不进入详情。 */
 export function MemoryCard({
   memory,
   date,
@@ -319,7 +587,7 @@ export function MemoryCard({
         onClick={() => memory.setDetailOpen(true)}
       >
         <span className="text-xs text-zinc-700">
-          {memory.loaded ? `${memory.count} 条` : '…'}
+          {memory.count == null ? '…' : `${memory.count} 条`}
         </span>
         <span className="mt-auto pt-6 text-[11px] text-zinc-700">{date}</span>
       </button>
@@ -352,7 +620,9 @@ function MemoryHistory({ id }: { id: string }) {
     <ol className="mt-3 space-y-2 border-l border-zinc-200 pl-3">
       {events.map((event) => (
         <li key={event.id}>
-          <p className="text-xs font-medium text-zinc-800">{event.op}</p>
+          <p className="text-xs font-medium text-zinc-800">
+            {opLabel(event.op)}
+          </p>
           <p className="text-[11px] text-zinc-500">
             <time dateTime={event.created_at}>
               {formatTime(event.created_at)}
@@ -372,11 +642,15 @@ function MemoryItemView({
   enabled,
   onChanged,
   onConflict,
+  onRemember,
+  onForget,
 }: {
   item: MemoryItem;
   enabled: boolean;
   onChanged: () => void;
   onConflict: () => void;
+  onRemember: (item: MemoryItem) => void;
+  onForget: (id: string) => void;
 }) {
   const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
   const [history, setHistory] = useState(false);
@@ -388,6 +662,8 @@ function MemoryItemView({
   });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const inactive = item.status === 'archived' || item.status === 'deleted';
+  const percent = retentionPercent(item.retention);
   const save = async () => {
     const message = validateDraft(draft);
     if (message) {
@@ -397,13 +673,22 @@ function MemoryItemView({
     setSaving(true);
     setFormError('');
     try {
-      await updateMemory(item.id, draft);
+      const next = await updateMemory(item.id, draft);
       setMode('view');
-      onChanged();
+      onForget(item.id);
+      onRemember(next);
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409) {
         setMode('view');
         onConflict();
+        return;
+      }
+      if (
+        cause instanceof ApiError &&
+        cause.status === 422 &&
+        containsCredential(draft.content)
+      ) {
+        setFormError('这段内容包含密码或证件号，不能保存');
         return;
       }
       setFormError(errorMessage(cause));
@@ -416,8 +701,27 @@ function MemoryItemView({
     setFormError('');
     try {
       await deleteMemory(item.id);
+      onForget(item.id);
       onChanged();
     } catch (cause) {
+      setFormError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const restore = async () => {
+    setSaving(true);
+    setFormError('');
+    try {
+      const next = await restoreMemory(item.id);
+      onForget(item.id);
+      onRemember(next);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        setFormError('相同事实已存在');
+        onChanged();
+        return;
+      }
       setFormError(errorMessage(cause));
     } finally {
       setSaving(false);
@@ -535,6 +839,16 @@ function MemoryItemView({
       ) : (
         <>
           <div className="flex items-start gap-1.5">
+            {item.sensitive && (
+              <>
+                <Icon
+                  name="lock"
+                  size={14}
+                  className="mt-1 shrink-0 text-zinc-500"
+                />
+                <span className="sr-only">敏感</span>
+              </>
+            )}
             {item.pinned && (
               <>
                 <Icon
@@ -550,6 +864,11 @@ function MemoryItemView({
             </p>
           </div>
           <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
+            <span
+              className={`rounded-full px-1.5 py-0.5 ${kindTones[item.kind] ?? 'bg-zinc-100 text-zinc-600'}`}
+            >
+              {kindLabel(item.kind)}
+            </span>
             <span>重要度 {item.importance}</span>
             <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-zinc-600">
               {sourceLabel(item.source)}
@@ -558,6 +877,20 @@ function MemoryItemView({
               {formatTime(item.updated_at)}
             </time>
           </p>
+          <div className="mt-2 flex items-center gap-2">
+            <span
+              className="shrink-0 text-[11px] text-zinc-400"
+              id={`memory-strength-${item.id}`}
+            >
+              记忆强度
+            </span>
+            <progress
+              className="h-1 min-w-0 flex-1 appearance-none overflow-hidden rounded-full bg-zinc-200 accent-zinc-800 [&::-moz-progress-bar]:bg-zinc-800 [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-bar]:bg-zinc-200 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-zinc-800"
+              max={100}
+              value={percent}
+              aria-labelledby={`memory-strength-${item.id}`}
+            />
+          </div>
           {formError && (
             <p className="mt-2 text-xs text-rose-700" role="alert">
               {formError}
@@ -587,28 +920,41 @@ function MemoryItemView({
             </div>
           ) : (
             <div className="mt-2 flex gap-3 text-xs">
-              <button
-                type="button"
-                className="text-zinc-800 underline underline-offset-4 disabled:opacity-40"
-                disabled={!enabled}
-                onClick={() => {
-                  setFormError('');
-                  setMode('edit');
-                }}
-              >
-                编辑
-              </button>
-              <button
-                type="button"
-                className="text-zinc-800 underline underline-offset-4 disabled:opacity-40"
-                disabled={!enabled}
-                onClick={() => {
-                  setFormError('');
-                  setMode('delete');
-                }}
-              >
-                删除
-              </button>
+              {inactive ? (
+                <button
+                  type="button"
+                  className="text-zinc-800 underline underline-offset-4 disabled:opacity-40"
+                  disabled={saving}
+                  onClick={() => void restore()}
+                >
+                  {saving ? '恢复中…' : '恢复'}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="text-zinc-800 underline underline-offset-4 disabled:opacity-40"
+                    disabled={!enabled}
+                    onClick={() => {
+                      setFormError('');
+                      setMode('edit');
+                    }}
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    className="text-zinc-800 underline underline-offset-4 disabled:opacity-40"
+                    disabled={!enabled}
+                    onClick={() => {
+                      setFormError('');
+                      setMode('delete');
+                    }}
+                  >
+                    删除
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="text-zinc-800 underline underline-offset-4"
@@ -629,16 +975,23 @@ function MemoryItemView({
 function MemoryGroup({
   title,
   items,
+  hasMore,
   enabled,
   onChanged,
   onConflict,
+  onRemember,
+  onForget,
 }: {
   title: string;
   items: MemoryItem[];
+  hasMore: boolean;
   enabled: boolean;
   onChanged: () => void;
   onConflict: () => void;
+  onRemember: (item: MemoryItem) => void;
+  onForget: (id: string) => void;
 }) {
+  if (items.length === 0 && hasMore) return null;
   const groups = groupByNamespace(items);
   return (
     <section className="mt-5 first:mt-0">
@@ -659,6 +1012,8 @@ function MemoryGroup({
                   enabled={enabled}
                   onChanged={onChanged}
                   onConflict={onConflict}
+                  onRemember={onRemember}
+                  onForget={onForget}
                 />
               ))}
             </div>
@@ -669,33 +1024,367 @@ function MemoryGroup({
   );
 }
 
-/** 记忆详情占满整个配置栏，编辑和删除都留在这一层。 */
+function MemoryCreateForm({
+  agentId,
+  onCancel,
+  onCreated,
+  onConflict,
+}: {
+  agentId: string;
+  onCancel: () => void;
+  onCreated: (item: MemoryItem) => void;
+  onConflict: () => void;
+}) {
+  const [draft, setDraft] = useState<MemoryCreate>({
+    content: '',
+    namespace: '',
+    importance: 5,
+    kind: 'fact',
+    pinned: false,
+    scope: 'user',
+  });
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const save = async () => {
+    const input: MemoryCreate = {
+      content: draft.content,
+      namespace: draft.namespace,
+      importance: draft.importance,
+      kind: draft.kind,
+      pinned: draft.pinned,
+      scope: draft.scope,
+      agent_id: draft.scope === 'agent' ? agentId : undefined,
+    };
+    const message = validateCreate(input);
+    if (message) {
+      setFormError(message);
+      return;
+    }
+    setSaving(true);
+    setFormError('');
+    try {
+      onCreated(await createMemory(input));
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        setFormError('相同事实已存在');
+        onConflict();
+        return;
+      }
+      if (
+        cause instanceof ApiError &&
+        cause.status === 422 &&
+        containsCredential(draft.content)
+      ) {
+        setFormError('这段内容包含密码或证件号，不能保存');
+        return;
+      }
+      setFormError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <form
+      className="mb-4 space-y-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save();
+      }}
+    >
+      <label className="block text-xs text-zinc-500">
+        内容
+        <textarea
+          className="mt-1 min-h-24 w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900"
+          aria-label="记忆内容"
+          maxLength={2000}
+          value={draft.content}
+          disabled={saving}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, content: event.target.value }))
+          }
+        />
+      </label>
+      <label className="block text-xs text-zinc-500">
+        命名空间
+        <input
+          className="mt-1 h-8 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm text-zinc-900"
+          aria-label="命名空间"
+          value={draft.namespace}
+          disabled={saving}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              namespace: event.target.value,
+            }))
+          }
+        />
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="text-xs text-zinc-500">
+          类型
+          <Select
+            value={draft.kind}
+            disabled={saving}
+            onValueChange={(value) =>
+              setDraft((current) => ({ ...current, kind: value }))
+            }
+          >
+            <SelectTrigger className="mt-1" aria-label="类型">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(kindLabels).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="text-xs text-zinc-500">
+          重要度
+          <Select
+            value={String(draft.importance)}
+            disabled={saving}
+            onValueChange={(value) =>
+              setDraft((current) => ({
+                ...current,
+                importance: Number(value),
+              }))
+            }
+          >
+            <SelectTrigger className="mt-1" aria-label="重要度">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: 10 }, (_, index) => String(index + 1)).map(
+                (value) => (
+                  <SelectItem key={value} value={value}>
+                    {value}
+                  </SelectItem>
+                ),
+              )}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <fieldset
+        className="m-0 flex w-fit rounded-full border-0 bg-zinc-100 p-0.5 text-xs"
+        aria-label="保存到"
+      >
+        <button
+          type="button"
+          className={`rounded-full px-2.5 py-1 ${draft.scope === 'user' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
+          aria-pressed={draft.scope === 'user'}
+          disabled={saving}
+          onClick={() => setDraft((current) => ({ ...current, scope: 'user' }))}
+        >
+          关于你
+        </button>
+        <button
+          type="button"
+          className={`rounded-full px-2.5 py-1 ${draft.scope === 'agent' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
+          aria-pressed={draft.scope === 'agent'}
+          disabled={saving}
+          onClick={() =>
+            setDraft((current) => ({ ...current, scope: 'agent' }))
+          }
+        >
+          这个 Agent
+        </button>
+      </fieldset>
+      <label className="flex items-center gap-2 text-xs text-zinc-600">
+        <input
+          type="checkbox"
+          checked={draft.pinned ?? false}
+          disabled={saving}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              pinned: event.target.checked,
+            }))
+          }
+        />
+        置顶
+      </label>
+      {formError && (
+        <p className="text-xs text-rose-700" role="alert">
+          {formError}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button size="sm" type="submit" disabled={saving}>
+          {saving ? '保存中…' : '保存'}
+        </Button>
+        <Button size="sm" variant="quiet" disabled={saving} onClick={onCancel}>
+          取消
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function MemoryAdvanced({ memory }: { memory: MemoryController }) {
+  const [decay, setDecay] = useState(memory.policy.decay_enabled);
+  const [recall, setRecall] = useState(String(memory.policy.recall_top_k));
+  useEffect(() => {
+    setDecay(memory.policy.decay_enabled);
+    setRecall(String(memory.policy.recall_top_k));
+  }, [memory.policy.decay_enabled, memory.policy.recall_top_k]);
+  return (
+    <details className="mb-4 rounded-2xl border border-zinc-200 bg-white px-3 py-2">
+      <summary className="cursor-pointer text-sm text-zinc-700">
+        高级设置
+      </summary>
+      <form
+        className="mt-3 space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void memory.saveAdvanced({
+            decay_enabled: decay,
+            recall_top_k: Number(recall),
+          });
+        }}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-zinc-600">遗忘开关</span>
+          <Switch
+            checked={decay}
+            disabled={!memory.editable || memory.policySaving}
+            label="遗忘开关"
+            onChange={setDecay}
+          />
+        </div>
+        <label className="block text-xs text-zinc-600">
+          召回条数
+          <input
+            className="mt-1 h-8 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm text-zinc-900"
+            aria-label="召回条数"
+            inputMode="numeric"
+            min={1}
+            max={50}
+            value={recall}
+            disabled={!memory.editable || memory.policySaving}
+            onChange={(event) => setRecall(event.target.value)}
+          />
+        </label>
+        {memory.editable && (
+          <Button size="sm" type="submit" disabled={memory.policySaving}>
+            {memory.policySaving ? '保存中…' : '保存'}
+          </Button>
+        )}
+      </form>
+    </details>
+  );
+}
+
+function emptyCopy(status: StatusView) {
+  if (status === 'archived') return '没有已归档的记忆';
+  if (status === 'deleted') return '没有已删除的记忆';
+  return '还没有记忆，多聊几句后会自动整理。';
+}
+
+/** 记忆详情占满整个配置栏，编辑、新增和恢复都留在这一层。 */
 export function MemoryDetail({
   memory,
+  agentId,
   onBack,
 }: {
   memory: MemoryController;
+  agentId: string;
   onBack: () => void;
 }) {
+  const [adding, setAdding] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLButtonElement>(null);
   const enabled = memory.policy.enabled;
-  const showEmpty = memory.loaded && memory.count === 0;
+  const userItems = memory.items.filter((item) => item.scope === 'user');
+  const agentItems = memory.items.filter((item) => item.scope === 'agent');
+  const showEmpty =
+    memory.loaded && memory.items.length === 0 && !memory.hasMore;
+  useEffect(() => {
+    const root = scrollRef.current;
+    const target = sentinelRef.current;
+    if (!root || !target || !memory.hasMore || memory.preview) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void memory.loadMore();
+        }
+      },
+      { root, rootMargin: '120px' },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [memory.hasMore, memory.loadMore, memory.preview]);
+  const created = (item: MemoryItem) => {
+    setAdding(false);
+    if (memory.status !== 'active') memory.changeStatus('active');
+    memory.remember(item);
+    memory.notify('已添加');
+  };
+  const kept = (item: MemoryItem) => {
+    if (memory.status !== 'active') {
+      memory.changeStatus('active');
+      memory.notify('已恢复');
+    }
+    memory.remember(item);
+  };
+  const conflicted = () => {
+    memory.reportConflict();
+  };
   return (
     <section
       className="relative flex h-full min-h-0 flex-col bg-white"
       aria-label="Agent 配置"
     >
       <Toast message={memory.notice} />
-      <header className="flex shrink-0 items-center gap-2 px-4 py-3">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-sm text-zinc-600"
-          onClick={onBack}
-        >
-          <Icon name="arrow-left" size={16} />
-          返回
-        </button>
-        <h2 className="text-sm font-medium">记忆</h2>
-        <div className="ml-auto flex items-center gap-2 text-xs text-zinc-600">
+      <header className="shrink-0 space-y-2 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-sm text-zinc-600"
+            onClick={onBack}
+          >
+            <Icon name="arrow-left" size={16} />
+            返回
+          </button>
+          <h2 className="text-sm font-medium">记忆</h2>
+          <button
+            type="button"
+            className="ml-auto text-sm text-zinc-800"
+            onClick={() => setAdding((value) => !value)}
+          >
+            + 新增记忆
+          </button>
+        </div>
+        <p className="text-[11px] leading-5 text-zinc-500">
+          {memory.stats ? (
+            <>
+              生效 {memory.stats.status.active ?? 0} · 归档{' '}
+              {memory.stats.status.archived ?? 0}
+              {memory.stats.dead > 0 && (
+                <>
+                  {' · '}
+                  {memory.stats.dead} 个整理任务失败
+                  {memory.stats.deadJobIDs.length > 0 && (
+                    <button
+                      type="button"
+                      className="ml-1 underline underline-offset-2 disabled:opacity-40"
+                      disabled={memory.retrying}
+                      onClick={() => void memory.retryDead()}
+                    >
+                      {memory.retrying ? '重试中…' : '重试'}
+                    </button>
+                  )}
+                </>
+              )}
+            </>
+          ) : (
+            '…'
+          )}
+        </p>
+        <div className="flex items-center justify-end gap-2 text-xs text-zinc-600">
           <span>memory.md 预览</span>
           <Switch
             checked={memory.preview}
@@ -704,7 +1393,7 @@ export function MemoryDetail({
           />
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto px-4 pb-6">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto px-4 pb-6">
         {memory.error && (
           <Alert message={memory.error} onRetry={memory.refresh} />
         )}
@@ -713,6 +1402,15 @@ export function MemoryDetail({
             记忆已关闭，这些内容不会参与后续对话。
           </p>
         )}
+        {adding && (
+          <MemoryCreateForm
+            agentId={agentId}
+            onCancel={() => setAdding(false)}
+            onCreated={created}
+            onConflict={() => memory.refresh()}
+          />
+        )}
+        <MemoryAdvanced memory={memory} />
         {memory.preview ? (
           <div>
             {memory.markdownLoading && !memory.markdown ? (
@@ -729,7 +1427,7 @@ export function MemoryDetail({
                     </div>
                   ) : (
                     enabled &&
-                    showEmpty && (
+                    memory.count === 0 && (
                       <p className="text-sm leading-6 text-zinc-500">
                         还没有记忆，多聊几句后会自动整理。
                       </p>
@@ -741,29 +1439,62 @@ export function MemoryDetail({
           </div>
         ) : (
           <div className={enabled ? undefined : 'opacity-40 grayscale'}>
+            <fieldset
+              className="m-0 mb-3 flex w-fit rounded-full border-0 bg-zinc-100 p-0.5 text-xs"
+              aria-label="记忆状态"
+            >
+              {statusViews.map((view) => (
+                <button
+                  key={view.id}
+                  type="button"
+                  className={`rounded-full px-2.5 py-1 ${memory.status === view.id ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
+                  aria-pressed={memory.status === view.id}
+                  onClick={() => memory.changeStatus(view.id)}
+                >
+                  {view.label}
+                </button>
+              ))}
+            </fieldset>
             {!memory.loaded && !memory.error && <Skeleton className="h-24" />}
             {showEmpty && (
               <p className="py-6 text-center text-sm leading-6 text-zinc-500">
-                还没有记忆，多聊几句后会自动整理。
+                {emptyCopy(memory.status)}
               </p>
             )}
-            {memory.loaded && memory.count > 0 && (
+            {memory.loaded && memory.items.length > 0 && (
               <>
                 <MemoryGroup
                   title="关于你（所有 Agent 共享）"
-                  items={memory.userItems}
+                  items={userItems}
+                  hasMore={memory.hasMore}
                   enabled={enabled}
                   onChanged={memory.refresh}
-                  onConflict={memory.reportConflict}
+                  onConflict={conflicted}
+                  onRemember={kept}
+                  onForget={memory.forget}
                 />
                 <MemoryGroup
                   title="这个 Agent 的记忆"
-                  items={memory.agentItems}
+                  items={agentItems}
+                  hasMore={memory.hasMore}
                   enabled={enabled}
                   onChanged={memory.refresh}
-                  onConflict={memory.reportConflict}
+                  onConflict={conflicted}
+                  onRemember={kept}
+                  onForget={memory.forget}
                 />
               </>
+            )}
+            {memory.hasMore && (
+              <button
+                ref={sentinelRef}
+                type="button"
+                className="mt-4 w-full py-2 text-center text-xs text-zinc-500 underline underline-offset-4 disabled:no-underline"
+                disabled={memory.loadingMore}
+                onClick={() => void memory.loadMore()}
+              >
+                {memory.loadingMore ? '加载中…' : '加载更多'}
+              </button>
             )}
           </div>
         )}

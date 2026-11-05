@@ -42,6 +42,45 @@ export const createConversation = (agent_id: string, signal?: AbortSignal) =>
     signal,
   });
 
+/** 会话滚动摘要。没有摘要时接口返回 summary: null，这里收成 null。 */
+export type ConversationSummary = {
+  id: string;
+  conversation_id: string;
+  content: string;
+  covers_from_message_id: string | null;
+  covers_until_message_id: string | null;
+  message_count: number;
+  estimated_tokens: number;
+  version: number;
+  created_at: string;
+};
+
+export async function getConversationSummary(id: string, signal?: AbortSignal) {
+  const result = await request<ConversationSummary | { summary: null }>(
+    `/conversations/${encodeURIComponent(id)}/summary`,
+    { signal },
+  );
+  if (
+    result != null &&
+    typeof result === 'object' &&
+    'content' in result &&
+    typeof result.content === 'string' &&
+    typeof result.message_count === 'number' &&
+    typeof result.version === 'number'
+  ) {
+    return result;
+  }
+  if (
+    result != null &&
+    typeof result === 'object' &&
+    'summary' in result &&
+    result.summary === null
+  ) {
+    return null;
+  }
+  throw new Error('对话摘要格式不正确');
+}
+
 /** 历史读取失败必须由页面显示，不能伪装为空会话。 */
 export const listMessages = (
   id: string,

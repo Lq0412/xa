@@ -20,6 +20,10 @@ import {
   getAgentConfig,
   saveAgent,
 } from '@/services/api';
+import {
+  type ConversationSummary,
+  getConversationSummary,
+} from '@/services/chat';
 import type { MemoryPolicyResult } from '@/services/memory';
 import {
   MemoryCard,
@@ -32,10 +36,67 @@ type Props = {
   agent: Agent;
   userID?: string;
   memoryCue: MemoryCue;
+  conversationId?: string;
   onEdit: () => void;
   onClose?: () => void;
   onSaved: (agent: Agent) => void;
 };
+
+/** 详情页里的当前对话摘要。没有会话或尚未生成时使用同一句说明。 */
+function ConversationSummaryBlock({
+  conversationId,
+}: {
+  conversationId?: string;
+}) {
+  const [summary, setSummary] = useState<
+    ConversationSummary | null | undefined
+  >(conversationId ? undefined : null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!conversationId) {
+      setSummary(null);
+      setError('');
+      return;
+    }
+    const controller = new AbortController();
+    setSummary(undefined);
+    setError('');
+    getConversationSummary(conversationId, controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) setSummary(value);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) setError(errorMessage(cause));
+      });
+    return () => controller.abort();
+  }, [conversationId]);
+  return (
+    <div>
+      <p className="text-xs text-zinc-400">对话摘要</p>
+      {error && (
+        <p className="mt-1 text-sm text-rose-700" role="alert">
+          {error}
+        </p>
+      )}
+      {!error && summary === undefined && <Skeleton className="mt-2 h-12" />}
+      {!error && summary === null && (
+        <p className="mt-1 text-sm leading-6 text-zinc-500">
+          对话变长后会自动生成摘要
+        </p>
+      )}
+      {summary && (
+        <>
+          <p className="mt-1 leading-6 whitespace-pre-wrap text-zinc-700">
+            {summary.content}
+          </p>
+          <p className="mt-1 text-xs text-zinc-400">
+            覆盖 {summary.message_count} 条消息 · v{summary.version}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
 
 function cardDate(value?: string) {
   if (!value) return '';
@@ -59,6 +120,7 @@ export function AgentDetails({
   agent,
   userID,
   memoryCue,
+  conversationId,
   onEdit,
   onClose,
   onSaved,
@@ -169,6 +231,7 @@ export function AgentDetails({
     return (
       <MemoryDetail
         memory={memory}
+        agentId={agent.id}
         onBack={() => memory.setDetailOpen(false)}
       />
     );
@@ -440,6 +503,7 @@ export function AgentDetails({
                   {agent.description || '未填写'}
                 </p>
               </div>
+              <ConversationSummaryBlock conversationId={conversationId} />
               <div>
                 <p className="text-xs text-zinc-400">状态</p>
                 <p className="mt-1 text-zinc-700">{statusText(agent)}</p>
