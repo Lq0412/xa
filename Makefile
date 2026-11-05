@@ -32,7 +32,7 @@ web-install:
 	cd web && npm install
 
 web:
-	cd web && npm run dev
+	cd web && npm run prepare && npm run dev
 
 web-build:
 	cd web && npm run build
@@ -41,7 +41,7 @@ web-user-install:
 	cd web-user && npm install
 
 web-user:
-	cd web-user && npm run dev
+	cd web-user && npm run prepare && npm run dev
 
 web-user-build:
 	cd web-user && npm run build

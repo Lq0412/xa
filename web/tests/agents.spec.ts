@@ -63,21 +63,12 @@ test('真实会话与 Agent 创建、筛选、编辑、版本冲突、启停和�
     await expect(dialog).not.toBeVisible();
     await expect(row).toBeVisible();
 
-    // 使用实际保存的配置追加另一个提示词，验证表单不会覆盖未展示内容。
+    // 使用实际保存的配置追加运行限制，验证表单不会覆盖未展示内容。
     const before = (await (
       await request.get(`${endpoint}/config`, { headers })
     ).json()) as XA.AgentVersion;
-    const extra: XA.PromptSlot = {
-      name: 'context',
-      content: '保留上下文',
-      enabled: false,
-      order: 1,
-      variables: [],
-      scope: 'agent',
-    };
     const configuration = {
       ...before.configuration,
-      prompts: [...(before.configuration.prompts ?? []), extra],
       runtime_limits: { max_turns: 12 },
     };
     const payload = {
@@ -111,7 +102,7 @@ test('真实会话与 Agent 创建、筛选、编辑、版本冲突、启停和�
     ).json()) as XA.AgentVersion;
     expect(
       after.configuration.prompts?.map((prompt) => prompt.content),
-    ).toEqual(['请用简洁中文回答。', '保留上下文']);
+    ).toEqual(['请用简洁中文回答。']);
     expect(after.configuration.runtime_limits).toEqual({ max_turns: 12 });
     expect(
       (await (await request.get(endpoint, { headers })).json()).avatar,

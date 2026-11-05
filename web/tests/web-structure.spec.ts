@@ -27,7 +27,7 @@ test('管理端仅展示可用模块，已删除页面返回 404', async ({ page
     await expect(page).toHaveURL(/\/agents$/);
     await page.reload();
     await expect(
-      page.getByRole('button', { name: '新建 Agent', exact: true }),
+      page.getByRole('button', { name: '新建 Agent' }),
     ).toBeVisible();
     for (const path of [
       '/models',
@@ -84,16 +84,16 @@ test('用户端真实 Agent 创建、独立会话、对话布局与可用入口'
   try {
     const name = `用户端验收 ${randomUUID()}`;
     await page
-      .getByRole('button', { name: '创建 Agent', exact: true })
+      .getByRole('button', { name: '新建 Agent', exact: true })
       .first()
       .click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('名称', { exact: true }).fill(name);
     await dialog
-      .getByLabel('介绍', { exact: true })
+      .getByLabel('简介', { exact: true })
       .fill('验证真实私有 Agent 与对话页面结构');
     await dialog
-      .getByLabel('系统提示词', { exact: true })
+      .getByLabel('SOUL.md', { exact: true })
       .fill('请使用中文回答。');
     const created = page.waitForResponse(
       (response) =>
@@ -107,36 +107,54 @@ test('用户端真实 Agent 创建、独立会话、对话布局与可用入口'
     agentId = result.agent.id;
     expect(result.agent.visibility).toBe('private');
     await expect(dialog).not.toBeVisible();
+    await expect(page).toHaveURL(/\/chat\?agentId=/);
+    await page
+      .getByRole('navigation', { name: '主导航' })
+      .getByRole('link', { name: '我的 Agent', exact: true })
+      .click();
     await page.getByRole('textbox', { name: '搜索 Agent' }).fill(name);
     const card = page.getByRole('article').filter({ hasText: name });
     await expect(card).toBeVisible();
     await page.reload();
     await page.getByRole('textbox', { name: '搜索 Agent' }).fill(name);
     await card.getByRole('link', { name: /进入对话/ }).click();
-    await expect(page).toHaveURL(/\/chat\?agent=/);
+    await expect(page).toHaveURL(/\/chat\?agentId=/);
     await expect(
       page.getByRole('heading', { name, exact: true }).first(),
     ).toBeVisible();
     await expect(page.getByRole('button', { name: '发送消息' })).toBeDisabled();
     await expect(
       page.getByRole('textbox', { name: '消息', exact: true }),
-    ).toBeDisabled();
-    await expect(page.getByLabel('Agent 资料')).toBeVisible();
-    await page.getByRole('button', { name: '关闭 Agent 详情' }).click();
-    await expect(page.getByLabel('Agent 资料')).not.toBeVisible();
-    await page.getByRole('button', { name: 'Agent 详情', exact: true }).click();
-    await page.getByRole('tab', { name: '能力', exact: true }).click();
-    await expect(page.getByText('实时语音', { exact: true })).toBeVisible();
+    ).toBeEnabled();
+    const input = page.getByRole('textbox', { name: '消息', exact: true });
+    await input.fill('草稿');
+    await input.press('Shift+Enter');
+    await input.press('End');
+    await input.type('第二行');
+    await expect(input).toHaveValue('草稿\n第二行');
+    await expect(page.getByRole('button', { name: '发送消息' })).toBeEnabled();
+    await input.fill('');
+    const details = page.getByRole('region', { name: 'Agent 配置' });
+    await expect(details).toContainText(name);
+    await details.getByRole('button', { name: '收起 Agent 配置' }).click();
+    await expect(details).toBeHidden();
+    await page.getByRole('button', { name: '展开 Agent 配置' }).click();
+    await expect(details).toContainText('请使用中文回答。');
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('button', { name: '关闭 Agent 详情' }).click();
-    await page.getByRole('button', { name: '打开会话列表' }).click();
-    await expect(page.getByLabel('会话列表', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '关闭会话列表' }).click();
+    await expect(details).toBeHidden();
+    await page.getByRole('button', { name: '打开 Agent 列表' }).click();
+    await expect(
+      page.getByRole('dialog', { name: '我的 Agent' }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: '关闭我的 Agent' }).click();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBeTruthy();
+    const composer = await page.locator('.message-composer').boundingBox();
+    if (!composer) throw new Error('输入区不可见');
+    expect(composer.y + composer.height).toBeLessThanOrEqual(844);
     for (const [path, title] of [
       ['history', '会话历史'],
       ['memory', '个人记忆'],

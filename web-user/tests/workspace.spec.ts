@@ -102,6 +102,11 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
     keyCode: 229,
   });
   await expect(page.locator('.message-row')).toHaveCount(0);
+  let sends = 0;
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && /\/messages$/.test(req.url())) sends++;
+  });
+  await input.press('Enter');
   await input.press('Enter');
   await expect(page.getByRole('button', { name: '停止生成' })).toBeHidden({
     timeout: 60000,
@@ -111,6 +116,7 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
   });
   await expect(page.locator('.message-row.assistant table')).toBeVisible();
   await expect(page.locator('.message-row')).toHaveCount(2);
+  expect(sends).toBe(1);
   await expect(page.locator('.message-row .agent-avatar')).toHaveCount(0);
   const code = await page.locator('.message-row pre').textContent();
   await page.getByRole('button', { name: '复制代码' }).click();
@@ -180,7 +186,27 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
         0,
       { timeout: 60000 },
     )
-    .toBeGreaterThan(200);
+    .toBeGreaterThan(1000);
+  await page.locator('.conversation-body').evaluate((node) => {
+    node.scrollTop = 0;
+  });
+  await expect(
+    page.getByRole('button', { name: '回到最新消息' }),
+  ).toBeVisible();
+  const lengthBefore =
+    (await page.locator('.message-row.assistant').textContent())?.length || 0;
+  await expect
+    .poll(
+      async () =>
+        (await page.locator('.message-row.assistant').textContent())?.length ||
+        0,
+    )
+    .toBeGreaterThan(lengthBefore + 60);
+  expect(
+    await page.locator('.conversation-body').evaluate((node) => node.scrollTop),
+  ).toBeLessThan(10);
+  await page.getByRole('button', { name: '回到最新消息' }).click();
+  await expect(page.getByRole('button', { name: '回到最新消息' })).toBeHidden();
   await page.getByRole('button', { name: '停止生成' }).click();
   const secondID = new URL(page.url()).searchParams.get('conversationId');
   await expect
@@ -197,6 +223,15 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
     .toBe('已停止生成');
   await page.reload();
   await expect(page.getByText('已停止生成', { exact: true })).toBeVisible();
+  // 使用浏览器真实断网，验证错误提示与恢复，不替换 API 响应。
+  await context.setOffline(true);
+  await input.fill('断网时发送');
+  await input.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('无法连接服务');
+  await context.setOffline(false);
+  await page.getByRole('button', { name: '重新加载', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeHidden();
+  await expect(page.locator('.message-row')).toHaveCount(2);
   await page
     .getByRole('navigation', { name: '主导航' })
     .getByRole('link', { name: '发现 Agent' })
@@ -232,4 +267,10 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
   expect(
     (await request.post('/api/v1/auth/logout', { headers })).status(),
   ).toBe(204);
+  await input.fill('验证会话失效');
+  await input.press('Enter');
+  await expect(page).toHaveURL(/\/login\?redirect=/);
+  expect(
+    await page.evaluate(() => localStorage.getItem('xa.user.session')),
+  ).toBeNull();
 });
