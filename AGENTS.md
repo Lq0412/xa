@@ -63,7 +63,7 @@
 
 Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 19、Ant Design Pro v6、Ant Design 6、Umi Max 4、TypeScript、Tailwind、SSE 和 Docker Compose。
 
-Ant Design 仅用于管理端 `web/`。用户端 `web-user/` 使用 React、原生 HTML 与独立 CSS，图标使用 Lucide；禁止引入 Ant Design 组件、样式或应用包装层。
+Ant Design 仅用于管理端 `web/`。用户端 `web-user/` 使用 React、Tailwind CSS、shadcn/ui 和 Lucide；禁止引入 Ant Design 组件、样式或应用包装层。
 
 暂不使用：Flutter、WebSocket、Realtime、MCP。
 

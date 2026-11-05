@@ -162,9 +162,10 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
   await expect(page.locator('.agent-sidebar-select').first()).toContainText(
     '我的主 Agent',
   );
-  await details
-    .getByRole('combobox', { name: '模型' })
-    .selectOption('qwen3.8-flash');
+  await details.getByRole('combobox', { name: '模型' }).click();
+  await page
+    .getByRole('option', { name: 'qwen3.8-flash', exact: true })
+    .click();
   await details.getByRole('button', { name: '保存', exact: true }).click();
   await expect(
     details.getByRole('button', { name: '保存', exact: true }),
@@ -229,7 +230,7 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
   await input.press('Enter');
   await expect(page.getByRole('alert')).toContainText('无法连接服务');
   await context.setOffline(false);
-  await page.getByRole('button', { name: '重新加载', exact: true }).click();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.getByRole('alert')).toBeHidden();
   await expect(page.locator('.message-row')).toHaveCount(2);
   await page

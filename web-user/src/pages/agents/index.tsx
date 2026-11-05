@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentEditor } from '@/components/AgentEditor';
 import { Icon } from '@/components/Icon';
+import { Button } from '@/components/ui/button';
 import {
   type Agent,
   addPublicAgent,
@@ -81,47 +82,54 @@ export default function AgentsPage() {
     }
   };
   return (
-    <div className="page-content agent-directory">
-      <header className="page-heading">
-        <h1>{mine ? '我的 Agent' : '发现 Agent'}</h1>
-        <button type="button" className="button primary" onClick={openCreate}>
+    <div className="mx-auto w-full max-w-6xl px-8 py-10">
+      <header className="mb-6 flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-medium">
+          {mine ? '我的 Agent' : '发现 Agent'}
+        </h1>
+        <Button onClick={openCreate}>
           <Icon name="plus" size={16} />
           新建 Agent
-        </button>
+        </Button>
       </header>
-      <div className="directory-toolbar">
-        <label className="search-field">
-          <Icon name="search" size={17} />
-          <input
-            aria-label="搜索 Agent"
-            placeholder="搜索 Agent"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-      </div>
+      <label className="mb-6 flex w-full max-w-xs items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-2 text-zinc-400">
+        <Icon name="search" size={16} />
+        <input
+          className="w-full border-0 bg-transparent p-0 text-sm text-zinc-900 outline-none"
+          aria-label="搜索 Agent"
+          placeholder="搜索"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
       {error ? (
-        <div role="alert" className="error-banner">
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3.5 py-3 text-sm text-rose-800"
+        >
           {error}
           <button
             type="button"
-            className="text-button"
+            className="shrink-0 underline"
             onClick={() => setRevision((value) => value + 1)}
           >
             重试
           </button>
         </div>
       ) : loading ? (
-        <p className="muted" role="status">
+        <p className="text-sm text-zinc-500" role="status">
           正在读取 Agent…
         </p>
       ) : visible.length ? (
-        <div className="agent-grid">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
           {visible.map((agent) => (
-            <article key={agent.id} className="agent-card">
-              <div className="agent-card-top">
-                <AgentAvatar agent={agent} />
-                <span className="muted">
+            <article
+              key={agent.id}
+              className="flex min-w-0 flex-col rounded-2xl border border-zinc-200 bg-white p-5"
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <AgentAvatar size={40} />
+                <span className="text-xs text-zinc-400">
                   {agent.is_primary
                     ? '主 Agent'
                     : agent.visibility === 'public'
@@ -129,27 +137,33 @@ export default function AgentsPage() {
                       : '私有'}
                 </span>
               </div>
-              <h2>{agent.name}</h2>
-              {agent.description && <p>{agent.description}</p>}
-              <div className="agent-tags">
+              <h2 className="text-base font-medium">{agent.name}</h2>
+              {agent.description && (
+                <p className="mt-2 line-clamp-3 text-sm leading-6 text-zinc-500">
+                  {agent.description}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-1 text-xs text-zinc-400">
                 {(agent.tags ?? []).map((tag) => (
                   <span key={tag}>{tag}</span>
                 ))}
               </div>
-              <div className="agent-card-bottom">
+              <div className="mt-auto pt-5 text-sm">
                 {agent.status === 'offline' ? (
-                  <span>已停用</span>
+                  <span className="text-zinc-400">已停用</span>
                 ) : agent.visibility === 'public' && !added.has(agent.id) ? (
-                  <button
-                    type="button"
-                    className="button quiet"
+                  <Button
+                    variant="quiet"
                     disabled={Boolean(adding)}
                     onClick={() => void add(agent)}
                   >
                     {adding === agent.id ? '添加中…' : '添加并对话'}
-                  </button>
+                  </Button>
                 ) : (
-                  <Link to={chatURL(agent.id)}>
+                  <Link
+                    className="inline-flex items-center gap-1"
+                    to={chatURL(agent.id)}
+                  >
                     进入对话 <Icon name="arrow-right" size={16} />
                   </Link>
                 )}
@@ -158,21 +172,20 @@ export default function AgentsPage() {
           ))}
         </div>
       ) : (
-        <div className="directory-empty">
-          <h2>
+        <div className="py-16 text-zinc-500">
+          <h2 className="mb-4 text-lg font-medium text-zinc-800">
             {query
               ? '没有匹配的 Agent'
               : mine
                 ? '还没有自己的 Agent'
                 : '暂无公共 Agent'}
           </h2>
-          <button
-            type="button"
-            className="button"
+          <Button
+            variant="outline"
             onClick={query ? () => setQuery('') : openCreate}
           >
             {query ? '清除搜索' : '新建 Agent'}
-          </button>
+          </Button>
         </div>
       )}
       {creating && (

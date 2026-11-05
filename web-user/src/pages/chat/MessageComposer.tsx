@@ -31,15 +31,16 @@ export function MessageComposer({
     input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
   }, [value]);
   return (
-    <div className="composer-area">
-      <div className="message-composer">
+    <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-4">
+      <div className="message-composer flex items-end gap-2 rounded-[28px] border border-zinc-200 bg-white px-3 py-2 shadow-[0_8px_30px_rgba(24,24,27,0.08)]">
         <textarea
           ref={ref}
           aria-label="消息"
+          className="max-h-40 min-h-9 flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 outline-none"
           value={value}
           disabled={disabled}
           readOnly={creating}
-          placeholder={disabled ? '暂不可发送' : '发送消息'}
+          placeholder={disabled ? '暂不可发送' : '发消息'}
           rows={1}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
@@ -54,29 +55,27 @@ export function MessageComposer({
             }
           }}
         />
-        <div className="composer-footer">
-          {sending && !creating ? (
-            <button
-              type="button"
-              className="send-button stop"
-              aria-label="停止生成"
-              onClick={onStop}
-            >
-              <Icon name="stop" size={16} />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="send-button"
-              aria-label="发送消息"
-              title="发送（Enter）· 换行（Shift + Enter）"
-              disabled={disabled || sending || !value.trim()}
-              onClick={onSend}
-            >
-              <Icon name="arrow-up" size={16} />
-            </button>
-          )}
-        </div>
+        {sending && !creating ? (
+          <button
+            type="button"
+            className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-[#f5c518] text-[#3a2a00]"
+            aria-label="停止生成"
+            onClick={onStop}
+          >
+            <Icon name="stop" size={14} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-[#f5c518] text-[#3a2a00] disabled:opacity-40"
+            aria-label="发送消息"
+            title="发送（Enter）· 换行（Shift + Enter）"
+            disabled={disabled || sending || !value.trim()}
+            onClick={onSend}
+          >
+            <Icon name="arrow-up" size={16} />
+          </button>
+        )}
       </div>
     </div>
   );

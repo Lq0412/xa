@@ -1,4 +1,6 @@
 import { type FormEvent, useEffect, useState } from 'react';
+import { Dialog } from '@/components/Dialog';
+import { Button } from '@/components/ui/button';
 import {
   type Agent,
   type AgentVersion,
@@ -8,13 +10,15 @@ import {
   getAgentConfig,
   saveAgent,
 } from '@/services/api';
-import { Dialog } from './Dialog';
 
 type Props = {
   agent?: Agent;
   onCancel: () => void;
   onSaved: (agent: Agent) => void;
 };
+
+const fieldClass =
+  'w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-400';
 
 /** 创建和基本资料编辑共用原生表单，配置由版本指针保护。 */
 export function AgentEditor({ agent, onCancel, onSaved }: Props) {
@@ -66,14 +70,17 @@ export function AgentEditor({ agent, onCancel, onSaved }: Props) {
       onClose={onCancel}
       busy={saving}
     >
-      <form className="editor-form" onSubmit={submit}>
+      <form className="px-5 pb-5" onSubmit={submit}>
         {error && (
-          <div className="error-banner" role="alert">
+          <div
+            className="mb-4 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3.5 py-3 text-sm text-rose-800"
+            role="alert"
+          >
             {error}
             {agent && (
               <button
                 type="button"
-                className="text-button"
+                className="shrink-0 text-sm underline"
                 onClick={() => {
                   setError('');
                   setRevision((value) => value + 1);
@@ -84,10 +91,14 @@ export function AgentEditor({ agent, onCancel, onSaved }: Props) {
             )}
           </div>
         )}
-        <fieldset disabled={saving || Boolean(agent && !version)}>
-          <label>
+        <fieldset
+          className="grid gap-4 border-0 p-0"
+          disabled={saving || Boolean(agent && !version)}
+        >
+          <label className="grid gap-2 text-sm text-zinc-600">
             名称
             <input
+              className={fieldClass}
               name="name"
               required
               maxLength={120}
@@ -95,9 +106,10 @@ export function AgentEditor({ agent, onCancel, onSaved }: Props) {
               onChange={(event) => setName(event.target.value)}
             />
           </label>
-          <label>
+          <label className="grid gap-2 text-sm text-zinc-600">
             简介
             <textarea
+              className={fieldClass}
               name="description"
               rows={3}
               maxLength={2000}
@@ -106,11 +118,11 @@ export function AgentEditor({ agent, onCancel, onSaved }: Props) {
             />
           </label>
           {!agent && (
-            <label>
+            <label className="grid gap-2 text-sm text-zinc-600">
               SOUL.md
               <textarea
+                className={`${fieldClass} min-h-32 font-mono text-[13px]`}
                 name="soul"
-                className="soul-editor"
                 rows={6}
                 maxLength={20000}
                 value={soul}
@@ -119,22 +131,13 @@ export function AgentEditor({ agent, onCancel, onSaved }: Props) {
             </label>
           )}
         </fieldset>
-        <footer className="form-actions">
-          <button
-            type="button"
-            className="button"
-            disabled={saving}
-            onClick={onCancel}
-          >
+        <footer className="mt-4 flex justify-end gap-2">
+          <Button variant="outline" disabled={saving} onClick={onCancel}>
             取消
-          </button>
-          <button
-            type="submit"
-            className="button primary"
-            disabled={saving || Boolean(agent && !version)}
-          >
+          </Button>
+          <Button type="submit" disabled={saving || Boolean(agent && !version)}>
             {saving ? '保存中…' : agent ? '保存' : '创建'}
-          </button>
+          </Button>
         </footer>
       </form>
     </Dialog>
