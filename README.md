@@ -16,6 +16,16 @@ Agent 管理与运行平台，后端使用 Go。通过配置创建公共或私�
 本地启动：
 
 ```bash
+make up
+```
+
+`make up` 先释放 18080、18081、8000、8002，再启动 PostgreSQL、Redis、对象存储并执行迁移，然后在后台运行 server、worker、管理端和用户端。日志写入 `.output/logs/`，进程号写入 `.output/pids/`。就绪后访问管理端 http://localhost:8000 ，用户端 http://localhost:8002 。
+
+`make status` 查看各进程和端口。`make down` 停止这些进程，保留 Docker 依赖；`make down ALL=1` 同时停止依赖。首次使用先执行 `make env`。两个前端若还没有依赖，先分别执行 `make web-install` 和 `make web-user-install`。
+
+也可以分终端手动启动：
+
+```bash
 make env
 make deps-up
 make server
