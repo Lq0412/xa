@@ -7,11 +7,12 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { history, Link, Outlet, useLocation, useModel } from '@umijs/max';
-import { Alert, App, Avatar, Button, Tooltip } from 'antd';
+import { Alert, App, Avatar, Button, Popover, Switch, Tooltip } from 'antd';
 import { useEffect } from 'react';
 import { errorMessage, logout, TOKEN_KEY } from '@/services/api';
+import { DetailsPreference, useDetailsPreference } from './DetailsPreference';
 
-/** 用户端导航只放使用者功能；聊天采用独立会话栏，其他页面使用文字导航。 */
+/** 页面导航只保留图标栏，业务列表由各页面负责。 */
 const navigation = [
   { path: '/chat', name: '对话', icon: <CommentOutlined /> },
   { path: '/explore', name: '发现 Agent', icon: <AppstoreOutlined /> },
@@ -20,10 +21,20 @@ const navigation = [
 
 /** 所有受保护页面共用身份守卫；接口仍由服务端校验最终权限。 */
 export default function AppLayout() {
+  return (
+    <DetailsPreference>
+      <WorkspaceLayout />
+    </DetailsPreference>
+  );
+}
+
+/** 布局保留账号守卫、真实设置和退出入口。 */
+function WorkspaceLayout() {
   const { pathname, search } = useLocation();
   const { initialState, setInitialState } = useModel('@@initialState');
   const user = initialState?.currentUser;
   const { message } = App.useApp();
+  const details = useDetailsPreference();
   const requiresLogin = ['/my-agents', '/chat'].includes(pathname);
   useEffect(() => {
     if (requiresLogin && !user && !initialState?.sessionError)
@@ -64,19 +75,40 @@ export default function AppLayout() {
           ))}
         </div>
         <div className="rail-bottom">
-          {user?.role === 'admin' && process.env.XA_ADMIN_WEB_URL && (
-            <Tooltip title="管理后台" placement="right">
-              <a
-                className="rail-link"
-                href={process.env.XA_ADMIN_WEB_URL}
-                target="_blank"
-                rel="noreferrer"
-                aria-label="管理后台"
-              >
-                <SettingOutlined />
-              </a>
-            </Tooltip>
-          )}
+          <Popover
+            title="设置"
+            trigger="click"
+            placement="rightBottom"
+            content={
+              <div className="rail-settings">
+                <label htmlFor="details-preference">
+                  展开 Agent 详情
+                  <Switch
+                    id="details-preference"
+                    aria-label="展开 Agent 详情"
+                    checked={details.open}
+                    onChange={details.setOpen}
+                  />
+                </label>
+                {user?.role === 'admin' && process.env.XA_ADMIN_WEB_URL && (
+                  <a
+                    href={process.env.XA_ADMIN_WEB_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    管理后台 ↗
+                  </a>
+                )}
+              </div>
+            }
+          >
+            <Button
+              type="text"
+              className="rail-link"
+              icon={<SettingOutlined />}
+              aria-label="设置"
+            />
+          </Popover>
           {user ? (
             <Tooltip title={user.display_name || user.email} placement="right">
               <span className="rail-link" role="img" aria-label="当前账号">
@@ -103,30 +135,6 @@ export default function AppLayout() {
           )}
         </div>
       </nav>
-      {pathname !== '/chat' && (
-        <aside className="workspace-nav">
-          <div className="workspace-title">我的工作空间</div>
-          <nav aria-label="工作空间导航">
-            {navigation.map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={pathname === item.path ? 'selected' : ''}
-              >
-                {item.icon}
-                <span>{item.name}</span>
-              </Link>
-            ))}
-          </nav>
-          <div className="workspace-account">
-            {user ? (
-              <span>{user.display_name || user.email}</span>
-            ) : (
-              <Link to="/login">登录或创建账号</Link>
-            )}
-          </div>
-        </aside>
-      )}
       <main className={`user-main ${pathname === '/chat' ? 'chat-main' : ''}`}>
         {initialState?.sessionError ? (
           <div className="page-content">

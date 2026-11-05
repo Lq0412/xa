@@ -5,6 +5,8 @@
     "includes": [
       "src/**",
       "config/**",
+      "tests/**",
+      "*.ts",
       "package.json",
       "!src/.umi",
       "!src/.umi-production"

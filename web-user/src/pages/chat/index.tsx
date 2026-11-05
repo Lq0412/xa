@@ -1,169 +1,209 @@
 import {
-  ArrowUpOutlined,
-  PlusOutlined,
+  InfoCircleOutlined,
+  MenuOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { useLocation } from '@umijs/max';
-import { Alert, Avatar, Button, Input, List, Spin } from 'antd';
-import { useEffect, useState } from 'react';
-import {
-  type Agent,
-  type ChatMessage,
-  type Conversation,
-  createConversation,
-  errorMessage,
-  getAgent,
-  listConversations,
-  listMessages,
-  streamMessage,
-} from '@/services/api';
+import { history, useLocation, useModel } from '@umijs/max';
+import { Alert, Avatar, Button, Drawer, Grid } from 'antd';
+import { useState } from 'react';
+import { AgentEditor } from '@/components/AgentEditor';
+import { useDetailsPreference } from '@/layouts/DetailsPreference';
+import type { Agent } from '@/services/api';
+import { chatURL } from '@/services/chat';
+import { AgentDetails } from './AgentDetails';
+import { AgentSidebar } from './AgentSidebar';
+import { MessageComposer } from './MessageComposer';
+import { MessageList } from './MessageList';
+import { useAgentLibrary } from './useAgentLibrary';
+import { useChatSession } from './useChatSession';
+import './chat.css';
 
-/** 用户端对话页负责会话选择、历史恢复和 SSE 增量展示。 */
+/** 对话页面只组合自定义界面，数据请求和消息更新由 useChatSession 管理。 */
 export default function ChatPage() {
-  const agentID = new URLSearchParams(useLocation().search).get('agent');
-  const [agent, setAgent] = useState<Agent>();
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [conversation, setConversation] = useState<Conversation>();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (agentID)
-      getAgent(agentID)
-        .then(setAgent)
-        .catch((e) => setError(errorMessage(e)));
-    listConversations()
-      .then((r) => setConversations(r.conversations))
-      .catch((e) => setError(errorMessage(e)));
-  }, [agentID]);
-  useEffect(() => {
-    if (conversation)
-      listMessages(conversation.id)
-        .then((r) => setMessages(r.messages))
-        .catch((e) => setError(errorMessage(e)));
-  }, [conversation]);
-  const newChat = async () => {
-    if (!agent) return;
-    const c = await createConversation(agent.id);
-    setConversations((v) => [c, ...v]);
-    setConversation(c);
-    setMessages([]);
-  };
-  const send = async () => {
-    if (!conversation || !input.trim() || sending) return;
-    const text = input.trim();
-    setInput('');
-    setMessages((v) => [
-      ...v,
-      {
-        id: `local-${Date.now()}`,
-        conversation_id: conversation.id,
-        role: 'user',
-        content: text,
-        status: 'completed',
-      },
-      {
-        id: `assistant-${Date.now()}`,
-        conversation_id: conversation.id,
-        role: 'assistant',
-        content: '',
-        status: 'pending',
-      },
-    ]);
-    setSending(true);
-    try {
-      await streamMessage(
-        conversation.id,
-        text,
-        (d) =>
-          setMessages((v) => {
-            const a = [...v];
-            const i = a.length - 1;
-            a[i] = { ...a[i], content: a[i].content + d };
-            return a;
-          }),
-        () => {},
-      );
-      setMessages(await listMessages(conversation.id).then((r) => r.messages));
-      setConversations(await listConversations().then((r) => r.conversations));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setSending(false);
-    }
-  };
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const library = useAgentLibrary(params.get('agentId') || params.get('agent'));
+  const session = useChatSession(location.search, library.agents[0]);
+  const { initialState } = useModel('@@initialState');
+  const screens = Grid.useBreakpoint();
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const details = useDetailsPreference();
+  const [editor, setEditor] = useState<{ agent?: Agent }>();
+
+  const sidebar = (
+    <AgentSidebar
+      agents={library.agents}
+      conversations={session.conversations}
+      activeAgentID={session.agent?.id || session.agentID}
+      activeConversationID={session.conversationID}
+      loading={library.loading}
+      historyLoading={session.listLoading}
+      error={library.error}
+      onRetry={library.refresh}
+      onCreate={() => {
+        setMobileSidebarOpen(false);
+        setEditor({});
+      }}
+      onSelectAgent={(agent) => {
+        session.selectAgent(agent);
+        setMobileSidebarOpen(false);
+      }}
+      onNewConversation={(agent) => {
+        session.newConversation(agent);
+        setMobileSidebarOpen(false);
+      }}
+      onSelectConversation={(id) => {
+        session.selectConversation(id);
+        setMobileSidebarOpen(false);
+      }}
+    />
+  );
   return (
     <div className="chat-layout">
-      <aside className="conversation-sidebar">
-        <Button type="primary" icon={<PlusOutlined />} onClick={newChat} block>
-          新建会话
-        </Button>
-        <List
-          dataSource={conversations}
-          renderItem={(c) => (
-            <List.Item
-              onClick={() => setConversation(c)}
-              style={{ cursor: 'pointer' }}
-            >
-              {c.title || '新对话'}
-            </List.Item>
-          )}
-        />
-      </aside>
+      {screens.md ? (
+        <aside className="agent-sidebar" aria-label="对话 Agent">
+          {sidebar}
+        </aside>
+      ) : (
+        <Drawer
+          title="Agent"
+          placement="left"
+          size={300}
+          open={mobileSidebarOpen}
+          onClose={() => setMobileSidebarOpen(false)}
+          closable={{ 'aria-label': '关闭 Agent 列表' }}
+          styles={{ body: { padding: 14 } }}
+        >
+          {sidebar}
+        </Drawer>
+      )}
       <section className="conversation-main">
         <header className="conversation-header">
-          <Avatar icon={<RobotOutlined />} src={agent?.avatar || undefined} />
-          <span>{agent?.name || '选择 Agent'}</span>
+          {!screens.md && (
+            <button
+              type="button"
+              className="chat-icon-button"
+              aria-label="打开 Agent 列表"
+              onClick={() => {
+                details.setOpen(false);
+                setMobileSidebarOpen(true);
+              }}
+            >
+              <MenuOutlined />
+            </button>
+          )}
+          <div className="conversation-identity">
+            <Avatar
+              size={36}
+              src={session.agent?.avatar || undefined}
+              icon={<RobotOutlined />}
+            />
+            <div>
+              <strong>{session.agent?.name || '选择 Agent'}</strong>
+            </div>
+          </div>
+          <Button
+            type="text"
+            icon={<InfoCircleOutlined />}
+            aria-label={details.open ? '收起 Agent 详情' : '展开 Agent 详情'}
+            aria-expanded={details.open}
+            disabled={!session.agent}
+            onClick={() => {
+              setMobileSidebarOpen(false);
+              details.setOpen(!details.open);
+            }}
+          />
         </header>
-        {error && (
+        {(session.listError || session.sendError) && (
           <Alert
+            className="chat-error"
             type="error"
-            message={error}
-            closable
-            onClose={() => setError('')}
+            showIcon
+            title={session.listError || session.sendError}
+            action={
+              <Button
+                size="small"
+                onClick={session.listError ? session.retryList : session.retry}
+                disabled={session.sending}
+              >
+                重新加载记录
+              </Button>
+            }
           />
         )}
-        <div className="conversation-body">
-          {!conversation ? (
-            <div className="conversation-welcome">
-              <Spin spinning={!agent} />
-              <h1>{agent?.name || '选择 Agent 后开始对话'}</h1>
-              <p>{agent?.description}</p>
-            </div>
-          ) : (
-            messages.map((m) => (
-              <div key={m.id} className={`chat-message ${m.role}`}>
-                <b>{m.role === 'user' ? '你' : agent?.name || '助手'}</b>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
-              </div>
-            ))
-          )}
-        </div>
-        <div className="composer-area">
-          <Input.TextArea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onPressEnter={(e) => {
-              if (!e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            disabled={!conversation || sending}
-            placeholder="输入消息，按 Enter 发送"
-            autoSize={{ minRows: 1, maxRows: 5 }}
-          />
-          <Button
-            type="primary"
-            shape="circle"
-            icon={<ArrowUpOutlined />}
-            onClick={send}
-            disabled={!conversation || sending || !input.trim()}
-            loading={sending}
-          />
-        </div>
+        <MessageList
+          key={session.key}
+          agent={session.agent}
+          messages={session.messages}
+          loading={session.loading || session.listLoading}
+          error={session.loadError}
+          onRetry={session.retry}
+        />
+        {session.agent && session.agent.status !== 'active' && (
+          <p className="chat-unavailable">
+            此 Agent 已停用，可以查看历史消息。
+          </p>
+        )}
+        <MessageComposer
+          value={session.draft}
+          disabled={
+            !session.loaded ||
+            session.loading ||
+            session.agent?.status !== 'active' ||
+            Boolean(session.listError)
+          }
+          sending={session.sending}
+          creating={session.creating}
+          onChange={session.setDraft}
+          onSend={() => void session.send()}
+          onStop={session.stop}
+        />
       </section>
+      {session.agent &&
+        (screens.xl ? (
+          details.open && (
+            <aside className="agent-details-panel" aria-label="Agent 详情栏">
+              <AgentDetails
+                key={session.agent.id}
+                agent={session.agent}
+                userID={initialState?.currentUser?.id}
+                onEdit={() => setEditor({ agent: session.agent })}
+                onClose={() => details.setOpen(false)}
+              />
+            </aside>
+          )
+        ) : (
+          <Drawer
+            open={details.open}
+            onClose={() => details.setOpen(false)}
+            size={320}
+            closable={false}
+            styles={{ body: { padding: 0 } }}
+          >
+            <AgentDetails
+              key={session.agent.id}
+              agent={session.agent}
+              userID={initialState?.currentUser?.id}
+              onEdit={() => {
+                details.setOpen(false);
+                setEditor({ agent: session.agent });
+              }}
+              onClose={() => details.setOpen(false)}
+            />
+          </Drawer>
+        ))}
+      {editor && (
+        <AgentEditor
+          agent={editor.agent}
+          onCancel={() => setEditor(undefined)}
+          onSaved={(agent) => {
+            setEditor(undefined);
+            library.refresh();
+            session.updateAgent(agent);
+            if (!editor.agent) history.push(chatURL(agent.id));
+          }}
+        />
+      )}
     </div>
   );
 }

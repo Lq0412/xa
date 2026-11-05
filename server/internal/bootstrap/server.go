@@ -56,7 +56,8 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	})
 	agents := agentdefinition.NewService(agentdefinition.NewPGRepository(db))
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
-	agentHandler := &agenthttp.ManagementHandler{Agents: agents}
+	agentHandler := &agenthttp.ManagementHandler{Agents: agents, RuntimeModel: s.config.ChatModel}
+	libraryHandler := &agenthttp.LibraryHandler{Library: &agentdefinition.Library{DB: db}}
 	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL), ModelName: s.config.ChatModel}}
 
 	mux := http.NewServeMux()
@@ -68,6 +69,8 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("GET /api/v1/auth/me", frameworkhttp.Authenticate(resolver, http.HandlerFunc(authHandler.Me)))
 	mux.Handle("GET /api/v1/available-agents", frameworkhttp.OptionalPrincipal(resolver, http.HandlerFunc(agentHandler.Available)))
 	mux.Handle("GET /api/v1/agents", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.List)))
+	mux.Handle("GET /api/v1/agent-library", frameworkhttp.Authenticate(resolver, http.HandlerFunc(libraryHandler.List)))
+	mux.Handle("PUT /api/v1/agent-library/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(libraryHandler.Add)))
 	mux.Handle("POST /api/v1/agents", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Create)))
 	mux.Handle("GET /api/v1/agents/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Get)))
 	mux.Handle("GET /api/v1/agents/{agent_id}/config", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.GetConfig)))

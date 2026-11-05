@@ -12,7 +12,11 @@ import (
 )
 
 // ManagementHandler 暴露 Agent 配置管理接口；调用者身份始终从认证上下文读取。
-type ManagementHandler struct{ Agents definition.Service }
+type ManagementHandler struct {
+	Agents definition.Service
+	// RuntimeModel 是当前文本对话实际使用的模型名，不包含供应商凭证。
+	RuntimeModel string
+}
 
 type agentRequest struct {
 	AgentID           string                   `json:"agent_id"`
@@ -104,7 +108,10 @@ func (h *ManagementHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		writeAgentError(w, r, err)
 		return
 	}
-	frameworkhttp.WriteJSON(w, http.StatusOK, version)
+	frameworkhttp.WriteJSON(w, http.StatusOK, struct {
+		definition.AgentVersion
+		RuntimeModel string `json:"runtime_model,omitempty"`
+	}{version, h.RuntimeModel})
 }
 
 func (h *ManagementHandler) Save(w http.ResponseWriter, r *http.Request) {

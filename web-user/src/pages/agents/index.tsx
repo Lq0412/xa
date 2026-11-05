@@ -5,25 +5,17 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { history, Link, useLocation, useModel } from '@umijs/max';
-import {
-  Alert,
-  App,
-  Avatar,
-  Button,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Skeleton,
-  Tag,
-} from 'antd';
+import { Alert, Avatar, Button, Empty, Input, Skeleton, Tag } from 'antd';
 import { useEffect, useState } from 'react';
+import { AgentEditor } from '@/components/AgentEditor';
 import {
   type Agent,
-  createAgent,
+  addPublicAgent,
   errorMessage,
+  listAgentLibrary,
   listAgents,
 } from '@/services/api';
+import { chatURL } from '@/services/chat';
 
 /** Agent 发现与个人列表使用真实数据；创建后直接进入个人列表。 */
 export default function AgentsPage() {
@@ -37,19 +29,21 @@ export default function AgentsPage() {
   const [query, setQuery] = useState('');
   const [revision, setRevision] = useState(0);
   const [creating, setCreating] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [form] = Form.useForm();
-  const { message } = App.useApp();
+  const [adding, setAdding] = useState<string>();
+  const [added, setAdded] = useState(new Set<string>());
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision 是保存成功或手动重试时触发重新查询的显式版本号。
   useEffect(() => {
     let disposed = false;
     setLoading(true);
     setError('');
-    listAgents(mine)
-      .then((result) => {
-        if (!disposed)
+    Promise.all([
+      listAgents(mine),
+      user ? listAgentLibrary() : Promise.resolve({ agents: [] }),
+    ])
+      .then(([result, library]) => {
+        if (!disposed) {
+          setAdded(new Set(library.agents.map((agent) => agent.id)));
           setAgents(
             (result.agents ?? []).filter(
               (agent) =>
@@ -57,6 +51,7 @@ export default function AgentsPage() {
                 (agent.owner_id === user?.id && agent.visibility === 'private'),
             ),
           );
+        }
       })
       .catch((cause) => {
         if (!disposed) setError(errorMessage(cause));
@@ -79,35 +74,19 @@ export default function AgentsPage() {
       history.push('/login?redirect=/my-agents');
       return;
     }
-    form.resetFields();
-    setSaveError('');
     setCreating(true);
   };
   return (
     <div className="page-content agent-directory">
       <header className="page-heading">
         <div>
-          <span className="eyebrow">AGENTS</span>
           <h1>{mine ? '我的 Agent' : '发现 Agent'}</h1>
-          <p>
-            {mine
-              ? '为自己的任务创建助手，随时回来继续使用。'
-              : '浏览公开的 Agent，找到适合你的助手。'}
-          </p>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          创建 Agent
+          新建 Agent
         </Button>
       </header>
       <div className="directory-toolbar">
-        <div className="directory-tabs">
-          <Link to="/explore" className={!mine ? 'active' : ''}>
-            公共 Agent
-          </Link>
-          <Link to="/my-agents" className={mine ? 'active' : ''}>
-            我的 Agent
-          </Link>
-        </div>
         <Input
           aria-label="搜索 Agent"
           placeholder="搜索名称、介绍或标签"
@@ -146,19 +125,45 @@ export default function AgentsPage() {
                 <Tag>{agent.visibility === 'public' ? '公共' : '私有'}</Tag>
               </div>
               <h2>{agent.name}</h2>
-              <p>{agent.description || '暂未填写介绍'}</p>
+              {agent.description && <p>{agent.description}</p>}
               <div className="agent-tags">
                 {(agent.tags ?? []).map((tag) => (
                   <Tag key={tag}>{tag}</Tag>
                 ))}
               </div>
               <div className="agent-card-bottom">
-                <span>
-                  {agent.status === 'offline' ? '已停用' : '文本对话待开发'}
-                </span>
-                <Link to={`/chat?agent=${encodeURIComponent(agent.id)}`}>
-                  进入对话 <ArrowRightOutlined />
-                </Link>
+                {agent.status === 'offline' ? (
+                  <span>已停用</span>
+                ) : agent.visibility === 'public' && !added.has(agent.id) ? (
+                  <Button
+                    size="small"
+                    loading={adding === agent.id}
+                    disabled={Boolean(adding)}
+                    onClick={async () => {
+                      if (!user) {
+                        history.push(
+                          `/login?redirect=${encodeURIComponent(chatURL(agent.id))}`,
+                        );
+                        return;
+                      }
+                      setAdding(agent.id);
+                      try {
+                        await addPublicAgent(agent.id);
+                        history.push(chatURL(agent.id));
+                      } catch (cause) {
+                        setError(errorMessage(cause));
+                      } finally {
+                        setAdding(undefined);
+                      }
+                    }}
+                  >
+                    添加并对话
+                  </Button>
+                ) : (
+                  <Link to={chatURL(agent.id)}>
+                    进入对话 <ArrowRightOutlined />
+                  </Link>
+                )}
               </div>
             </article>
           ))}
@@ -168,112 +173,31 @@ export default function AgentsPage() {
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
-              <>
-                <h2>
-                  {query
-                    ? '没有匹配的 Agent'
-                    : mine
-                      ? '还没有自己的 Agent'
-                      : '暂无公共 Agent'}
-                </h2>
-                <p>
-                  {query
-                    ? '试试其他名称或标签。'
-                    : mine
-                      ? '创建一个 Agent，设置名称、介绍和提示词。'
-                      : '管理员开放 Agent 后，会显示在这里。你也可以创建自己的 Agent。'}
-                </p>
-              </>
+              <h2>
+                {query
+                  ? '没有匹配的 Agent'
+                  : mine
+                    ? '还没有自己的 Agent'
+                    : '暂无公共 Agent'}
+              </h2>
             }
           >
             <Button onClick={query ? () => setQuery('') : openCreate}>
-              {query ? '清除搜索' : '创建 Agent'}
+              {query ? '清除搜索' : '新建 Agent'}
             </Button>
           </Empty>
         </div>
       )}
-      <Modal
-        title="创建 Agent"
-        open={creating}
-        onCancel={() => {
-          if (!saving) setCreating(false);
-        }}
-        onOk={() => form.submit()}
-        okText="创建"
-        cancelText="取消"
-        confirmLoading={saving}
-        closable={!saving}
-        mask={{ closable: !saving }}
-        cancelButtonProps={{ disabled: saving }}
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          requiredMark={false}
-          onFinish={async (values: {
-            name: string;
-            description?: string;
-            prompt?: string;
-          }) => {
-            setSaving(true);
-            setSaveError('');
-            try {
-              await createAgent(
-                values.name.trim(),
-                values.description?.trim() || '',
-                values.prompt || '',
-              );
-              setCreating(false);
-              message.success('Agent 已创建');
-              setRevision((value) => value + 1);
-              history.push('/my-agents');
-            } catch (cause) {
-              setSaveError(errorMessage(cause));
-            } finally {
-              setSaving(false);
-            }
+      {creating && (
+        <AgentEditor
+          onCancel={() => setCreating(false)}
+          onSaved={() => {
+            setCreating(false);
+            setRevision((value) => value + 1);
+            history.push('/my-agents');
           }}
-        >
-          <p className="muted">新建 Agent 仅你自己可见。</p>
-          {saveError && (
-            <Alert
-              className="form-alert"
-              type="error"
-              showIcon
-              title={saveError}
-            />
-          )}
-          <Form.Item
-            name="name"
-            label="名称"
-            rules={[
-              {
-                required: true,
-                whitespace: true,
-                max: 120,
-                message: '请输入 1–120 个字符的名称',
-              },
-            ]}
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item
-            name="description"
-            label="介绍"
-            rules={[{ max: 2000, message: '介绍最多 2000 个字符' }]}
-          >
-            <Input.TextArea rows={3} />
-          </Form.Item>
-          <Form.Item
-            name="prompt"
-            label="系统提示词"
-            rules={[{ max: 20000, message: '提示词最多 20000 个字符' }]}
-          >
-            <Input.TextArea rows={5} placeholder="描述它的职责和回答方式" />
-          </Form.Item>
-          <p className="muted">模型、工具及知识库绑定待开发。</p>
-        </Form>
-      </Modal>
+        />
+      )}
     </div>
   );
 }

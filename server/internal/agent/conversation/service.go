@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -66,7 +67,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal) ([]Conversation, e
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Conversation
+	out := make([]Conversation, 0)
 	for rows.Next() {
 		var c Conversation
 		if err := rows.Scan(&c.ID, &c.WorkspaceID, &c.UserID, &c.AgentID, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
@@ -82,7 +83,7 @@ func (s *Service) Messages(ctx context.Context, p auth.Principal, id string) ([]
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Message
+	out := make([]Message, 0)
 	for rows.Next() {
 		var m Message
 		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Model, &m.PromptTokens, &m.CompletionTokens, &m.LatencyMS, &m.Status, &m.Error, &m.CreatedAt); err != nil {
@@ -145,9 +146,16 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if callErr != nil {
 		status = "failed"
 		errText = callErr.Error()
+		if errors.Is(ctx.Err(), context.Canceled) {
+			errText = "已停止生成"
+		}
 	}
+	// 浏览器停止接收时请求 context 已取消；最终记录使用有时限的独立 context 保存。
+	// 沿用 failed 状态，error 明确区分主动停止，刷新后仍能查看已经生成的部分。
+	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelSave()
 	assistantID := "msg_" + uuid.NewString()
-	_, dbErr := s.DB.Exec(ctx, `INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at) VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10)`, assistantID, id, answer.String(), s.ModelName, usage.PromptTokens, usage.CompletionTokens, latency, status, errText, time.Now().UTC())
+	_, dbErr := s.DB.Exec(saveCtx, `INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at) VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10)`, assistantID, id, answer.String(), s.ModelName, usage.PromptTokens, usage.CompletionTokens, latency, status, errText, time.Now().UTC())
 	if dbErr != nil {
 		return Message{}, usage, dbErr
 	}
@@ -156,9 +164,9 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		if len(r) > 30 {
 			r = r[:30]
 		}
-		_, dbErr = s.DB.Exec(ctx, `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2`, string(r), id)
+		_, dbErr = s.DB.Exec(saveCtx, `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2`, string(r), id)
 	} else {
-		_, dbErr = s.DB.Exec(ctx, `UPDATE conversations SET updated_at=now() WHERE id=$1`, id)
+		_, dbErr = s.DB.Exec(saveCtx, `UPDATE conversations SET updated_at=now() WHERE id=$1`, id)
 	}
 	if dbErr != nil {
 		return Message{}, usage, dbErr

@@ -1,7 +1,6 @@
-import { history } from '@umijs/max';
+import { request } from './http';
 
-/** 用户端会话独立保存，不向管理端 URL 传递令牌。 */
-export const TOKEN_KEY = 'xa.user.session';
+export { ApiError, errorMessage, TOKEN_KEY } from './http';
 
 /** 已认证用户；角色和归属只能由服务端确定。 */
 export type User = {
@@ -17,60 +16,85 @@ export type Agent = {
   description: string;
   avatar: string;
   owner_id: string;
+  owner_type: 'user' | 'system';
+  current_version_id: string;
+  is_default: boolean;
+  created_at: string;
   visibility: 'public' | 'private';
   status: 'active' | 'offline' | 'deleted';
   tags: string[] | null;
 };
-/** 保留状态码，供页面区分登录失效与服务错误。 */
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
 
-/** 统一处理真实请求，错误由调用页面展示；401 清除失效令牌并返回登录。 */
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-  checkSession = true,
-): Promise<T> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const response = await fetch(`/api/v1${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
+/** 不可变配置版本用于详情展示和编辑冲突检测，未编辑的配置原样保留。 */
+export type AgentVersion = {
+  id: string;
+  runtime_model?: string;
+  configuration: {
+    prompts: PromptSlot[] | null;
+    [key: string]: unknown;
+  };
+};
+
+/** 每个人格片段的启用状态和顺序均来自服务端。 */
+export type PromptSlot = {
+  name: string;
+  content: string;
+  enabled: boolean;
+  order: number;
+  variables: string[];
+  scope: string;
+};
+
+/** 已添加公共 Agent 与自有 Agent 由服务端按当前用户汇总。 */
+export const listAgentLibrary = (signal?: AbortSignal) =>
+  request<{ agents: Agent[] }>('/agent-library', { signal });
+
+/** 添加操作可重复调用，使用用户账号持久保存。 */
+export const addPublicAgent = (id: string, signal?: AbortSignal) =>
+  request<void>(`/agent-library/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    signal,
   });
-  if (!response.ok) {
-    const body = await response.json();
-    if (response.status === 401 && checkSession) {
-      localStorage.removeItem(TOKEN_KEY);
-      history.replace(
-        `/login?redirect=${encodeURIComponent(location.pathname + location.search)}`,
-      );
-    }
-    throw new ApiError(
-      response.status,
-      body.message || `请求失败（${response.status}）`,
-    );
-  }
-  return response.status === 204 ? (undefined as T) : response.json();
-}
 
-/** 将网络失败或明确业务错误转换成可见提示，程序错误继续抛出。 */
-export function errorMessage(cause: unknown): string {
-  if (cause instanceof ApiError) return cause.message;
-  if (cause instanceof TypeError && /fetch|network/i.test(cause.message))
-    return '无法连接服务，请检查网络后重试';
-  throw cause;
-}
+/** 当前版本包含真实提示词及当前对话模型，不在客户端猜测默认值。 */
+export const getAgentConfig = (id: string, signal?: AbortSignal) =>
+  request<AgentVersion>(`/agents/${encodeURIComponent(id)}/config`, { signal });
 
+/** 编辑复用现有版本保存接口，保留头像、标签和未在表单中展示的配置。 */
+export const saveAgent = (
+  agent: Agent,
+  version: AgentVersion,
+  values: { name: string; description: string; prompt: string },
+  promptIndex: number,
+) => {
+  const prompts = [...(version.configuration.prompts ?? [])];
+  if (promptIndex >= 0)
+    prompts[promptIndex] = { ...prompts[promptIndex], content: values.prompt };
+  else if (values.prompt.trim())
+    prompts.push({
+      name: 'system',
+      content: values.prompt,
+      enabled: true,
+      order: 0,
+      variables: [],
+      scope: 'agent',
+    });
+  return request<{ agent: Agent }>(
+    `/agents/${encodeURIComponent(agent.id)}/config`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        name: values.name,
+        description: values.description,
+        avatar: agent.avatar,
+        tags: agent.tags ?? [],
+        visibility: agent.visibility,
+        expected_version_id: version.id,
+        configuration: { ...version.configuration, prompts },
+      }),
+    },
+  );
+};
 /** 恢复当前身份。 */
 export const getMe = () => request<User>('/auth/me');
 /** 使用邮箱登录现有账号。 */
@@ -97,69 +121,8 @@ export const logout = () => request<void>('/auth/logout', { method: 'POST' });
 export const listAgents = (mine: boolean) =>
   request<{ agents: Agent[] | null }>(mine ? '/agents' : '/available-agents');
 /** 对话页按 ID 从后端读取可见 Agent，禁止相信 URL 中的名称或归属。 */
-export const getAgent = (id: string) =>
-  request<Agent>(`/agents/${encodeURIComponent(id)}`);
-export type Conversation = {
-  id: string;
-  agent_id: string;
-  title: string;
-  updated_at: string;
-};
-export type ChatMessage = {
-  id: string;
-  conversation_id: string;
-  role: string;
-  content: string;
-  status: string;
-};
-export const listConversations = () =>
-  request<{ conversations: Conversation[] }>('/conversations');
-export const createConversation = (agent_id: string) =>
-  request<Conversation>('/conversations', {
-    method: 'POST',
-    body: JSON.stringify({ agent_id }),
-  });
-export const listMessages = (id: string) =>
-  request<{ messages: ChatMessage[] }>(`/conversations/${id}/messages`);
-export async function streamMessage(
-  id: string,
-  content: string,
-  onDelta: (value: string) => void,
-  onDone: (value: unknown) => void,
-) {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const response = await fetch(
-    `/api/v1/conversations/${encodeURIComponent(id)}/messages`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ content }),
-    },
-  );
-  if (!response.ok || !response.body)
-    throw new ApiError(response.status, '发送消息失败');
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = '';
-  for (;;) {
-    const part = await reader.read();
-    buffer += part.value ?? '';
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() ?? '';
-    for (const chunk of chunks) {
-      const event = chunk.match(/^event: (.+)$/m)?.[1];
-      const data = chunk.match(/^data: (.+)$/m)?.[1];
-      if (!data) continue;
-      const parsed = JSON.parse(data);
-      if (event === 'delta') onDelta(parsed.delta);
-      else if (event === 'done') onDone(parsed);
-      else if (event === 'error') throw new Error(parsed.message);
-    }
-    if (part.done) break;
-  }
-}
+export const getAgent = (id: string, signal?: AbortSignal) =>
+  request<Agent>(`/agents/${encodeURIComponent(id)}`, { signal });
 /** 用户端创建仅限私有 Agent，平台资源凭证不进入表单。 */
 export const createAgent = (
   name: string,
