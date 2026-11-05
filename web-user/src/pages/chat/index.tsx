@@ -79,6 +79,7 @@ export default function ChatPage() {
         if (!detailsInline) details.setOpen(false);
         setEditor({ agent: session.agent });
       }}
+      memoryCue={session.memoryCue}
       onClose={detailsInline ? () => details.setOpen(false) : undefined}
       onSaved={saved}
     />

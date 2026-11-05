@@ -20,10 +20,18 @@ import {
   getAgentConfig,
   saveAgent,
 } from '@/services/api';
+import type { MemoryPolicyResult } from '@/services/memory';
+import {
+  MemoryCard,
+  type MemoryCue,
+  MemoryDetail,
+  useAgentMemory,
+} from './MemoryPanel';
 
 type Props = {
   agent: Agent;
   userID?: string;
+  memoryCue: MemoryCue;
   onEdit: () => void;
   onClose?: () => void;
   onSaved: (agent: Agent) => void;
@@ -50,6 +58,7 @@ function statusText(agent: Agent) {
 export function AgentDetails({
   agent,
   userID,
+  memoryCue,
   onEdit,
   onClose,
   onSaved,
@@ -69,7 +78,6 @@ export function AgentDetails({
   useEffect(() => {
     const controller = new AbortController();
     setError('');
-    setVersion(undefined);
     setEditing(false);
     getAgentConfig(agent.id, controller.signal)
       .then((result) => {
@@ -91,6 +99,30 @@ export function AgentDetails({
       });
     return () => controller.abort();
   }, [agent.id, agent.current_version_id, revision]);
+  const applyPolicy = (result: MemoryPolicyResult) => {
+    setVersion((current) =>
+      current
+        ? {
+            ...current,
+            id: result.current_version_id,
+            version_number: result.version_number,
+            configuration: {
+              ...current.configuration,
+              memory_policy: result.memory_policy,
+            },
+          }
+        : current,
+    );
+    onSaved({ ...agent, current_version_id: result.current_version_id });
+  };
+  const memory = useAgentMemory({
+    agentId: agent.id,
+    version,
+    editable,
+    cue: memoryCue,
+    onPolicySaved: applyPolicy,
+    onConflict: () => setRevision((value) => value + 1),
+  });
   const save = async (field: 'soul_md' | 'model') => {
     if (!version || !editable || saving) return;
     setSaving(true);
@@ -133,6 +165,14 @@ export function AgentDetails({
   const soulStyle = {
     background: 'linear-gradient(160deg, #ffe08a 0%, #fff6d0 100%)',
   };
+  if (memory.detailOpen) {
+    return (
+      <MemoryDetail
+        memory={memory}
+        onBack={() => memory.setDetailOpen(false)}
+      />
+    );
+  }
   if (editing && version) {
     return (
       <section
@@ -217,12 +257,12 @@ export function AgentDetails({
       className="relative flex h-full min-h-0 flex-col"
       aria-label="Agent 配置"
     >
-      {notice && (
+      {(memory.notice || notice) && (
         <p
           role="status"
           className="absolute top-14 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900 px-3 py-1.5 text-xs whitespace-nowrap text-white shadow-sm"
         >
-          {notice}
+          {memory.notice || notice}
         </p>
       )}
       {onClose && (
@@ -291,6 +331,21 @@ export function AgentDetails({
               <TabsTrigger value="about">详情</TabsTrigger>
             </TabsList>
             <TabsContent value="modules" className="mt-4">
+              {memory.error && (
+                <div
+                  className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800"
+                  role="alert"
+                >
+                  {memory.error}
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs underline"
+                    onClick={memory.refresh}
+                  >
+                    重新读取
+                  </button>
+                </div>
+              )}
               <div className="rounded-2xl border border-zinc-200 bg-white p-4 text-left">
                 <p className="line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-zinc-600">
                   {soul || '未设置'}
@@ -372,6 +427,7 @@ export function AgentDetails({
                     </Button>
                   )}
                 </div>
+                <MemoryCard memory={memory} date={date} />
               </div>
             </TabsContent>
             <TabsContent

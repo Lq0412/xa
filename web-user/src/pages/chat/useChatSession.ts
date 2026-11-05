@@ -11,6 +11,7 @@ import {
   streamMessage,
 } from '@/services/chat';
 import { errorMessage } from '@/services/http';
+import type { MemoryCue } from './MemoryPanel';
 
 /** 每个会话独立保存草稿和请求状态，流式回调始终按会话 ID 更新。 */
 type Session = {
@@ -57,6 +58,10 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState('');
   const [revision, setRevision] = useState(0);
+  const [memoryCue, setMemoryCue] = useState<MemoryCue>({
+    agentId: '',
+    seq: 0,
+  });
   const controllers = useRef(new Map<string, AbortController>());
   const mounted = useRef(true);
 
@@ -213,6 +218,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     )
       return;
     const controller = new AbortController();
+    const turnAgentID = current.agent.id;
     let targetKey = key;
     controllers.current.set(`send:${key}`, controller);
     // 同步更新缓存，连续按 Enter 也只能发起一次请求。
@@ -302,6 +308,8 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         },
       );
       completed = true;
+      // 抽取在回复落库后异步进行，详情栏稍后自己刷新一次。
+      setMemoryCue((cue) => ({ agentId: turnAgentID, seq: cue.seq + 1 }));
       update(targetKey, (state) => ({
         messages: state.messages.map((message) =>
           message.id === assistantID
@@ -406,5 +414,6 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     retry: () => void load(),
     retryList: () => setRevision((value) => value + 1),
     loadOlder,
+    memoryCue,
   };
 }
