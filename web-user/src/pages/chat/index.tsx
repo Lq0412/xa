@@ -19,6 +19,16 @@ function oneLine(value: string) {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+/** 对话区只展示短句；原始响应放进可展开的详情，避免整段 JSON 铺在页面上。 */
+function friendlyError(raw: string) {
+  if (/401|invalid_api_key|api key/i.test(raw))
+    return '模型调用失败（401 Key 无效）';
+  if (raw.includes('无法连接服务')) return '无法连接服务';
+  const line = raw.split('\n')[0]?.trim() ?? '';
+  if (!line || line.length > 42 || line.includes('{')) return '发送失败';
+  return line;
+}
+
 /** 四栏分别负责导航、Agent 选择、消息和配置；窄屏使用 dialog 隔离焦点。 */
 export default function ChatPage() {
   const location = useLocation();
@@ -73,10 +83,7 @@ export default function ChatPage() {
       onSaved={saved}
     />
   );
-  const openCreate = () => {
-    setMobileSidebarOpen(false);
-    setEditor({});
-  };
+  const chatError = session.listError || session.sendError;
   return (
     <div className="flex h-full min-h-0 flex-1">
       {sidebarInline ? (
@@ -140,22 +147,6 @@ export default function ChatPage() {
           </div>
         </div>
         <div className="flex min-h-0 flex-1 flex-col pt-14">
-          {(session.listError || session.sendError) && (
-            <div
-              className="mx-auto mb-2 flex w-full max-w-[760px] shrink-0 items-center justify-between gap-3 rounded-xl bg-rose-50 px-3.5 py-3 text-sm text-rose-800"
-              role="alert"
-            >
-              {session.listError || session.sendError}
-              <button
-                type="button"
-                className="shrink-0 underline"
-                disabled={session.sending}
-                onClick={session.listError ? session.retryList : session.retry}
-              >
-                重新加载
-              </button>
-            </div>
-          )}
           <MessageList
             key={session.key}
             agent={session.agent}
@@ -186,6 +177,34 @@ export default function ChatPage() {
               此 Agent 已停用，可以查看历史消息。
             </p>
           )}
+          {chatError && (
+            <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-2">
+              <div
+                className="rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-900"
+                role="alert"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p>{friendlyError(chatError)}</p>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-full bg-white px-3 py-1 text-xs text-rose-800"
+                    disabled={session.sending}
+                    onClick={
+                      session.listError ? session.retryList : session.retry
+                    }
+                  >
+                    重试
+                  </button>
+                </div>
+                <details className="mt-2 text-xs text-rose-800/80">
+                  <summary className="cursor-pointer">错误详情</summary>
+                  <p className="mt-2 break-all whitespace-pre-wrap">
+                    {chatError}
+                  </p>
+                </details>
+              </div>
+            </div>
+          )}
           <MessageComposer
             value={session.draft}
             disabled={
@@ -199,7 +218,6 @@ export default function ChatPage() {
             onChange={session.setDraft}
             onSend={() => void session.send()}
             onStop={session.stop}
-            onCreate={openCreate}
           />
         </div>
       </section>

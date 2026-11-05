@@ -9,7 +9,6 @@ type Props = {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onCreate: () => void;
 };
 
 /** 输入区只管理草稿交互，发送状态由会话状态层提供。 */
@@ -21,7 +20,6 @@ export function MessageComposer({
   onChange,
   onSend,
   onStop,
-  onCreate,
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   // 草稿改变后按真实内容测量，最多占用六行左右的高度。
@@ -34,16 +32,7 @@ export function MessageComposer({
   }, [value]);
   return (
     <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-4">
-      <div className="message-composer flex items-end gap-2 rounded-[28px] border border-zinc-200 bg-white px-2 py-2 shadow-[0_8px_30px_rgba(24,24,27,0.08)]">
-        <button
-          type="button"
-          className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-100"
-          aria-label="添加"
-          title="新建 Agent"
-          onClick={onCreate}
-        >
-          <Icon name="plus" size={18} />
-        </button>
+      <div className="message-composer flex items-end gap-2 rounded-[28px] border border-zinc-200 bg-white px-3 py-2 shadow-[0_8px_30px_rgba(24,24,27,0.08)]">
         <textarea
           ref={ref}
           aria-label="消息"

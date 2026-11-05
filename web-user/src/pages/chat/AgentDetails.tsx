@@ -3,6 +3,13 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import { Icon } from '@/components/Icon';
 import { Markdown } from '@/components/Markdown';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -143,7 +150,11 @@ export function AgentDetails({
             )}
           </div>
           <h2 className="mt-4 text-xl font-medium">{agent.name}</h2>
-          <p className="mt-1 text-xs text-zinc-500">{statusText(agent)}</p>
+          {agent.description.trim() && (
+            <p className="mt-1 line-clamp-2 max-w-full px-2 text-xs leading-5 text-zinc-500">
+              {agent.description}
+            </p>
+          )}
         </div>
         {error && (
           <div
@@ -286,22 +297,25 @@ export function AgentDetails({
                     {model}
                   </span>
                   {editable && (
-                    <select
-                      className="mt-2 w-full rounded-lg border border-black/10 bg-white/80 px-2 py-1 text-xs"
-                      aria-label="模型"
-                      disabled={saving}
+                    <Select
                       value={model}
-                      onChange={(event) => {
-                        setModel(event.target.value);
+                      disabled={saving}
+                      onValueChange={(value) => {
+                        setModel(value);
                         setNotice('');
                       }}
                     >
-                      {version.available_models.map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="mt-2" aria-label="模型">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {version.available_models.map((name) => (
+                          <SelectItem key={name} value={name}>
+                            {name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   )}
                   <span className="mt-auto pt-4 text-[11px] text-zinc-600">
                     {date}
