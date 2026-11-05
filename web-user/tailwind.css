@@ -1,0 +1,256 @@
+@import "tailwindcss";
+
+@source "./src";
+
+@theme {
+  --font-sans:
+    Inter, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei",
+    ui-sans-serif, system-ui, sans-serif;
+  --color-accent: #f5c518;
+  --color-accent-foreground: #3a2a00;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    background: #fff;
+    color: #18181b;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  :focus-visible {
+    outline: 2px solid #f5c518;
+    outline-offset: 2px;
+  }
+}
+
+/* 图标组用绝对定位保证中心与视口中心重合；矮屏改回文档流，避免和底部按钮重叠。 */
+.rail-links,
+.rail-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.rail-links {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  transform: translateY(-50%);
+}
+
+.rail-bottom {
+  margin-top: auto;
+  padding-bottom: 12px;
+}
+
+.rail-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  color: #71717a;
+}
+
+.rail-link:hover,
+.rail-link[aria-current="page"] {
+  background: #fff;
+  color: #18181b;
+}
+
+.markdown {
+  min-width: 0;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote,
+.markdown table {
+  margin: 0 0 12px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 20px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.markdown h1 {
+  font-size: 1.25rem;
+}
+
+.markdown h2 {
+  font-size: 1.125rem;
+}
+
+.markdown h3,
+.markdown h4 {
+  font-size: 1rem;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.25rem;
+}
+
+.markdown ul {
+  list-style: disc;
+}
+
+.markdown ol {
+  list-style: decimal;
+}
+
+.markdown li {
+  margin: 4px 0;
+}
+
+.markdown a {
+  color: #3f3f46;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.markdown blockquote {
+  border-left: 2px solid #d4d4d8;
+  padding-left: 12px;
+  color: #71717a;
+}
+
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid #e4e4e7;
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.markdown :not(pre) > code {
+  border-radius: 4px;
+  background: #f4f4f5;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdown pre {
+  margin: 0;
+  overflow: auto;
+  background: transparent;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.markdown .hljs {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.markdown hr {
+  border: 0;
+  border-top: 1px solid #e4e4e7;
+  margin: 16px 0;
+}
+
+.markdown input[type="checkbox"] {
+  width: auto;
+}
+
+.streaming-caret {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  margin-top: 6px;
+  border-radius: 1px;
+  background: #3f3f46;
+  animation: chat-pulse 0.9s steps(1) infinite;
+}
+
+@keyframes chat-pulse {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (max-height: 500px) {
+  .rail-links {
+    position: static;
+    transform: none;
+  }
+
+  .rail-links,
+  .rail-bottom {
+    gap: 2px;
+  }
+
+  .rail-bottom {
+    padding-bottom: 4px;
+  }
+
+  .rail-link {
+    width: 32px;
+    height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-caret {
+    animation: none;
+  }
+}

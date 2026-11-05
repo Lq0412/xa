@@ -11,6 +11,7 @@ export default defineConfig({
   initialState: {},
   antd: false,
   mock: false,
+  tailwindcss: {},
   define: {
     'process.env.XA_ADMIN_WEB_URL':
       process.env.XA_ADMIN_WEB_URL ||

@@ -1,20 +1,27 @@
-import type { Agent } from '@/services/api';
+import { cn } from '@/lib/utils';
 
-/** 只展示真实头像；没有头像时使用名称首字，不请求虚构的图片资源。 */
+/** 当前所有 Agent 共用这一张默认头像，不读取后端 avatar 字段。 */
 export function AgentAvatar({
-  agent,
-  large = false,
+  size = 32,
+  className,
 }: {
-  agent: Agent;
-  large?: boolean;
+  size?: number;
+  className?: string;
 }) {
   return (
-    <span className={`agent-avatar ${large ? 'large' : ''}`} aria-hidden="true">
-      {agent.avatar ? (
-        <img src={agent.avatar} alt="" />
-      ) : (
-        Array.from(agent.name)[0]
+    <span
+      className={cn(
+        'agent-avatar inline-flex shrink-0 overflow-hidden rounded-full bg-[#fff6d0]',
+        className,
       )}
+      style={{ width: size, height: size }}
+      aria-hidden="true"
+    >
+      <img
+        src="/default-agent-avatar.png"
+        alt=""
+        className="h-full w-full object-cover"
+      />
     </span>
   );
 }

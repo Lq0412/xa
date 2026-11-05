@@ -2,6 +2,10 @@ import { useEffect, useState } from 'react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { Icon } from '@/components/Icon';
 import { Markdown } from '@/components/Markdown';
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   type Agent,
   type AgentVersion,
@@ -17,6 +21,23 @@ type Props = {
   onClose?: () => void;
   onSaved: (agent: Agent) => void;
 };
+
+function cardDate(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (item: number) => String(item).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}.${pad(date.getDate())}.${String(date.getFullYear()).slice(2)}`;
+}
+
+function statusText(agent: Agent) {
+  const role = agent.is_primary
+    ? '主 Agent'
+    : agent.visibility === 'public'
+      ? '公共 Agent'
+      : '私有 Agent';
+  return agent.status === 'active' ? role : `${role} · 已停用`;
+}
 
 /** 默认阅读配置，编辑时只打开对应模块；保存使用不可变版本与乐观锁。 */
 export function AgentDetails({
@@ -75,46 +96,64 @@ export function AgentDetails({
       setSaving(false);
     }
   };
+  const openSoul = () => {
+    setEditing(true);
+    setPreview(false);
+    setNotice('');
+  };
+  const date = cardDate(agent.created_at);
+  const soulCard = (
+    <>
+      <span className="text-sm font-medium">SOUL</span>
+      <span className="version-label mt-1 text-xs text-zinc-800">{`v${version?.version_number ?? ''}`}</span>
+      <span className="mt-auto pt-6 text-[11px] text-zinc-700">{date}</span>
+    </>
+  );
+  const soulStyle = {
+    background: 'linear-gradient(160deg, #ffe08a 0%, #fff6d0 100%)',
+  };
   return (
-    <section className="agent-details-content" aria-label="Agent 配置">
+    <section
+      className="relative flex h-full min-h-0 flex-col"
+      aria-label="Agent 配置"
+    >
       {onClose && (
-        <header className="agent-details-header">
-          <span>配置</span>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={onClose}
-            aria-label="收起 Agent 配置"
-          >
-            <Icon name="close" />
-          </button>
-        </header>
+        <button
+          type="button"
+          className="absolute top-3 right-3 z-10 flex size-8 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-100"
+          onClick={onClose}
+          aria-label="收起 Agent 配置"
+        >
+          <Icon name="close" size={18} />
+        </button>
       )}
-      <div className="agent-details-scroll">
-        <div className="details-identity">
-          <AgentAvatar agent={agent} large />
-          <h2>{agent.name}</h2>
-          <span className="muted">
-            {agent.is_primary
-              ? '主 Agent'
-              : agent.visibility === 'public'
-                ? '公共 Agent'
-                : '私有 Agent'}
-          </span>
-          {agent.description && <p>{agent.description}</p>}
-          {editable && (
-            <button type="button" className="button quiet" onClick={onEdit}>
-              <Icon name="edit" size={15} />
-              编辑基本信息
-            </button>
-          )}
+      <div className="min-h-0 flex-1 overflow-auto px-5 pt-8 pb-6">
+        <div className="flex flex-col items-center text-center">
+          <div className="relative">
+            <AgentAvatar size={96} />
+            {editable && (
+              <button
+                type="button"
+                className="absolute -right-1 -bottom-1 flex size-8 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"
+                aria-label="编辑基本信息"
+                onClick={onEdit}
+              >
+                <Icon name="edit" size={14} />
+              </button>
+            )}
+          </div>
+          <h2 className="mt-4 text-xl font-medium">{agent.name}</h2>
+          <p className="mt-1 text-xs text-zinc-500">{statusText(agent)}</p>
         </div>
         {error && (
-          <div className="error-banner" role="alert">
+          <div
+            className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800"
+            role="alert"
+          >
             {error}
             <button
               type="button"
-              className="text-button"
+              className="shrink-0 text-xs underline"
               disabled={saving}
               onClick={() => setRevision((value) => value + 1)}
             >
@@ -124,36 +163,28 @@ export function AgentDetails({
         )}
         {!version ? (
           !error && (
-            <p className="muted" role="status">
-              正在读取配置…
-            </p>
+            <div className="mt-6 space-y-3" role="status">
+              <span className="sr-only">正在读取配置</span>
+              <Skeleton className="h-24 w-full" />
+              <div className="grid grid-cols-2 gap-3">
+                <Skeleton className="h-36" />
+                <Skeleton className="h-36" />
+              </div>
+            </div>
           )
         ) : (
-          <div className="agent-modules">
-            <section className="agent-module">
-              <header className="module-heading">
-                <h3>SOUL.md</h3>
-                <span className="version-label">v{version.version_number}</span>
-                {editable && !editing && (
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label="编辑 SOUL.md"
-                    onClick={() => {
-                      setEditing(true);
-                      setPreview(false);
-                      setNotice('');
-                    }}
-                  >
-                    <Icon name="edit" size={16} />
-                  </button>
-                )}
-              </header>
+          <Tabs defaultValue="modules" className="mt-6">
+            <TabsList>
+              <TabsTrigger value="modules">模块</TabsTrigger>
+              <TabsTrigger value="about">详情</TabsTrigger>
+            </TabsList>
+            <TabsContent value="modules" className="mt-4">
               {editing ? (
-                <div className="soul-editing">
-                  <div className="editor-tabs">
+                <div className="rounded-2xl border border-zinc-200 p-3 text-left">
+                  <div className="mb-2 flex gap-1">
                     <button
                       type="button"
+                      className={`rounded-lg px-2.5 py-1 text-xs ${preview ? 'text-zinc-500' : 'bg-zinc-100 text-zinc-900'}`}
                       aria-pressed={!preview}
                       onClick={() => setPreview(false)}
                     >
@@ -161,6 +192,7 @@ export function AgentDetails({
                     </button>
                     <button
                       type="button"
+                      className={`rounded-lg px-2.5 py-1 text-xs ${preview ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}
                       aria-pressed={preview}
                       onClick={() => setPreview(true)}
                     >
@@ -168,12 +200,12 @@ export function AgentDetails({
                     </button>
                   </div>
                   {preview ? (
-                    <div className="soul-preview">
+                    <div className="soul-preview text-sm text-zinc-700">
                       <Markdown>{soul}</Markdown>
                     </div>
                   ) : (
                     <textarea
-                      className="soul-editor"
+                      className="min-h-28 w-full rounded-xl border border-zinc-200 p-3 font-mono text-[13px] leading-6 outline-none"
                       aria-label="SOUL.md"
                       maxLength={20000}
                       rows={10}
@@ -182,10 +214,10 @@ export function AgentDetails({
                       onChange={(event) => setSoul(event.target.value)}
                     />
                   )}
-                  <div className="form-actions">
-                    <button
-                      type="button"
-                      className="button quiet"
+                  <div className="mt-3 flex justify-end gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
                       disabled={saving}
                       onClick={() => {
                         setSoul(version.configuration.soul_md);
@@ -193,77 +225,141 @@ export function AgentDetails({
                       }}
                     >
                       取消
-                    </button>
-                    <button
-                      type="button"
-                      className="button primary"
+                    </Button>
+                    <Button
+                      size="sm"
                       disabled={
                         saving || soul === version.configuration.soul_md
                       }
                       onClick={() => void save('soul_md')}
                     >
                       {saving ? '保存中…' : '保存'}
-                    </button>
+                    </Button>
                   </div>
                 </div>
-              ) : soul ? (
-                <div className="soul-preview">
-                  <Markdown>{soul}</Markdown>
-                </div>
               ) : (
-                <p className="muted">未设置</p>
-              )}
-            </section>
-            <section className="agent-module">
-              <header className="module-heading">
-                <h3>模型</h3>
-              </header>
-              {editable ? (
-                <>
-                  <select
-                    aria-label="模型"
-                    disabled={saving}
-                    value={model}
-                    onChange={(event) => {
-                      setModel(event.target.value);
-                      setNotice('');
-                    }}
-                  >
-                    {version.available_models.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                  {model !== version.configuration.model && (
-                    <div className="form-actions">
-                      <button
-                        type="button"
-                        className="button primary"
-                        disabled={saving}
-                        onClick={() => void save('model')}
-                      >
-                        保存
-                      </button>
-                    </div>
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4 text-left">
+                  <p className="line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-zinc-600">
+                    {soul || '未设置'}
+                  </p>
+                  {editable && (
+                    <button
+                      type="button"
+                      className="mt-3 text-sm text-zinc-800 underline underline-offset-4"
+                      aria-label="编辑 SOUL.md"
+                      onClick={openSoul}
+                    >
+                      编辑
+                    </button>
                   )}
-                </>
-              ) : (
-                <p className="model-value">{model}</p>
+                </div>
               )}
-            </section>
-            <p className="save-notice" role="status">
-              {notice}
-            </p>
-          </div>
-        )}
-        {agent.created_at && (
-          <p className="created-at">
-            创建于{' '}
-            <time dateTime={agent.created_at}>
-              {new Date(agent.created_at).toLocaleDateString('zh-CN')}
-            </time>
-          </p>
+              <Separator className="my-4" />
+              <div className="grid grid-cols-2 items-stretch gap-3">
+                {editable ? (
+                  <button
+                    type="button"
+                    className="flex min-h-36 flex-col rounded-[20px] p-3 text-left"
+                    style={soulStyle}
+                    onClick={openSoul}
+                    disabled={saving}
+                  >
+                    {soulCard}
+                  </button>
+                ) : (
+                  <div
+                    className="flex min-h-36 flex-col rounded-[20px] p-3 text-left"
+                    style={soulStyle}
+                  >
+                    {soulCard}
+                  </div>
+                )}
+                <div
+                  className="flex min-h-36 flex-col rounded-[20px] p-3 text-left"
+                  style={{
+                    background:
+                      'linear-gradient(160deg, #d7e6ff 0%, #f4f8ff 100%)',
+                  }}
+                >
+                  <span className="text-sm font-medium">模型</span>
+                  <span className="mt-1 truncate text-xs text-zinc-700">
+                    {model}
+                  </span>
+                  {editable && (
+                    <select
+                      className="mt-2 w-full rounded-lg border border-black/10 bg-white/80 px-2 py-1 text-xs"
+                      aria-label="模型"
+                      disabled={saving}
+                      value={model}
+                      onChange={(event) => {
+                        setModel(event.target.value);
+                        setNotice('');
+                      }}
+                    >
+                      {version.available_models.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <span className="mt-auto pt-4 text-[11px] text-zinc-600">
+                    {date}
+                  </span>
+                  {editable && model !== version.configuration.model && (
+                    <Button
+                      className="mt-2"
+                      size="sm"
+                      disabled={saving}
+                      onClick={() => void save('model')}
+                    >
+                      保存
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {notice && (
+                <p role="status" className="mt-3 text-xs text-emerald-700">
+                  {notice}
+                </p>
+              )}
+            </TabsContent>
+            <TabsContent
+              value="about"
+              className="mt-4 space-y-4 text-left text-sm"
+            >
+              <div>
+                <p className="text-xs text-zinc-400">简介</p>
+                <p className="mt-1 leading-6 text-zinc-700">
+                  {agent.description || '未填写'}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-zinc-400">状态</p>
+                <p className="mt-1 text-zinc-700">{statusText(agent)}</p>
+              </div>
+              {agent.created_at && (
+                <p className="text-xs text-zinc-400">
+                  创建于{' '}
+                  <time dateTime={agent.created_at}>
+                    {new Date(agent.created_at).toLocaleDateString('zh-CN')}
+                  </time>
+                </p>
+              )}
+              {(agent.tags ?? []).length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {(agent.tags ?? []).map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
         )}
       </div>
     </section>

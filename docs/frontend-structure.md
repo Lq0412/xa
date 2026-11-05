@@ -15,7 +15,7 @@
 
 ## 用户端 `web-user/`
 
-使用 React 19、Umi Max 4、原生 HTML、独立 CSS 和 Lucide 图标，不启用 Ant Design。四栏为图标导航、我的 Agent 列表、消息和输入区、可收起的配置栏。窄屏使用原生 dialog 显示列表与配置，提供焦点约束及 Escape 关闭。
+使用 React 19、Umi Max 4、Tailwind CSS、shadcn/ui 和 Lucide 图标，不启用 Ant Design。四栏为图标导航、我的 Agent 列表、消息和输入区、可收起的配置栏。窄屏使用 dialog 显示列表与配置，提供焦点约束及 Escape 关闭。
 
 | 路由 | 模块 | 当前状态 |
 | --- | --- | --- |
@@ -26,7 +26,7 @@
 
 公共列表为空时展示真实空状态，不创建演示 Agent。注册自动创建不可删除的主 Agent，创建其他私有 Agent 后可直接进入对话。普通用户可在配置栏编辑自己的名称、简介、SOUL 和模型；公共 Agent 在用户端只读。管理员继续在管理端维护有权管理的 Agent。
 
-对话界面按 `AgentSidebar`、`MessageList`、`MessageComposer`、`AgentDetails` 拆分，页面只负责组合。SOUL 默认显示 Markdown，点击编辑后可切换源文与预览；SOUL 和模型分别保存新版本，公共 Agent 只读。`useChatSession` 按会话 ID 保存消息、草稿和请求状态，URL 决定当前选择。`services/chat.ts` 处理聊天接口和 SSE 解析，`services/http.ts` 统一认证和错误；聊天样式集中在 `pages/chat/chat.css`。
+对话界面按 `AgentSidebar`、`MessageList`、`MessageComposer`、`AgentDetails` 拆分，页面只负责组合。SOUL 默认显示 Markdown，点击编辑后可切换源文与预览；SOUL 和模型分别保存新版本，公共 Agent 只读。`useChatSession` 按会话 ID 保存消息、草稿和请求状态，URL 决定当前选择。`services/chat.ts` 处理聊天接口和 SSE 解析，`services/http.ts` 统一认证和错误；样式使用 Tailwind，入口是 `tailwind.css`。
 
 会话历史、个人记忆、学习反馈和账号设置的独立页面与入口已移除，旧地址返回 404；当前账号身份和退出登录保留在导航中。
 
