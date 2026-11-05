@@ -16,7 +16,7 @@ type Segment struct {
 	EstimatedTokens int    `json:"estimated_tokens"`
 }
 
-// ContextModule 是记忆、知识库和工具说明的读取边界；本次不注册这些模块。
+// ContextModule 是记忆、知识库和工具说明的读取边界。
 type ContextModule interface {
 	Enabled() bool
 	Context(context.Context) ([]string, error)
@@ -82,6 +82,11 @@ func (b Builder) Build(ctx context.Context, input Input) (Result, error) {
 
 // 中文按约一字一个 token、ASCII 按约四字一个 token 估算，保留各段独立开销。
 func estimateTokens(content string) int {
+	return EstimateTokens(content)
+}
+
+// EstimateTokens 供记忆预算与 Builder 共用相同估算口径。
+func EstimateTokens(content string) int {
 	ascii, other := 0, 0
 	for _, r := range content {
 		if r <= unicode.MaxASCII {

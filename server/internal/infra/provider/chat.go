@@ -38,12 +38,22 @@ func NewBailian(cfgAPIKey, baseURL string) *BailianModel {
 }
 
 func (m *BailianModel) Stream(ctx context.Context, model string, messages []Message, delta func(string) error) (Usage, error) {
+	return m.stream(ctx, model, messages, nil, delta)
+}
+
+// StreamStructured 使用供应商严格 JSON Schema 模式，仍关闭思考。
+func (m *BailianModel) StreamStructured(ctx context.Context, model string, messages []Message, schema json.RawMessage, delta func(string) error) (Usage, error) {
+	return m.stream(ctx, model, messages, map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "memory_operations", "strict": true, "schema": schema}}, delta)
+}
+
+func (m *BailianModel) stream(ctx context.Context, model string, messages []Message, format any, delta func(string) error) (Usage, error) {
 	body := struct {
 		Model          string    `json:"model"`
 		Messages       []Message `json:"messages"`
 		Stream         bool      `json:"stream"`
 		EnableThinking bool      `json:"enable_thinking"`
-	}{model, messages, true, false}
+		ResponseFormat any       `json:"response_format,omitempty"`
+	}{model, messages, true, false, format}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return Usage{}, fmt.Errorf("编码模型请求: %w", err)

@@ -104,6 +104,9 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 }
 
 func (s *ServiceImpl) Validate(_ context.Context, actor auth.Principal, input SaveInput) error {
+	if _, err := ParseMemoryPolicy(input.Configuration.MemoryPolicy); err != nil {
+		return err
+	}
 	if actor.UserID == "" || actor.WorkspaceID == "" {
 		return auth.ErrUnauthenticated
 	}

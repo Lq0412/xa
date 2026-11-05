@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"linq-bs/server/internal/agent/definition"
+	"linq-bs/server/internal/agent/memory"
 	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/infra/provider"
@@ -46,6 +47,7 @@ type Service struct {
 	Agents        definition.Service
 	Model         provider.ChatModel
 	AllowedModels []string
+	Memory        *memory.Service
 }
 
 func (s *Service) Create(ctx context.Context, p auth.Principal, agentID string) (Conversation, error) {
@@ -200,7 +202,15 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	for _, m := range history {
 		historyMessages = append(historyMessages, provider.Message{Role: m.Role, Content: m.Content})
 	}
-	contextResult, err := (runtime.Builder{}).Build(ctx, runtime.Input{
+	policy, err := definition.ParseMemoryPolicy(version.Configuration.MemoryPolicy)
+	if err != nil {
+		return Message{}, provider.Usage{}, err
+	}
+	builder := runtime.Builder{}
+	if s.Memory != nil {
+		builder.Memory = memory.Module{Service: s.Memory, Actor: p, AgentID: a.ID, Current: content, Policy: policy}
+	}
+	contextResult, err := builder.Build(ctx, runtime.Input{
 		PlatformRules: "你是 xa 平台中的 Agent。遵守用户权限和隐私边界，清晰回答当前问题。",
 		SoulMD:        version.Configuration.SoulMD, History: historyMessages, Current: content,
 	})
@@ -238,7 +248,7 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelSave()
 	assistantID := "msg_" + uuid.NewString()
-	_, dbErr := s.DB.Exec(saveCtx, `INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at,context_segments,agent_version_id) VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, assistantID, id, answer.String(), modelName, usage.PromptTokens, usage.CompletionTokens, latency, status, errText, time.Now().UTC(), segments, version.ID)
+	_, dbErr := tx.Exec(saveCtx, `INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at,context_segments,agent_version_id) VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, assistantID, id, answer.String(), modelName, usage.PromptTokens, usage.CompletionTokens, latency, status, errText, time.Now().UTC(), segments, version.ID)
 	if dbErr != nil {
 		return Message{}, usage, dbErr
 	}
@@ -247,12 +257,20 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		if len(r) > 30 {
 			r = r[:30]
 		}
-		_, dbErr = s.DB.Exec(saveCtx, `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2`, string(r), id)
+		_, dbErr = tx.Exec(saveCtx, `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2`, string(r), id)
 	} else {
-		_, dbErr = s.DB.Exec(saveCtx, `UPDATE conversations SET updated_at=now() WHERE id=$1`, id)
+		_, dbErr = tx.Exec(saveCtx, `UPDATE conversations SET updated_at=now() WHERE id=$1`, id)
 	}
 	if dbErr != nil {
 		return Message{}, usage, dbErr
+	}
+	if s.Memory != nil && policy.Enabled && callErr == nil {
+		if err := s.Memory.EnqueueTx(saveCtx, tx, userID); err != nil {
+			return Message{}, usage, err
+		}
+	}
+	if err := tx.Commit(saveCtx); err != nil {
+		return Message{}, usage, err
 	}
 	return Message{ID: assistantID, ConversationID: id, Role: "assistant", Content: answer.String(), Model: modelName, PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, LatencyMS: latency, Status: status, Error: errText}, usage, callErr
 }

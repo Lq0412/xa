@@ -24,7 +24,7 @@ func run(ctx context.Context, name, address string, cfg config.Config, logger *s
 
 type handlerFactory func(*pgxpool.Pool, *redisclient.Client, []httpserver.Check) (http.Handler, error)
 
-func runWithHandler(ctx context.Context, name, address string, cfg config.Config, logger *slog.Logger, factory handlerFactory) (runErr error) {
+func runWithHandler(ctx context.Context, name, address string, cfg config.Config, logger *slog.Logger, factory handlerFactory, workers ...func(context.Context, *pgxpool.Pool)) (runErr error) {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -67,6 +67,16 @@ func runWithHandler(ctx context.Context, name, address string, cfg config.Config
 		return fmt.Errorf("监听 %s 地址失败: %w", name, err)
 	}
 	cancel()
+	// 后台任务先停止并退出，再由外层 defer 关闭数据库连接。
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, worker := range workers {
+			worker(workerCtx, db)
+		}
+	}()
+	defer func() { stopWorkers(); <-done }()
 	logger.Info("进程已启动", "process", name, "address", listener.Addr().String())
 	handler = httpserver.WithRequestID(handler)
 	return httpserver.Serve(ctx, listener, handler, cfg.ShutdownTimeout)

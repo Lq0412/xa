@@ -9,6 +9,7 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 	"linq-bs/server/internal/agent/conversation"
 	agentdefinition "linq-bs/server/internal/agent/definition"
+	"linq-bs/server/internal/agent/memory"
 	agenthttp "linq-bs/server/internal/agent/transport/http"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/config"
@@ -58,9 +59,18 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
 	agentHandler := &agenthttp.ManagementHandler{Agents: agents, AllowedModels: s.config.ChatModels}
 	libraryHandler := &agenthttp.LibraryHandler{Library: &agentdefinition.Library{DB: db}}
-	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL), AllowedModels: s.config.ChatModels}}
+	model := provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL)
+	memories := &memory.Service{DB: db, Agents: agents, Model: model}
+	memoryHandler := &agenthttp.MemoryHandler{Memory: memories, Agents: agents}
+	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: model, Memory: memories, AllowedModels: s.config.ChatModels}}
 
 	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.List)))
+	mux.Handle("PUT /api/v1/memories/{memory_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Edit)))
+	mux.Handle("DELETE /api/v1/memories/{memory_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Delete)))
+	mux.Handle("GET /api/v1/memories/{memory_id}/events", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Events)))
+	mux.Handle("GET /api/v1/agents/{agent_id}/memory", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Core)))
+	mux.Handle("PUT /api/v1/agents/{agent_id}/memory-policy", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Policy)))
 	health := frameworkhttp.HealthHandler(checks, s.config.HealthTimeout, s.logger)
 	mux.Handle("/health/", health)
 	mux.HandleFunc("POST /api/v1/auth/register", authHandler.Register)

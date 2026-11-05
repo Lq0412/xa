@@ -559,12 +559,15 @@ ROADMAP.md
 |---|---|---|
 | 清理阶段 | ROADMAP / AGENTS 更新；删除占位模块；迁移改成独立命令（`server/cmd/migrate`，`make migrate`，server 启动不再自动迁移，表结构版本不对时直接报错退出）；私有 Agent 归属修复（只有创建者能看能管，附数据修正迁移）；禁用 / 降级立即生效（被禁用用户的已登录会话立刻失效） | ✅ 已完成 |
 | 百炼流式对话 | 会话和消息存进 PostgreSQL；SSE 流式返回；用户端 /chat 页面（新建会话选 Agent、流式回复、刷新后历史仍在）；每条回复记录模型名、token 用量、耗时 | ✅ 已完成 |
+| S1 记忆后端 | memory_items / memory_events / 持久化抽取任务；Memory Service 事务写入与取代链；qwen3.8-flash 严格 JSON Schema 抽取与 qwen3.7-text-embedding 1024 维向量；核心视图、加权检索、版本化开关和所有者 API；真实 PostgreSQL / 百炼覆盖超出 20 条历史后的共享召回 | ✅ 后端已完成，前端另行实现 |
 
 用户端已支持 Markdown 渲染、代码高亮和复制。
 
 ### 6.2 第 1 天：Markdown 渲染 + S1 记忆 + 管理端运行追踪页
 
 **目标**：主 Agent 在超出最近 20 条历史后仍记得用户（S1 跑通）；管理端能看到一轮对话的全链路（S3 雏形）。
+
+**当前进度（S1 后端）**：已实现注册主 Agent、SOUL / 模型版本配置、记忆条目与事件、worker 异步抽取、Context Builder 两段记忆与 token 估算、记忆查看 / 编辑 / 删除 / 事件历史 / Agent 开关接口。主 Agent 自动写 user 层，其他 Agent 自动写自身 agent 层；user 层对当前用户的全部 Agent 可读。importance 使用 1–10，检索按 `相关性 × 0.7 + (importance / 10) × 0.3` 排序；核心预算默认 800、检索默认 5 条；缺省启用，关闭后不读、不投递抽取任务，已有待处理任务在关闭状态被跳过。编辑创建 user_edited 条目并取代旧条目，自动抽取不能覆盖用户编辑。抽取失败留 EXTRACT_FAILED 事件及日志，不改变已完成回复。S1 真实模型测试已经通过。前端记忆页、runs / run_spans 与管理端追踪页、热路径 memory_write / memory_search 工具仍待实现；本阶段没有加入遗忘曲线、候选审批或委派。
 
 **交付物**：
 - 用户端 /chat 回复渲染 Markdown（标题、列表、代码块）。
