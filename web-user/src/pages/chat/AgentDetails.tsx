@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { Icon } from '@/components/Icon';
 import { Markdown } from '@/components/Markdown';
@@ -46,7 +46,7 @@ function statusText(agent: Agent) {
   return agent.status === 'active' ? role : `${role} · 已停用`;
 }
 
-/** 默认阅读配置，编辑时只打开对应模块；保存使用不可变版本与乐观锁。 */
+/** 默认阅读配置。SOUL 编辑占满整个配置栏；保存使用不可变版本与乐观锁。 */
 export function AgentDetails({
   agent,
   userID,
@@ -63,6 +63,7 @@ export function AgentDetails({
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
+  const savedSoul = useRef(false);
   const editable = agent.owner_type === 'user' && agent.owner_id === userID;
   // biome-ignore lint/correctness/useExhaustiveDependencies: 版本指针和 revision 驱动外部编辑及重试后的读取。
   useEffect(() => {
@@ -76,10 +77,17 @@ export function AgentDetails({
           setVersion(result);
           setSoul(result.configuration.soul_md);
           setModel(result.configuration.model);
+          if (savedSoul.current) {
+            savedSoul.current = false;
+            setNotice(`已保存为 v${result.version_number}`);
+          }
         }
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
+        if (!controller.signal.aborted) {
+          savedSoul.current = false;
+          setError(errorMessage(cause));
+        }
       });
     return () => controller.abort();
   }, [agent.id, agent.current_version_id, revision]);
@@ -94,7 +102,8 @@ export function AgentDetails({
         version,
         field === 'soul_md' ? { soul_md: soul } : { model },
       );
-      setNotice('已保存');
+      if (field === 'soul_md') savedSoul.current = true;
+      else setNotice('已保存');
       setEditing(false);
       onSaved(result.agent);
     } catch (cause) {
@@ -108,6 +117,11 @@ export function AgentDetails({
     setPreview(false);
     setNotice('');
   };
+  const closeSoul = () => {
+    if (version) setSoul(version.configuration.soul_md);
+    setPreview(false);
+    setEditing(false);
+  };
   const date = cardDate(agent.created_at);
   const soulCard = (
     <>
@@ -119,11 +133,98 @@ export function AgentDetails({
   const soulStyle = {
     background: 'linear-gradient(160deg, #ffe08a 0%, #fff6d0 100%)',
   };
+  if (editing && version) {
+    return (
+      <section
+        className="flex h-full min-h-0 flex-col bg-white"
+        aria-label="Agent 配置"
+      >
+        <header className="flex shrink-0 items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-sm text-zinc-600"
+            onClick={closeSoul}
+          >
+            <Icon name="arrow-left" size={16} />
+            返回
+          </button>
+          <h2 className="text-sm font-medium">SOUL</h2>
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex rounded-full bg-zinc-100 p-0.5 text-xs">
+              <button
+                type="button"
+                className={`rounded-full px-2.5 py-1 ${preview ? 'text-zinc-500' : 'bg-white text-zinc-900 shadow-sm'}`}
+                aria-pressed={!preview}
+                onClick={() => setPreview(false)}
+              >
+                编辑
+              </button>
+              <button
+                type="button"
+                className={`rounded-full px-2.5 py-1 ${preview ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
+                aria-pressed={preview}
+                onClick={() => setPreview(true)}
+              >
+                预览
+              </button>
+            </div>
+            <Button
+              size="sm"
+              disabled={saving || soul === version.configuration.soul_md}
+              onClick={() => void save('soul_md')}
+            >
+              {saving ? '保存中…' : '保存'}
+            </Button>
+          </div>
+        </header>
+        {error && (
+          <div
+            className="mx-4 mb-2 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800"
+            role="alert"
+          >
+            {error}
+            <button
+              type="button"
+              className="shrink-0 text-xs underline"
+              disabled={saving}
+              onClick={() => setRevision((value) => value + 1)}
+            >
+              重新读取
+            </button>
+          </div>
+        )}
+        <div className="min-h-0 flex-1 bg-zinc-100">
+          {preview ? (
+            <div className="soul-preview h-full overflow-auto px-5 py-4 text-sm text-zinc-800">
+              <Markdown>{soul}</Markdown>
+            </div>
+          ) : (
+            <textarea
+              className="soul-editor h-full w-full resize-none bg-transparent px-5 py-4 font-mono text-[13px] leading-6"
+              aria-label="SOUL.md"
+              maxLength={20000}
+              value={soul}
+              disabled={saving}
+              onChange={(event) => setSoul(event.target.value)}
+            />
+          )}
+        </div>
+      </section>
+    );
+  }
   return (
     <section
       className="relative flex h-full min-h-0 flex-col"
       aria-label="Agent 配置"
     >
+      {notice && (
+        <p
+          role="status"
+          className="absolute top-14 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900 px-3 py-1.5 text-xs whitespace-nowrap text-white shadow-sm"
+        >
+          {notice}
+        </p>
+      )}
       {onClose && (
         <button
           type="button"
@@ -190,81 +291,21 @@ export function AgentDetails({
               <TabsTrigger value="about">详情</TabsTrigger>
             </TabsList>
             <TabsContent value="modules" className="mt-4">
-              {editing ? (
-                <div className="rounded-2xl border border-zinc-200 p-3 text-left">
-                  <div className="mb-2 flex gap-1">
-                    <button
-                      type="button"
-                      className={`rounded-lg px-2.5 py-1 text-xs ${preview ? 'text-zinc-500' : 'bg-zinc-100 text-zinc-900'}`}
-                      aria-pressed={!preview}
-                      onClick={() => setPreview(false)}
-                    >
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      className={`rounded-lg px-2.5 py-1 text-xs ${preview ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}
-                      aria-pressed={preview}
-                      onClick={() => setPreview(true)}
-                    >
-                      预览
-                    </button>
-                  </div>
-                  {preview ? (
-                    <div className="soul-preview text-sm text-zinc-700">
-                      <Markdown>{soul}</Markdown>
-                    </div>
-                  ) : (
-                    <textarea
-                      className="min-h-28 w-full rounded-xl border border-zinc-200 p-3 font-mono text-[13px] leading-6 outline-none"
-                      aria-label="SOUL.md"
-                      maxLength={20000}
-                      rows={10}
-                      value={soul}
-                      disabled={saving}
-                      onChange={(event) => setSoul(event.target.value)}
-                    />
-                  )}
-                  <div className="mt-3 flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={saving}
-                      onClick={() => {
-                        setSoul(version.configuration.soul_md);
-                        setEditing(false);
-                      }}
-                    >
-                      取消
-                    </Button>
-                    <Button
-                      size="sm"
-                      disabled={
-                        saving || soul === version.configuration.soul_md
-                      }
-                      onClick={() => void save('soul_md')}
-                    >
-                      {saving ? '保存中…' : '保存'}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-zinc-200 bg-white p-4 text-left">
-                  <p className="line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-zinc-600">
-                    {soul || '未设置'}
-                  </p>
-                  {editable && (
-                    <button
-                      type="button"
-                      className="mt-3 text-sm text-zinc-800 underline underline-offset-4"
-                      aria-label="编辑 SOUL.md"
-                      onClick={openSoul}
-                    >
-                      编辑
-                    </button>
-                  )}
-                </div>
-              )}
+              <div className="rounded-2xl border border-zinc-200 bg-white p-4 text-left">
+                <p className="line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-zinc-600">
+                  {soul || '未设置'}
+                </p>
+                {editable && (
+                  <button
+                    type="button"
+                    className="mt-3 text-sm text-zinc-800 underline underline-offset-4"
+                    aria-label="编辑 SOUL.md"
+                    onClick={openSoul}
+                  >
+                    编辑
+                  </button>
+                )}
+              </div>
               <Separator className="my-4" />
               <div className="grid grid-cols-2 items-stretch gap-3">
                 {editable ? (
@@ -332,11 +373,6 @@ export function AgentDetails({
                   )}
                 </div>
               </div>
-              {notice && (
-                <p role="status" className="mt-3 text-xs text-emerald-700">
-                  {notice}
-                </p>
-              )}
             </TabsContent>
             <TabsContent
               value="about"

@@ -207,6 +207,18 @@
   width: auto;
 }
 
+.soul-editor,
+.soul-editor:focus,
+.soul-editor:focus-visible {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+details:not([open]) > :not(summary) {
+  display: none;
+}
+
 .streaming-caret {
   display: inline-block;
   width: 8px;
