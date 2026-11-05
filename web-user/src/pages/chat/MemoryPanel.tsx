@@ -39,6 +39,43 @@ const REFRESH_AFTER_TURN_MS = 3000;
 const PAGE_SIZE = 8;
 const namespacePattern = /^[a-z][a-z0-9_.-]{0,63}$/;
 
+/**
+ * 预设分类的中文名。分组标题和下拉共用。
+ * 未收录的 key 原样显示，避免把未知分类猜成别的意思。
+ */
+const namespaceLabels: Record<string, string> = {
+  profile: '个人资料',
+  preferences: '偏好',
+  habits: '习惯',
+  plans: '计划',
+  notes: '笔记',
+  style: '风格',
+};
+
+const presetNamespaces = [
+  'profile',
+  'preferences',
+  'habits',
+  'plans',
+  'notes',
+  'style',
+] as const;
+
+/** 下拉里的「自定义…」。这个值不是合法分类 key。 */
+const customNamespaceValue = '~';
+
+function namespaceLabel(key: string) {
+  return namespaceLabels[key] ?? key;
+}
+
+/** 预设始终可选；当前列表里多出来的分类按 key 接在后面。 */
+function namespaceChoices(existing: readonly string[]) {
+  const extras = [...new Set(existing)]
+    .filter((key) => key !== '' && !(key in namespaceLabels))
+    .sort((a, b) => a.localeCompare(b));
+  return [...presetNamespaces, ...extras];
+}
+
 const kindLabels: Record<string, string> = {
   fact: '事实',
   preference: '偏好',
@@ -104,7 +141,7 @@ function validateDraft(draft: MemoryEdit) {
   if ([...draft.content].length > 2000) return '记忆内容不能超过 2000 字';
   if (containsCredential(draft.content))
     return '这段内容包含密码或证件号，不能保存';
-  if (!namespacePattern.test(draft.namespace)) return '命名空间格式不正确';
+  if (!namespacePattern.test(draft.namespace)) return '分类格式不正确';
   if (
     !Number.isInteger(draft.importance) ||
     draft.importance < 1 ||
@@ -637,8 +674,68 @@ function MemoryHistory({ id }: { id: string }) {
   );
 }
 
+function NamespaceField({
+  value,
+  existing,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  existing: readonly string[];
+  disabled?: boolean;
+  onChange: (namespace: string) => void;
+}) {
+  const options = namespaceChoices(existing);
+  const [custom, setCustom] = useState(
+    () => !namespaceChoices(existing).includes(value),
+  );
+  const showCustom = custom || !options.includes(value);
+  return (
+    <div className="text-xs text-zinc-500">
+      分类
+      <Select
+        value={showCustom ? customNamespaceValue : value}
+        disabled={disabled}
+        onValueChange={(next) => {
+          if (next === customNamespaceValue) {
+            setCustom(true);
+            if (options.includes(value)) onChange('');
+            return;
+          }
+          setCustom(false);
+          onChange(next);
+        }}
+      >
+        <SelectTrigger className="mt-1" aria-label="分类">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((key) => (
+            <SelectItem key={key} value={key}>
+              {namespaceLabel(key)}
+            </SelectItem>
+          ))}
+          <SelectItem value={customNamespaceValue}>自定义…</SelectItem>
+        </SelectContent>
+      </Select>
+      {showCustom && (
+        <input
+          className="mt-1 h-8 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm text-zinc-900"
+          aria-label="自定义分类"
+          value={value}
+          disabled={disabled}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )}
+    </div>
+  );
+}
+
 function MemoryItemView({
   item,
+  namespaces,
   enabled,
   onChanged,
   onConflict,
@@ -646,6 +743,7 @@ function MemoryItemView({
   onForget,
 }: {
   item: MemoryItem;
+  namespaces: readonly string[];
   enabled: boolean;
   onChanged: () => void;
   onConflict: () => void;
@@ -753,21 +851,14 @@ function MemoryItemView({
               }
             />
           </label>
-          <label className="block text-xs text-zinc-500">
-            命名空间
-            <input
-              className="mt-1 h-8 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm text-zinc-900"
-              aria-label="命名空间"
-              value={draft.namespace}
-              disabled={saving}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  namespace: event.target.value,
-                }))
-              }
-            />
-          </label>
+          <NamespaceField
+            value={draft.namespace}
+            existing={namespaces}
+            disabled={saving}
+            onChange={(namespace) =>
+              setDraft((current) => ({ ...current, namespace }))
+            }
+          />
           <div className="text-xs text-zinc-500">
             重要度
             <Select
@@ -975,6 +1066,7 @@ function MemoryItemView({
 function MemoryGroup({
   title,
   items,
+  namespaces,
   hasMore,
   enabled,
   onChanged,
@@ -984,6 +1076,7 @@ function MemoryGroup({
 }: {
   title: string;
   items: MemoryItem[];
+  namespaces: readonly string[];
   hasMore: boolean;
   enabled: boolean;
   onChanged: () => void;
@@ -1002,13 +1095,14 @@ function MemoryGroup({
         groups.map(([namespace, grouped]) => (
           <div key={namespace} className="mt-3">
             <h4 className="mb-2 text-[11px] font-medium text-zinc-400">
-              {namespace}
+              {namespaceLabel(namespace)}
             </h4>
             <div className="space-y-2">
               {grouped.map((item) => (
                 <MemoryItemView
                   key={item.id}
                   item={item}
+                  namespaces={namespaces}
                   enabled={enabled}
                   onChanged={onChanged}
                   onConflict={onConflict}
@@ -1026,18 +1120,20 @@ function MemoryGroup({
 
 function MemoryCreateForm({
   agentId,
+  namespaces,
   onCancel,
   onCreated,
   onConflict,
 }: {
   agentId: string;
+  namespaces: readonly string[];
   onCancel: () => void;
   onCreated: (item: MemoryItem) => void;
   onConflict: () => void;
 }) {
   const [draft, setDraft] = useState<MemoryCreate>({
     content: '',
-    namespace: '',
+    namespace: 'profile',
     importance: 5,
     kind: 'fact',
     pinned: false,
@@ -1104,21 +1200,14 @@ function MemoryCreateForm({
           }
         />
       </label>
-      <label className="block text-xs text-zinc-500">
-        命名空间
-        <input
-          className="mt-1 h-8 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm text-zinc-900"
-          aria-label="命名空间"
-          value={draft.namespace}
-          disabled={saving}
-          onChange={(event) =>
-            setDraft((current) => ({
-              ...current,
-              namespace: event.target.value,
-            }))
-          }
-        />
-      </label>
+      <NamespaceField
+        value={draft.namespace}
+        existing={namespaces}
+        disabled={saving}
+        onChange={(namespace) =>
+          setDraft((current) => ({ ...current, namespace }))
+        }
+      />
       <div className="grid grid-cols-2 gap-2">
         <div className="text-xs text-zinc-500">
           类型
@@ -1298,6 +1387,10 @@ export function MemoryDetail({
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLButtonElement>(null);
   const enabled = memory.policy.enabled;
+  const namespaces = useMemo(
+    () => memory.items.map((item) => item.namespace),
+    [memory.items],
+  );
   const userItems = memory.items.filter((item) => item.scope === 'user');
   const agentItems = memory.items.filter((item) => item.scope === 'agent');
   const showEmpty =
@@ -1405,6 +1498,7 @@ export function MemoryDetail({
         {adding && (
           <MemoryCreateForm
             agentId={agentId}
+            namespaces={namespaces}
             onCancel={() => setAdding(false)}
             onCreated={created}
             onConflict={() => memory.refresh()}
@@ -1466,6 +1560,7 @@ export function MemoryDetail({
                 <MemoryGroup
                   title="关于你（所有 Agent 共享）"
                   items={userItems}
+                  namespaces={namespaces}
                   hasMore={memory.hasMore}
                   enabled={enabled}
                   onChanged={memory.refresh}
@@ -1476,6 +1571,7 @@ export function MemoryDetail({
                 <MemoryGroup
                   title="这个 Agent 的记忆"
                   items={agentItems}
+                  namespaces={namespaces}
                   hasMore={memory.hasMore}
                   enabled={enabled}
                   onChanged={memory.refresh}
