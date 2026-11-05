@@ -11,9 +11,15 @@ import (
 
 // Segment 记录每一段来源与估算成本，估算值不替代供应商实际计费 token。
 type Segment struct {
-	Name            string `json:"name"`
-	Role            string `json:"role"`
-	EstimatedTokens int    `json:"estimated_tokens"`
+	Name            string    `json:"name"`
+	Role            string    `json:"role"`
+	EstimatedTokens int       `json:"estimated_tokens"`
+	ItemIDs         []string  `json:"item_ids,omitempty"`
+	Scores          []float64 `json:"scores,omitempty"`
+	SummaryID       string    `json:"summary_id,omitempty"`
+	SummaryVersion  int       `json:"summary_version,omitempty"`
+	FromMessageID   string    `json:"from_message_id,omitempty"`
+	UntilMessageID  string    `json:"until_message_id,omitempty"`
 }
 
 // ContextModule 是记忆、知识库和工具说明的读取边界。
@@ -24,10 +30,11 @@ type ContextModule interface {
 
 // Input 只包含当前轮次已经授权的数据。
 type Input struct {
-	PlatformRules string
-	SoulMD        string
-	History       []provider.Message
-	Current       string
+	PlatformRules  string
+	SoulMD         string
+	History        []provider.Message
+	Current        string
+	SessionSummary string
 }
 
 // Result 同时返回模型消息与可持久化的分段用量。
@@ -69,10 +76,21 @@ func (b Builder) Build(ctx context.Context, input Input) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("读取 %s 上下文: %w", slot.name, err)
 		}
-		for _, part := range parts {
+		var details []Segment
+		if module, ok := slot.module.(interface{ ContextSegments() []Segment }); ok {
+			details = module.ContextSegments()
+		}
+		for i, part := range parts {
 			add(slot.name, "system", part)
+			if i < len(details) && strings.TrimSpace(part) != "" {
+				segment := details[i]
+				segment.Role = "system"
+				segment.EstimatedTokens = EstimateTokens(part)
+				result.Segments[len(result.Segments)-1] = segment
+			}
 		}
 	}
+	add("session_summary", "system", input.SessionSummary)
 	for _, message := range input.History {
 		add("history", message.Role, message.Content)
 	}

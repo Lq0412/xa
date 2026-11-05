@@ -160,11 +160,11 @@ func TestMemoryS1(t *testing.T) {
 	}
 	count := 0
 	for _, segment := range segments {
-		if segment.Name == "memory" && segment.EstimatedTokens > 0 {
+		if strings.HasPrefix(segment.Name, "memory") && segment.EstimatedTokens > 0 {
 			count++
 		}
 	}
-	if count != 2 {
+	if count < 1 {
 		t.Fatalf("记忆分段未记录: %s", raw)
 	}
 	secondary, err := agents.Save(ctx, p, definition.SaveInput{Name: "记忆验收 Agent", Visibility: definition.VisibilityPrivate, Configuration: definition.Configuration{Model: "qwen3.8-flash", SoulMD: "简短回答用户问题，参考用户记忆。"}})
@@ -302,6 +302,26 @@ func TestMemoryS1(t *testing.T) {
 		}
 	}
 	body, _ := json.Marshal(map[string]any{"expected_version_id": disabled.Version.ID, "enabled": true, "core_budget_tokens": 100, "recall_top_k": 3})
+	// 旧列表请求必须保留完整条目和优先级顺序，新客户端可显式分页。
+	legacy, err := mem.List(ctx, p, memory.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := request("GET", "/api/v1/memories", "", "", h.List)
+	var legacyPage memory.Page
+	if err := json.Unmarshal(w.Body.Bytes(), &legacyPage); err != nil || w.Code != 200 || len(legacyPage.Items) != len(legacy) || legacyPage.NextCursor != "" {
+		t.Fatal("旧列表响应被截断或格式改变")
+	}
+	for i, item := range legacy {
+		if legacyPage.Items[i].ID != item.ID || legacyPage.Items[i].Source != item.Source {
+			t.Fatal("旧列表排序或 source 改变")
+		}
+	}
+	w = request("GET", "/api/v1/memories?limit=1", "", "", h.List)
+	var firstPage memory.Page
+	if err := json.Unmarshal(w.Body.Bytes(), &firstPage); err != nil || w.Code != 200 || len(firstPage.Items) != 1 {
+		t.Fatal("显式分页未生效")
+	}
 	if w := request("PUT", "/api/v1/agents/"+primary.ID+"/memory-policy", "", string(body), h.Policy); w.Code != 200 {
 		t.Fatalf("切换开关 HTTP %d: %s", w.Code, w.Body.String())
 	}

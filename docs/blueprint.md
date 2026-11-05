@@ -734,3 +734,7 @@ sequenceDiagram
 - LongMemEval：https://arxiv.org/abs/2410.10813
 - OWASP Top 10 for Agentic Applications 2026：https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/
 - Eino ADK 协作：https://www.cloudwego.io/docs/eino/core_modules/eino_adk/agent_collaboration/
+
+### 记忆系统进度（S1 收尾）
+
+记忆 v2 已完成 token 历史窗口、轻量模型滚动摘要、HNSW 两阶段召回、retention 遗忘与归档恢复、每日巩固合并、泛化任务重试、策略扩展、上下文统计接口及手动新增/分页/摘要/重试 API。后续 6.4 的遗忘曲线已在本次完成，仅保留多 Agent 共享授权、委派写入和评测扩展。完整接口见 [记忆 API](api/memory.md)。

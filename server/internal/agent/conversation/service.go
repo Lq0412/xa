@@ -100,6 +100,29 @@ type MessagePage struct {
 	Before   string    `json:"before,omitempty"`
 }
 
+// Summary 只向会话所有者返回最新摘要及覆盖范围。
+func (s *Service) Summary(ctx context.Context, p auth.Principal, id string) (map[string]any, error) {
+	var exists bool
+	if err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversations WHERE id=$1 AND user_id=$2 AND workspace_id=$3)`, id, p.UserID, p.WorkspaceID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, definition.ErrNotFound
+	}
+	var out map[string]any
+	var raw []byte
+	if err := s.DB.QueryRow(ctx, `SELECT row_to_json(x) FROM (SELECT id,conversation_id,content,covers_from_message_id,covers_until_message_id,message_count,estimated_tokens,version,created_at FROM conversation_summaries WHERE conversation_id=$1 AND owner_user_id=$2 ORDER BY version DESC LIMIT 1) x`, id, p.UserID).Scan(&raw); err != nil {
+		if err == pgx.ErrNoRows {
+			return map[string]any{"summary": nil}, nil
+		}
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, before string, limit int) (MessagePage, error) {
 	if limit <= 0 || limit > 100 {
 		return MessagePage{}, definition.ErrInvalid
@@ -182,10 +205,6 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		}
 		return Message{}, provider.Usage{}, err
 	}
-	history, err := s.loadMessages(ctx, p, id, 20)
-	if err != nil {
-		return Message{}, provider.Usage{}, err
-	}
 	var version definition.AgentVersion
 	a, err := s.Agents.Get(ctx, p, c.AgentID)
 	if err != nil {
@@ -198,24 +217,62 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
-	historyMessages := make([]provider.Message, 0, len(history))
-	for _, m := range history {
-		historyMessages = append(historyMessages, provider.Message{Role: m.Role, Content: m.Content})
-	}
 	policy, err := definition.ParseMemoryPolicy(version.Configuration.MemoryPolicy)
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
+	windowService := s.Memory
+	if windowService == nil {
+		windowService = &memory.Service{DB: s.DB}
+	}
+	history, err := windowService.Window(ctx, p, id, policy.HistoryBudgetTokens)
+	if err != nil {
+		return Message{}, provider.Usage{}, err
+	}
+	historyMessages := make([]provider.Message, 0, len(history))
+	previousUser := ""
+	for _, m := range history {
+		historyMessages = append(historyMessages, provider.Message{Role: m.Role, Content: m.Content})
+		if m.Role == "user" {
+			previousUser = m.Content
+		}
+	}
 	builder := runtime.Builder{}
+	memoryDetails := []runtime.Segment{}
 	if s.Memory != nil {
-		builder.Memory = memory.Module{Service: s.Memory, Actor: p, AgentID: a.ID, Current: content, Policy: policy}
+		builder.Memory = &memory.Module{Service: s.Memory, Actor: p, AgentID: a.ID, Current: content + "\n" + previousUser, Policy: policy, Details: &memoryDetails}
+	}
+	var sessionSummary string
+	var summaryID string
+	var summaryVersion int
+	if policy.Enabled {
+		err = s.DB.QueryRow(ctx, `SELECT id,version,content FROM conversation_summaries WHERE conversation_id=$1 AND owner_user_id=$2 ORDER BY version DESC LIMIT 1`, id, p.UserID).Scan(&summaryID, &summaryVersion, &sessionSummary)
+		if err != nil && err != pgx.ErrNoRows {
+			return Message{}, provider.Usage{}, err
+		}
+		if len(history) > 0 && s.Memory != nil {
+			if err = s.Memory.EnqueueSummaryTx(ctx, tx, p, id, history[0].ID, policy.SummaryTriggerTokens); err != nil {
+				return Message{}, provider.Usage{}, err
+			}
+		}
 	}
 	contextResult, err := builder.Build(ctx, runtime.Input{
 		PlatformRules: "你是 xa 平台中的 Agent。遵守用户权限和隐私边界，清晰回答当前问题。",
-		SoulMD:        version.Configuration.SoulMD, History: historyMessages, Current: content,
+		SoulMD:        version.Configuration.SoulMD, History: historyMessages, Current: content, SessionSummary: sessionSummary,
 	})
 	if err != nil {
 		return Message{}, provider.Usage{}, err
+	}
+	for i := range contextResult.Segments {
+		seg := &contextResult.Segments[i]
+		if seg.Name == "session_summary" {
+			seg.SummaryID = summaryID
+			seg.SummaryVersion = summaryVersion
+		}
+		if seg.Name == "history" && len(history) > 0 {
+			seg.FromMessageID = history[0].ID
+			seg.UntilMessageID = history[len(history)-1].ID
+		}
 	}
 	modelName := version.Configuration.Model
 	if !slices.Contains(s.AllowedModels, modelName) {
@@ -278,4 +335,16 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 func (s *Service) loadMessages(ctx context.Context, p auth.Principal, id string, limit int) ([]Message, error) {
 	page, err := s.Messages(ctx, p, id, "", limit)
 	return page.Messages, err
+}
+
+func (s *Service) loadMessagesBudget(ctx context.Context, p auth.Principal, id string, budget int) ([]Message, error) {
+	window, err := (&memory.Service{DB: s.DB}).Window(ctx, p, id, budget)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Message, 0, len(window))
+	for _, m := range window {
+		out = append(out, Message{ID: m.ID, Role: m.Role, Content: m.Content})
+	}
+	return out, nil
 }

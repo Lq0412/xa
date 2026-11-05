@@ -45,6 +45,18 @@ func (h *ConversationHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	frameworkhttp.WriteJSON(w, 200, map[string]any{"conversations": v})
 }
+func (h *ConversationHandler) Summary(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	v, err := h.Conversations.Summary(r.Context(), p, r.PathValue("conversation_id"))
+	if err != nil {
+		conversationError(w, r, err)
+		return
+	}
+	frameworkhttp.WriteJSON(w, 200, v)
+}
 func (h *ConversationHandler) Messages(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {

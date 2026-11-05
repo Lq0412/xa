@@ -6,6 +6,7 @@ import (
 	"linq-bs/server/internal/agent/memory"
 	frameworkhttp "linq-bs/server/internal/framework/http"
 	"net/http"
+	"strconv"
 )
 
 // MemoryHandler 所有操作从登录会话确定所有者，不接受 user_id。
@@ -21,12 +22,92 @@ func (h *MemoryHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	items, err := h.Memory.List(r.Context(), p, memory.Filter{Scope: q.Get("scope"), AgentID: q.Get("agent_id"), Namespace: q.Get("namespace"), Status: q.Get("status")})
+	// 旧客户端不传分页参数，继续返回完整列表及原有优先级顺序。
+	if !q.Has("limit") && !q.Has("cursor") && q.Get("scope") != "all_visible" {
+		items, err := h.Memory.List(r.Context(), p, memory.Filter{Scope: q.Get("scope"), AgentID: q.Get("agent_id"), Namespace: q.Get("namespace"), Status: q.Get("status")})
+		if err != nil {
+			writeAgentError(w, r, err)
+			return
+		}
+		frameworkhttp.WriteJSON(w, 200, memory.Page{Items: items})
+		return
+	}
+	limit := 50
+	if q.Get("limit") != "" {
+		var err error
+		if limit, err = strconv.Atoi(q.Get("limit")); err != nil {
+			writeAgentError(w, r, definition.ErrInvalid)
+			return
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	page, err := h.Memory.ListPage(r.Context(), p, memory.Filter{Scope: q.Get("scope"), AgentID: q.Get("agent_id"), Namespace: q.Get("namespace"), Status: q.Get("status")}, q.Get("cursor"), limit)
 	if err != nil {
 		writeAgentError(w, r, err)
 		return
 	}
-	frameworkhttp.WriteJSON(w, 200, map[string]any{"items": items})
+	frameworkhttp.WriteJSON(w, 200, page)
+}
+
+// Add 显式新增当前用户的手动记忆。
+func (h *MemoryHandler) Add(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var in memory.AddInput
+	if !decodeAgentJSON(w, r, &in) {
+		return
+	}
+	item, err := h.Memory.Add(r.Context(), p, in)
+	if err != nil {
+		writeAgentError(w, r, err)
+		return
+	}
+	frameworkhttp.WriteJSON(w, 201, item)
+}
+
+// Restore 返回保留原条目历史的新版本。
+func (h *MemoryHandler) Restore(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.Memory.Restore(r.Context(), p, r.PathValue("memory_id"))
+	if err != nil {
+		writeAgentError(w, r, err)
+		return
+	}
+	frameworkhttp.WriteJSON(w, 200, item)
+}
+
+// Stats 仅统计当前用户的条目和任务。
+func (h *MemoryHandler) Stats(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	v, err := h.Memory.Stats(r.Context(), p)
+	if err != nil {
+		writeAgentError(w, r, err)
+		return
+	}
+	frameworkhttp.WriteJSON(w, 200, v)
+}
+
+// Retry 将所有者的 dead 任务重新入队。
+func (h *MemoryHandler) Retry(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Memory.RetryJob(r.Context(), p, r.PathValue("job_id")); err != nil {
+		writeAgentError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Core 返回当前用户在指定 Agent 中可读的 memory.md。
@@ -95,10 +176,15 @@ func (h *MemoryHandler) Policy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		ExpectedVersionID string `json:"expected_version_id"`
-		Enabled           *bool  `json:"enabled"`
-		CoreBudgetTokens  *int   `json:"core_budget_tokens"`
-		RecallTopK        *int   `json:"recall_top_k"`
+		ExpectedVersionID    string   `json:"expected_version_id"`
+		Enabled              *bool    `json:"enabled"`
+		CoreBudgetTokens     *int     `json:"core_budget_tokens"`
+		RecallTopK           *int     `json:"recall_top_k"`
+		MinRelevance         *float64 `json:"min_relevance"`
+		HistoryBudgetTokens  *int     `json:"history_budget_tokens"`
+		SummaryTriggerTokens *int     `json:"summary_trigger_tokens"`
+		SummaryBudgetTokens  *int     `json:"summary_budget_tokens"`
+		DecayEnabled         *bool    `json:"decay_enabled"`
 	}
 	if !decodeAgentJSON(w, r, &input) {
 		return
@@ -132,6 +218,21 @@ func (h *MemoryHandler) Policy(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.RecallTopK != nil {
 		policy.RecallTopK = *input.RecallTopK
+	}
+	if input.MinRelevance != nil {
+		policy.MinRelevance = *input.MinRelevance
+	}
+	if input.HistoryBudgetTokens != nil {
+		policy.HistoryBudgetTokens = *input.HistoryBudgetTokens
+	}
+	if input.SummaryTriggerTokens != nil {
+		policy.SummaryTriggerTokens = *input.SummaryTriggerTokens
+	}
+	if input.SummaryBudgetTokens != nil {
+		policy.SummaryBudgetTokens = *input.SummaryBudgetTokens
+	}
+	if input.DecayEnabled != nil {
+		policy.DecayEnabled = *input.DecayEnabled
 	}
 	v.Configuration.MemoryPolicy, err = json.Marshal(policy)
 	if err != nil {

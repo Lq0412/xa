@@ -66,11 +66,15 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.List)))
+	mux.Handle("POST /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Add)))
 	mux.Handle("PUT /api/v1/memories/{memory_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Edit)))
 	mux.Handle("DELETE /api/v1/memories/{memory_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Delete)))
+	mux.Handle("POST /api/v1/memories/{memory_id}/restore", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Restore)))
 	mux.Handle("GET /api/v1/memories/{memory_id}/events", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Events)))
 	mux.Handle("GET /api/v1/agents/{agent_id}/memory", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Core)))
 	mux.Handle("PUT /api/v1/agents/{agent_id}/memory-policy", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Policy)))
+	mux.Handle("GET /api/v1/memory/stats", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Stats)))
+	mux.Handle("POST /api/v1/memory/jobs/{job_id}/retry", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Retry)))
 	health := frameworkhttp.HealthHandler(checks, s.config.HealthTimeout, s.logger)
 	mux.Handle("/health/", health)
 	mux.HandleFunc("POST /api/v1/auth/register", authHandler.Register)
@@ -91,6 +95,7 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("POST /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Create)))
 	mux.Handle("GET /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.List)))
 	mux.Handle("GET /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Messages)))
+	mux.Handle("GET /api/v1/conversations/{conversation_id}/summary", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Summary)))
 	mux.Handle("POST /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Send)))
 	return mux, nil
 }

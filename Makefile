@@ -5,7 +5,7 @@ COMPOSE = $(DOCKER) compose --env-file .env -f resources/docker/compose.yaml
 export GOTMPDIR := $(CURDIR)/.output/go-tmp
 export TMPDIR := $(GOTMPDIR)
 
-.PHONY: env deps-up deps-down deps-status migrate server worker web web-install web-build web-user web-user-install web-user-build check integration prepare up down status
+.PHONY: env deps-up deps-down deps-status migrate server worker web web-install web-build web-user web-user-install web-user-build check integration memory-eval prepare up down status
 env:
 	bash scripts/init-env.sh
 
@@ -63,6 +63,9 @@ check: prepare
 integration: prepare
 	bash scripts/run.sh migrate
 	set -a; source .env; set +a; if [ "$(INTEGRATION_WEB)" = "1" ]; then export XA_BROWSER_INTEGRATION=1; fi; cd server && go test -race -tags=integration -count=1 ./...
+
+memory-eval: prepare
+	bash scripts/memory-eval.sh
 
 up:
 	bash scripts/dev.sh up
