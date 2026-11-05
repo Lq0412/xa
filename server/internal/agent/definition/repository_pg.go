@@ -98,11 +98,11 @@ func (r *PGRepository) SaveRevision(ctx context.Context, actor auth.Principal, s
 	if saved.Definition.CurrentVersionID == "" {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO agent_definitions
-			(id, workspace_id, owner_id, owner_type, name, avatar, description, tags, visibility, status, is_default, created_by, created_at, updated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-			saved.Definition.ID, saved.Definition.WorkspaceID, saved.Definition.OwnerID, saved.Definition.OwnerType,
+			(id, workspace_id, owner_id, owner_user_id, owner_type, name, avatar, description, tags, visibility, status, is_default, is_primary, created_by, created_at, updated_at)
+			VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			saved.Definition.ID, saved.Definition.WorkspaceID, saved.Definition.OwnerID, saved.Definition.OwnerUserID, saved.Definition.OwnerType,
 			saved.Definition.Name, saved.Definition.Avatar, saved.Definition.Description, tags,
-			saved.Definition.Visibility, saved.Definition.Status, saved.Definition.IsDefault, saved.Definition.CreatedBy,
+			saved.Definition.Visibility, saved.Definition.Status, saved.Definition.IsDefault, saved.Definition.IsPrimary, saved.Definition.CreatedBy,
 			saved.Definition.CreatedAt, saved.Definition.UpdatedAt)
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -152,6 +152,9 @@ func (r *PGRepository) SetStatus(ctx context.Context, actor auth.Principal, agen
 	if err := checkManage(actor, definition); err != nil {
 		return err
 	}
+	if status == StatusDeleted && definition.IsPrimary {
+		return ErrForbidden
+	}
 	var deletedAt any
 	if status == StatusDeleted {
 		deletedAt = time.Now().UTC()
@@ -167,8 +170,8 @@ func (r *PGRepository) SetStatus(ctx context.Context, actor auth.Principal, agen
 }
 
 func definitionQuery() string {
-	return `SELECT d.id, d.workspace_id, d.owner_id, d.owner_type, COALESCE(d.current_version_id, ''), d.name,
-		d.avatar, d.description, d.tags, d.visibility, d.status, d.is_default, d.created_by, d.created_at, d.updated_at, d.deleted_at
+	return `SELECT d.id, d.workspace_id, d.owner_id, COALESCE(d.owner_user_id, ''), d.owner_type, COALESCE(d.current_version_id, ''), d.name,
+		d.avatar, d.description, d.tags, d.visibility, d.status, d.is_default, d.is_primary, d.created_by, d.created_at, d.updated_at, d.deleted_at
 		FROM agent_definitions d `
 }
 
@@ -181,9 +184,9 @@ func (r *PGRepository) scanDefinition(ctx context.Context, row definitionScanner
 func scanDefinitionRow(row definitionScanner) (AgentDefinition, error) {
 	var definition AgentDefinition
 	var tags []byte
-	if err := row.Scan(&definition.ID, &definition.WorkspaceID, &definition.OwnerID, &definition.OwnerType, &definition.CurrentVersionID,
+	if err := row.Scan(&definition.ID, &definition.WorkspaceID, &definition.OwnerID, &definition.OwnerUserID, &definition.OwnerType, &definition.CurrentVersionID,
 		&definition.Name, &definition.Avatar, &definition.Description, &tags, &definition.Visibility, &definition.Status,
-		&definition.IsDefault, &definition.CreatedBy, &definition.CreatedAt, &definition.UpdatedAt, &definition.DeletedAt); err != nil {
+		&definition.IsDefault, &definition.IsPrimary, &definition.CreatedBy, &definition.CreatedAt, &definition.UpdatedAt, &definition.DeletedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return AgentDefinition{}, ErrNotFound
 		}

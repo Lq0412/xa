@@ -1,172 +1,142 @@
-import { Alert, Form, Input, Modal, Skeleton } from 'antd';
-import { useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import {
   type Agent,
   type AgentVersion,
   ApiError,
   createAgent,
   errorMessage,
-  getAgent,
   getAgentConfig,
   saveAgent,
 } from '@/services/api';
+import { Dialog } from './Dialog';
 
-type Values = { name: string; description?: string; prompt?: string };
 type Props = {
   agent?: Agent;
   onCancel: () => void;
   onSaved: (agent: Agent) => void;
 };
 
-/** 创建和编辑共用一份表单；编辑读取完整版本并携带版本号保存。 */
+/** 创建和基本资料编辑共用原生表单，配置由版本指针保护。 */
 export function AgentEditor({ agent, onCancel, onSaved }: Props) {
-  const [form] = Form.useForm<Values>();
-  const [snapshot, setSnapshot] = useState<{
-    agent: Agent;
-    version: AgentVersion;
-    promptIndex: number;
-  }>();
-  const [loading, setLoading] = useState(Boolean(agent));
+  const [version, setVersion] = useState<AgentVersion>();
+  const [name, setName] = useState(agent?.name || '');
+  const [description, setDescription] = useState(agent?.description || '');
+  const [soul, setSoul] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 仅由重新加载按钮递增。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 是用户显式重新读取版本的触发器。
   useEffect(() => {
     if (!agent) return;
     const controller = new AbortController();
-    setLoading(true);
-    setError('');
-    Promise.all([
-      getAgent(agent.id, controller.signal),
-      getAgentConfig(agent.id, controller.signal),
-    ])
-      .then(([current, version]) => {
-        if (controller.signal.aborted) return;
-        if (current.current_version_id !== version.id)
-          throw new ApiError(409, '配置已更新，请重新加载');
-        const prompts = version.configuration.prompts ?? [];
-        const enabled = prompts.findIndex((slot) => slot.enabled);
-        const promptIndex = enabled >= 0 ? enabled : prompts.length ? 0 : -1;
-        setSnapshot({ agent: current, version, promptIndex });
-        form.setFieldsValue({
-          name: current.name,
-          description: current.description,
-          prompt: prompts[promptIndex]?.content || '',
-        });
+    getAgentConfig(agent.id, controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) setVersion(value);
       })
       .catch((cause) => {
         if (!controller.signal.aborted) setError(errorMessage(cause));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [agent, form, revision]);
+  }, [agent?.id, revision]);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      if (!name.trim()) throw new Error('名称不能为空');
+      if (agent && !version) throw new ApiError(409, '请重新读取配置');
+      const result =
+        agent && version
+          ? await saveAgent(agent, version, {
+              name: name.trim(),
+              description: description.trim(),
+            })
+          : await createAgent(name.trim(), description.trim(), soul);
+      onSaved(result.agent);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
-    <Modal
-      open
-      title={agent ? '编辑 Agent' : '新建 Agent'}
-      onCancel={onCancel}
-      onOk={() => form.submit()}
-      okText={agent ? '保存' : '创建'}
-      cancelText="取消"
-      confirmLoading={saving}
-      closable={!saving}
-      keyboard={!saving}
-      mask={{ closable: !saving }}
-      cancelButtonProps={{ disabled: saving }}
-      okButtonProps={{ disabled: loading || Boolean(agent && !snapshot) }}
+    <Dialog
+      title={agent ? '编辑基本信息' : '新建 Agent'}
+      onClose={onCancel}
+      busy={saving}
     >
-      {error && (
-        <Alert
-          className="form-alert"
-          type="error"
-          title={error}
-          showIcon
-          action={
-            agent && (
+      <form className="editor-form" onSubmit={submit}>
+        {error && (
+          <div className="error-banner" role="alert">
+            {error}
+            {agent && (
               <button
                 type="button"
                 className="text-button"
-                disabled={saving}
-                onClick={() => setRevision((value) => value + 1)}
+                onClick={() => {
+                  setError('');
+                  setRevision((value) => value + 1);
+                }}
               >
-                重新加载
+                重新读取
               </button>
-            )
-          }
-        />
-      )}
-      {loading ? (
-        <Skeleton active />
-      ) : (
-        <Form
-          form={form}
-          layout="vertical"
-          requiredMark={false}
-          disabled={saving || Boolean(agent && !snapshot)}
-          onFinish={async (values) => {
-            if (saving) return;
-            setSaving(true);
-            setError('');
-            try {
-              if (agent && !snapshot)
-                throw new ApiError(409, '请先重新加载 Agent 配置');
-              const input = {
-                name: values.name.trim(),
-                description: values.description?.trim() || '',
-                prompt: values.prompt || '',
-              };
-              const result = snapshot
-                ? await saveAgent(
-                    snapshot.agent,
-                    snapshot.version,
-                    input,
-                    snapshot.promptIndex,
-                  )
-                : await createAgent(
-                    input.name,
-                    input.description,
-                    input.prompt,
-                  );
-              onSaved(result.agent);
-            } catch (cause) {
-              setError(errorMessage(cause));
-            } finally {
-              setSaving(false);
-            }
-          }}
-        >
-          <Form.Item
-            name="name"
-            label="名称"
-            rules={[
-              {
-                required: true,
-                whitespace: true,
-                max: 120,
-                message: '请输入 1–120 个字符的名称',
-              },
-            ]}
+            )}
+          </div>
+        )}
+        <fieldset disabled={saving || Boolean(agent && !version)}>
+          <label>
+            名称
+            <input
+              name="name"
+              required
+              maxLength={120}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label>
+            简介
+            <textarea
+              name="description"
+              rows={3}
+              maxLength={2000}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </label>
+          {!agent && (
+            <label>
+              SOUL.md
+              <textarea
+                name="soul"
+                className="soul-editor"
+                rows={6}
+                maxLength={20000}
+                value={soul}
+                onChange={(event) => setSoul(event.target.value)}
+              />
+            </label>
+          )}
+        </fieldset>
+        <footer className="form-actions">
+          <button
+            type="button"
+            className="button"
+            disabled={saving}
+            onClick={onCancel}
           >
-            <Input autoFocus />
-          </Form.Item>
-          <Form.Item
-            name="description"
-            label="介绍"
-            rules={[{ max: 2000, message: '介绍最多 2000 个字符' }]}
+            取消
+          </button>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={saving || Boolean(agent && !version)}
           >
-            <Input.TextArea rows={3} />
-          </Form.Item>
-          <Form.Item
-            name="prompt"
-            label="系统提示词"
-            rules={[{ max: 20000, message: '提示词最多 20000 个字符' }]}
-          >
-            <Input.TextArea rows={6} />
-          </Form.Item>
-        </Form>
-      )}
-    </Modal>
+            {saving ? '保存中…' : agent ? '保存' : '创建'}
+          </button>
+        </footer>
+      </form>
+    </Dialog>
   );
 }

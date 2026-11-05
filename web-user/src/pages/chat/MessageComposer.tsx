@@ -1,5 +1,5 @@
-import { ArrowUpOutlined, StopOutlined } from '@ant-design/icons';
 import { useLayoutEffect, useRef } from 'react';
+import { Icon } from '@/components/Icon';
 
 type Props = {
   value: string;
@@ -62,7 +62,7 @@ export function MessageComposer({
               aria-label="停止生成"
               onClick={onStop}
             >
-              <StopOutlined />
+              <Icon name="stop" size={16} />
             </button>
           ) : (
             <button
@@ -73,7 +73,7 @@ export function MessageComposer({
               disabled={disabled || sending || !value.trim()}
               onClick={onSend}
             >
-              <ArrowUpOutlined />
+              <Icon name="arrow-up" size={16} />
             </button>
           )}
         </div>

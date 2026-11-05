@@ -29,6 +29,7 @@ type AgentDefinition struct {
 	ID               string     `json:"id"`
 	WorkspaceID      string     `json:"workspace_id"`
 	OwnerID          string     `json:"owner_id"`
+	OwnerUserID      string     `json:"owner_user_id,omitempty"`
 	OwnerType        string     `json:"owner_type"`
 	CurrentVersionID string     `json:"current_version_id"`
 	Name             string     `json:"name"`
@@ -38,6 +39,7 @@ type AgentDefinition struct {
 	Visibility       Visibility `json:"visibility"`
 	Status           Status     `json:"status"`
 	IsDefault        bool       `json:"is_default"`
+	IsPrimary        bool       `json:"is_primary"`
 	CreatedBy        string     `json:"created_by"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
@@ -46,7 +48,10 @@ type AgentDefinition struct {
 
 // Configuration 保存运行配置，不包含用户会话或供应商凭证。
 type Configuration struct {
-	Prompts       []prompt.Slot               `json:"prompts"`
+	SoulMD string `json:"soul_md"`
+	Model  string `json:"model"`
+	// Prompts 仅接收旧管理端输入，持久化使用 SoulMD。
+	Prompts       []prompt.Slot               `json:"prompts,omitempty"`
 	Models        []binding.ModelBinding      `json:"models"`
 	Tools         []binding.ToolBinding       `json:"tools"`
 	Knowledge     []binding.KnowledgeBinding  `json:"knowledge"`

@@ -54,11 +54,11 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 		}
 		return auth.Principal{UserID: current.ID, WorkspaceID: current.WorkspaceID, Roles: []string{current.Role}}, nil
 	})
-	agents := agentdefinition.NewService(agentdefinition.NewPGRepository(db))
+	agents := agentdefinition.NewService(agentdefinition.NewPGRepository(db), s.config.ChatModels)
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
-	agentHandler := &agenthttp.ManagementHandler{Agents: agents, RuntimeModel: s.config.ChatModel}
+	agentHandler := &agenthttp.ManagementHandler{Agents: agents, AllowedModels: s.config.ChatModels}
 	libraryHandler := &agenthttp.LibraryHandler{Library: &agentdefinition.Library{DB: db}}
-	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL), ModelName: s.config.ChatModel}}
+	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL), AllowedModels: s.config.ChatModels}}
 
 	mux := http.NewServeMux()
 	health := frameworkhttp.HealthHandler(checks, s.config.HealthTimeout, s.logger)

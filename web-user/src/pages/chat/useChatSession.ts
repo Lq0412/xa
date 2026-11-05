@@ -10,7 +10,7 @@ import {
   listMessages,
   streamMessage,
 } from '@/services/chat';
-import { ApiError, errorMessage } from '@/services/http';
+import { errorMessage } from '@/services/http';
 
 /** 每个会话独立保存草稿和请求状态，流式回调始终按会话 ID 更新。 */
 type Session = {
@@ -23,6 +23,10 @@ type Session = {
   creating: boolean;
   loadError: string;
   sendError: string;
+  hasMore: boolean;
+  loadingOlder: boolean;
+  before?: string;
+  olderError: string;
 };
 const emptySession: Session = {
   messages: [],
@@ -33,6 +37,9 @@ const emptySession: Session = {
   creating: false,
   loadError: '',
   sendError: '',
+  hasMore: false,
+  loadingOlder: false,
+  olderError: '',
 };
 
 /** 状态层协调真实历史和生成过程，组件只消费当前会话的快照。 */
@@ -124,6 +131,13 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
 
   const load = useCallback(async () => {
     if (listLoading || listError) return;
+    if (!conversationID && agentID) {
+      const existing = conversations.find((item) => item.agent_id === agentID);
+      if (existing) {
+        history.replace(chatURL(agentID, existing.id));
+        return;
+      }
+    }
     const current = cache.current.get(key);
     if (current?.loading || current?.sending) return;
     const conversation = conversations.find(
@@ -143,11 +157,18 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         getAgent(targetAgent, controller.signal),
         conversationID
           ? listMessages(conversationID, controller.signal)
-          : Promise.resolve({ messages: [] }),
+          : Promise.resolve({
+              messages: [],
+              has_more: false,
+              before: undefined,
+            }),
       ]);
       update(key, {
         agent,
         messages: result.messages ?? [],
+        hasMore: Boolean(result.has_more),
+        before: result.before,
+        olderError: '',
         loaded: true,
         sendError: '',
       });
@@ -197,6 +218,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     // 同步更新缓存，连续按 Enter 也只能发起一次请求。
     update(key, { sending: true, creating: !conversationID, sendError: '' });
     const assistantID = `local-assistant-${crypto.randomUUID()}`;
+    const localUserID = `local-user-${crypto.randomUUID()}`;
     let submitted = false;
     let completed = false;
     try {
@@ -208,9 +230,13 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         );
         if (!mounted.current) return;
         id = created.id;
+        const existing = await listMessages(id, controller.signal);
         targetKey = id;
         update(targetKey, {
           ...current,
+          messages: existing.messages ?? [],
+          hasMore: existing.has_more,
+          before: existing.before,
           sending: true,
           draft: '',
           creating: false,
@@ -218,7 +244,10 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         update(key, { sending: false, creating: false, draft: '' });
         controllers.current.delete(`send:${key}`);
         controllers.current.set(`send:${targetKey}`, controller);
-        setConversations((items) => [created, ...items]);
+        setConversations((items) => [
+          created,
+          ...items.filter((item) => item.id !== created.id),
+        ]);
         if (selectedKey.current === key)
           history.replace(chatURL(created.agent_id, id));
       }
@@ -229,7 +258,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         messages: [
           ...state.messages,
           {
-            id: `local-user-${crypto.randomUUID()}`,
+            id: localUserID,
             conversation_id: idForRequest,
             role: 'user',
             content: text,
@@ -281,7 +310,21 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         ),
       }));
       const result = await listMessages(id, controller.signal);
-      update(targetKey, { messages: result.messages ?? [] });
+      update(targetKey, (state) => {
+        const latest = result.messages ?? [];
+        const ids = new Set(latest.map((item) => item.id));
+        const older = state.messages.filter(
+          (item) =>
+            !ids.has(item.id) &&
+            item.id !== localUserID &&
+            item.id !== assistantID,
+        );
+        return {
+          messages: [...older, ...latest],
+          hasMore: older.length ? state.hasMore : result.has_more,
+          before: older.length ? state.before : result.before,
+        };
+      });
     } catch (cause) {
       const stopped = controller.signal.aborted;
       const message = stopped ? '已停止生成' : errorMessage(cause);
@@ -305,12 +348,36 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
   };
 
   const current = sessions.get(key) || emptySession;
-  const newConversation = (agent = current.agent) => {
-    if (!agent || current.creating) return;
-    const draftKey = `new:${agent.id}`;
-    if (cache.current.get(draftKey)?.creating) return;
-    update(draftKey, { ...emptySession, agent, loaded: true });
-    history.push(chatURL(agent.id));
+  const loadOlder = async () => {
+    const state = cache.current.get(key) || emptySession;
+    if (
+      !conversationID ||
+      !state.hasMore ||
+      state.loadingOlder ||
+      !state.before
+    )
+      return;
+    const controller = new AbortController();
+    controllers.current.set(`older:${key}`, controller);
+    update(key, { loadingOlder: true, olderError: '' });
+    try {
+      const result = await listMessages(
+        conversationID,
+        controller.signal,
+        state.before,
+      );
+      update(key, (latest) => ({
+        messages: [...(result.messages ?? []), ...latest.messages],
+        hasMore: Boolean(result.has_more),
+        before: result.before,
+      }));
+    } catch (cause) {
+      if (!controller.signal.aborted)
+        update(key, { olderError: errorMessage(cause) });
+    } finally {
+      update(key, { loadingOlder: false });
+      controllers.current.delete(`older:${key}`);
+    }
   };
 
   return {
@@ -324,12 +391,6 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     activeConversation: conversations.find(
       (item) => item.id === conversationID,
     ),
-    selectConversation: (id: string) => {
-      const item = conversations.find((conversation) => conversation.id === id);
-      if (!item) throw new ApiError(404, '会话不存在');
-      history.push(chatURL(item.agent_id, id));
-    },
-    newConversation,
     selectAgent: (agent: Agent) => {
       const recent = conversations.find((item) => item.agent_id === agent.id);
       history.push(chatURL(agent.id, recent?.id));
@@ -344,5 +405,6 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     setDraft: (draft: string) => update(key, { draft }),
     retry: () => void load(),
     retryList: () => setRevision((value) => value + 1),
+    loadOlder,
   };
 }

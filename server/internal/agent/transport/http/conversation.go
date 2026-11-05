@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"linq-bs/server/internal/agent/conversation"
+	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/framework/auth"
 	frameworkhttp "linq-bs/server/internal/framework/http"
 	"net/http"
+	"strconv"
 )
 
 type ConversationHandler struct{ Conversations *conversation.Service }
@@ -48,12 +50,22 @@ func (h *ConversationHandler) Messages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, err := h.Conversations.Messages(r.Context(), p, r.PathValue("conversation_id"))
+	before := r.URL.Query().Get("before")
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			frameworkhttp.WriteError(w, r, http.StatusBadRequest, "invalid_limit", definition.ErrInvalid)
+			return
+		}
+		limit = parsed
+	}
+	v, err := h.Conversations.Messages(r.Context(), p, r.PathValue("conversation_id"), before, limit)
 	if err != nil {
 		conversationError(w, r, err)
 		return
 	}
-	frameworkhttp.WriteJSON(w, 200, map[string]any{"messages": v})
+	frameworkhttp.WriteJSON(w, 200, v)
 }
 func (h *ConversationHandler) Send(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
@@ -100,6 +112,22 @@ func conversationError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, auth.ErrUnauthenticated) {
 		status = 401
 		code = "unauthenticated"
+	}
+	if errors.Is(err, definition.ErrNotFound) {
+		status = 404
+		code = "not_found"
+	}
+	if errors.Is(err, definition.ErrInvalid) {
+		status = 422
+		code = "invalid_request"
+	}
+	if errors.Is(err, definition.ErrForbidden) {
+		status = 403
+		code = "forbidden"
+	}
+	if errors.Is(err, definition.ErrConflict) {
+		status = 409
+		code = "conflict"
 	}
 	frameworkhttp.WriteError(w, r, status, code, err)
 }

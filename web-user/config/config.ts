@@ -9,20 +9,7 @@ export default defineConfig({
   esbuildMinifyIIFE: true,
   model: {},
   initialState: {},
-  antd: {
-    appConfig: {},
-    configProvider: {
-      theme: {
-        token: {
-          colorPrimary: '#262626',
-          borderRadius: 10,
-          fontFamily:
-            '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
-        },
-      },
-    },
-  },
-  locale: { default: 'zh-CN', antd: true, baseNavigator: false },
+  antd: false,
   mock: false,
   define: {
     'process.env.XA_ADMIN_WEB_URL':

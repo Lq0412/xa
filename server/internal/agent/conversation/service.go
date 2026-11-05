@@ -2,8 +2,10 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"linq-bs/server/internal/agent/definition"
+	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/infra/provider"
 )
@@ -39,13 +42,18 @@ type Message struct {
 }
 
 type Service struct {
-	DB        *pgxpool.Pool
-	Agents    definition.Service
-	Model     provider.ChatModel
-	ModelName string
+	DB            *pgxpool.Pool
+	Agents        definition.Service
+	Model         provider.ChatModel
+	AllowedModels []string
 }
 
 func (s *Service) Create(ctx context.Context, p auth.Principal, agentID string) (Conversation, error) {
+	return s.GetOrCreate(ctx, p, agentID)
+}
+
+// GetOrCreate 保证一个用户和一个 Agent 只有一条对话。
+func (s *Service) GetOrCreate(ctx context.Context, p auth.Principal, agentID string) (Conversation, error) {
 	if p.UserID == "" {
 		return Conversation{}, auth.ErrUnauthenticated
 	}
@@ -58,7 +66,13 @@ func (s *Service) Create(ctx context.Context, p auth.Principal, agentID string) 
 	}
 	now := time.Now().UTC()
 	c := Conversation{ID: "conv_" + uuid.NewString(), WorkspaceID: p.WorkspaceID, UserID: p.UserID, AgentID: a.ID, CreatedAt: now, UpdatedAt: now}
-	_, err = s.DB.Exec(ctx, `INSERT INTO conversations(id,workspace_id,user_id,agent_id,title,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)`, c.ID, c.WorkspaceID, c.UserID, c.AgentID, "", now)
+	err = s.DB.QueryRow(ctx, `
+		INSERT INTO conversations(id,workspace_id,user_id,agent_id,title,created_at,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$6)
+		ON CONFLICT (workspace_id,user_id,agent_id) DO UPDATE SET updated_at=conversations.updated_at
+		RETURNING id,workspace_id,user_id,agent_id,title,created_at,updated_at`,
+		c.ID, c.WorkspaceID, c.UserID, c.AgentID, "", now).
+		Scan(&c.ID, &c.WorkspaceID, &c.UserID, &c.AgentID, &c.Title, &c.CreatedAt, &c.UpdatedAt)
 	return c, err
 }
 func (s *Service) List(ctx context.Context, p auth.Principal) ([]Conversation, error) {
@@ -77,21 +91,68 @@ func (s *Service) List(ctx context.Context, p auth.Principal) ([]Conversation, e
 	}
 	return out, rows.Err()
 }
-func (s *Service) Messages(ctx context.Context, p auth.Principal, id string) ([]Message, error) {
-	rows, err := s.DB.Query(ctx, `SELECT m.id,m.conversation_id,m.role,m.content,m.model,m.prompt_tokens,m.completion_tokens,m.latency_ms,m.status,m.error,m.created_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.conversation_id=$1 AND c.workspace_id=$2 AND c.user_id=$3 ORDER BY m.created_at`, id, p.WorkspaceID, p.UserID)
+
+type MessagePage struct {
+	Messages []Message `json:"messages"`
+	HasMore  bool      `json:"has_more"`
+	Before   string    `json:"before,omitempty"`
+}
+
+func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, before string, limit int) (MessagePage, error) {
+	if limit <= 0 || limit > 100 {
+		return MessagePage{}, definition.ErrInvalid
+	}
+	var exists bool
+	if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM conversations WHERE id=$1 AND workspace_id=$2 AND user_id=$3)`, id, p.WorkspaceID, p.UserID).Scan(&exists); err != nil {
+		return MessagePage{}, err
+	}
+	if !exists {
+		return MessagePage{}, definition.ErrNotFound
+	}
+	query := `SELECT m.id,m.conversation_id,m.role,m.content,m.model,m.prompt_tokens,m.completion_tokens,m.latency_ms,m.status,m.error,m.created_at
+		FROM messages m JOIN conversations c ON c.id=m.conversation_id
+		WHERE m.conversation_id=$1 AND c.workspace_id=$2 AND c.user_id=$3`
+	args := []any{id, p.WorkspaceID, p.UserID}
+	if before != "" {
+		var cursorExists bool
+		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM messages WHERE id=$1 AND conversation_id=$2)`, before, id).Scan(&cursorExists); err != nil {
+			return MessagePage{}, err
+		}
+		if !cursorExists {
+			return MessagePage{}, definition.ErrInvalid
+		}
+		query += " AND (m.created_at,m.id) < (SELECT created_at,id FROM messages WHERE id=$4 AND conversation_id=$1)"
+		args = append(args, before)
+	}
+	query += fmt.Sprintf(" ORDER BY m.created_at DESC,m.id DESC LIMIT %d", limit+1)
+	rows, err := s.DB.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return MessagePage{}, err
 	}
 	defer rows.Close()
-	out := make([]Message, 0)
+	out := make([]Message, 0, limit)
 	for rows.Next() {
 		var m Message
 		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Model, &m.PromptTokens, &m.CompletionTokens, &m.LatencyMS, &m.Status, &m.Error, &m.CreatedAt); err != nil {
-			return nil, err
+			return MessagePage{}, err
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return MessagePage{}, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+	page := MessagePage{Messages: out, HasMore: hasMore}
+	if hasMore && len(out) > 0 {
+		page.Before = out[0].ID
+	}
+	return page, nil
 }
 
 func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string, emit func(string) error) (Message, provider.Usage, error) {
@@ -100,15 +161,27 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		return Message{}, provider.Usage{}, fmt.Errorf("消息不能为空")
 	}
 	var c Conversation
+	// 事务级 advisory lock 序列化同一对话的轮次，避免多个标签页交叉拼接历史。
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return Message{}, provider.Usage{}, err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, id).Scan(&locked); err != nil {
+		return Message{}, provider.Usage{}, err
+	}
+	if !locked {
+		return Message{}, provider.Usage{}, fmt.Errorf("对话正在生成回复: %w", definition.ErrConflict)
+	}
 	if err := s.DB.QueryRow(ctx, `SELECT id,workspace_id,user_id,agent_id,title,created_at,updated_at FROM conversations WHERE id=$1 AND workspace_id=$2 AND user_id=$3`, id, p.WorkspaceID, p.UserID).Scan(&c.ID, &c.WorkspaceID, &c.UserID, &c.AgentID, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return Message{}, provider.Usage{}, fmt.Errorf("会话不存在")
 		}
 		return Message{}, provider.Usage{}, err
 	}
-	now := time.Now().UTC()
-	userID := "msg_" + uuid.NewString()
-	if _, err := s.DB.Exec(ctx, `INSERT INTO messages(id,conversation_id,role,content,status,created_at) VALUES($1,$2,'user',$3,'completed',$4)`, userID, id, content, now); err != nil {
+	history, err := s.loadMessages(ctx, p, id, 20)
+	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
 	var version definition.AgentVersion
@@ -116,30 +189,40 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
+	if a.Status != definition.StatusActive {
+		return Message{}, provider.Usage{}, definition.ErrForbidden
+	}
 	version, err = s.Agents.GetVersion(ctx, p, a.ID, a.CurrentVersionID)
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
-	history, err := s.Messages(ctx, p, id)
+	historyMessages := make([]provider.Message, 0, len(history))
+	for _, m := range history {
+		historyMessages = append(historyMessages, provider.Message{Role: m.Role, Content: m.Content})
+	}
+	contextResult, err := (runtime.Builder{}).Build(ctx, runtime.Input{
+		PlatformRules: "你是 xa 平台中的 Agent。遵守用户权限和隐私边界，清晰回答当前问题。",
+		SoulMD:        version.Configuration.SoulMD, History: historyMessages, Current: content,
+	})
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
-	msgs := []provider.Message{}
-	for _, slot := range version.Configuration.Prompts {
-		if slot.Enabled && strings.TrimSpace(slot.Content) != "" {
-			msgs = append(msgs, provider.Message{Role: "system", Content: slot.Content})
-		}
+	modelName := version.Configuration.Model
+	if !slices.Contains(s.AllowedModels, modelName) {
+		return Message{}, provider.Usage{}, fmt.Errorf("不支持的模型 %s: %w", modelName, definition.ErrInvalid)
 	}
-	start := 0
-	if len(history) > 20 {
-		start = len(history) - 20
+	segments, err := json.Marshal(contextResult.Segments)
+	if err != nil {
+		return Message{}, provider.Usage{}, err
 	}
-	for _, m := range history[start:] {
-		msgs = append(msgs, provider.Message{Role: m.Role, Content: m.Content})
+	now := time.Now().UTC()
+	userID := "msg_" + uuid.NewString()
+	if _, err := s.DB.Exec(ctx, `INSERT INTO messages(id,conversation_id,role,content,status,created_at) VALUES($1,$2,'user',$3,'completed',$4)`, userID, id, content, now); err != nil {
+		return Message{}, provider.Usage{}, err
 	}
 	var answer strings.Builder
 	began := time.Now()
-	usage, callErr := s.Model.Stream(ctx, s.ModelName, msgs, func(d string) error { answer.WriteString(d); return emit(d) })
+	usage, callErr := s.Model.Stream(ctx, modelName, contextResult.Messages, func(d string) error { answer.WriteString(d); return emit(d) })
 	latency := time.Since(began).Milliseconds()
 	status := "completed"
 	errText := ""
@@ -155,7 +238,7 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelSave()
 	assistantID := "msg_" + uuid.NewString()
-	_, dbErr := s.DB.Exec(saveCtx, `INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at) VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10)`, assistantID, id, answer.String(), s.ModelName, usage.PromptTokens, usage.CompletionTokens, latency, status, errText, time.Now().UTC())
+	_, dbErr := s.DB.Exec(saveCtx, `INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at,context_segments,agent_version_id) VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, assistantID, id, answer.String(), modelName, usage.PromptTokens, usage.CompletionTokens, latency, status, errText, time.Now().UTC(), segments, version.ID)
 	if dbErr != nil {
 		return Message{}, usage, dbErr
 	}
@@ -171,5 +254,10 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if dbErr != nil {
 		return Message{}, usage, dbErr
 	}
-	return Message{ID: assistantID, ConversationID: id, Role: "assistant", Content: answer.String(), Model: s.ModelName, PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, LatencyMS: latency, Status: status, Error: errText}, usage, callErr
+	return Message{ID: assistantID, ConversationID: id, Role: "assistant", Content: answer.String(), Model: modelName, PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, LatencyMS: latency, Status: status, Error: errText}, usage, callErr
+}
+
+func (s *Service) loadMessages(ctx context.Context, p auth.Principal, id string, limit int) ([]Message, error) {
+	page, err := s.Messages(ctx, p, id, "", limit)
+	return page.Messages, err
 }

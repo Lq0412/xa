@@ -2,6 +2,12 @@
 
 本文件约束代理在本项目中的表达、修改、验证和协作方式。用户当前对话中的明确要求优先于本文件；项目子目录中的 `AGENTS.md` 补充对应项目的具体规则。
 
+## 产品与实现原则
+
+1. I want this to be as perfect as Linear's website or Apple Notes: simple purpose, simple architecture, simple design, simple implementation
+2. Cut taglines, helper text and secondary labels. Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining. If a screen needs them to make sense, fix the layout
+3. Every decision should elevate the user experience (UX), developer experience (DX) and agent experience (AX) at once, without breaking anything
+
 ## 语言与表达
 
 - 使用直接、易懂、没有套话的中文。
@@ -56,6 +62,8 @@
 ### 使用的技术
 
 Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 19、Ant Design Pro v6、Ant Design 6、Umi Max 4、TypeScript、Tailwind、SSE 和 Docker Compose。
+
+Ant Design 仅用于管理端 `web/`。用户端 `web-user/` 使用 React、原生 HTML 与独立 CSS，图标使用 Lucide；禁止引入 Ant Design 组件、样式或应用包装层。
 
 暂不使用：Flutter、WebSocket、Realtime、MCP。
 

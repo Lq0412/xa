@@ -1,27 +1,21 @@
 # xa Web 用户端
 
-独立 React 19、Ant Design 6、Umi Max 4 工程。通过 Go API 提供公共 Agent 浏览、登录注册、私有 Agent 列表与创建，以及 SSE 流式文本对话。
+React 19、Umi Max 4、Lucide 图标和独立 CSS；用户端不使用 Ant Design。后端提供注册、Agent、版本配置与 SSE 对话接口。
 
-## 本地运行
+## 运行与验证
 
-先按 [启动说明](../docs/startup.md) 启动后端，再在根目录执行 `make web-user-install` 和 `make web-user`。本次需先运行 `make migrate`，应用公共 Agent 添加记录迁移。访问 `http://localhost:8002`。默认代理地址为 `127.0.0.1:18080`，通过 `XA_API_PROXY` 覆盖。
+根目录先运行 `make migrate`、`make server`，再运行 `make web-user`，访问 `http://localhost:8002`。默认 API 代理为 `127.0.0.1:18080`，可用 `XA_API_PROXY` 覆盖。构建产物为本目录 `dist/`。
 
-## 验证与构建
+本目录执行 `npm run lint`、`npm run build`。真实浏览器验收运行 `XA_BROWSER_INTEGRATION=1 make integration`，自动构建用户端，启动独立 server，注册独立账号，使用真实 PostgreSQL 与低成本 `qwen3.8-flash`，结束后清理本次数据。需要 Playwright Chromium；临时文件在根目录 `.output/`，不记录截图或视频。
 
-在本目录执行 `npm run lint`、`npm run lint:antd`、`npm run build`。用户端的真实浏览器用例在 `tests/`。日常检查不执行 `max setup`，避免清空运行中的生成目录。
+## 页面边界
 
-构建产物为本目录 `dist/`。静态服务器需为页面路由回退至 `index.html`，将 `/api/` 代理至 Go server。管理员的后台链接使用构建环境变量 `XA_ADMIN_WEB_URL`；仅开发环境默认 `http://localhost:8000`。
+左侧图标栏只有对话、发现 Agent、我的 Agent；设置、账号、退出在底部。第二栏按名称搜索自有及已添加公共 Agent，主 Agent 根据后端 `is_primary` 置顶，不显示会话树。
 
-对话页从左到右为图标栏、Agent 列表、对话区和详情栏。图标导航上下居中，设置、账号和退出固定在底部；发现与我的 Agent 页面不重复展示文字导航。窄屏用抽屉显示 Agent 列表和详情，详情默认收起，用户的展开选择保存在 localStorage。
+每个用户与每个 Agent 有一条连续对话。首次发送前调用 `POST /conversations` 获取或创建；URL 为 `/chat?agentId=...&conversationId=...`，只传 Agent 时自动恢复已有对话。向上滚动按消息 ID 游标加载历史；流式过程中阅读历史保持位置，主动停止后保留已经生成的内容。输入支持中文输入法、Enter 发送和 Shift + Enter 换行。
 
-`AgentSidebar` 按名称搜索可用 Agent，并分别展开历史会话。列表使用 `GET /agent-library`，公共 Agent 通过 `PUT /agent-library/{id}` 添加并保存在账号下；已有公共对话会在迁移时纳入列表。主 Agent 仅根据真实 `is_default` 字段置顶和标识，前端不推断主 Agent，也不自动创建主 Agent。
+右侧配置栏默认显示真实资料、SOUL 和模型。SOUL 使用 Markdown 阅读视图，点击编辑后提供源文及预览；SOUL、模型分别保存不可变版本，携带乐观锁版本号。公共 Agent 只读；记忆、知识库和工具模块本次不显示。窄屏默认收起，打开时使用原生 dialog 提供焦点约束和 Escape 关闭；展开偏好存于 localStorage。
 
-`AgentDetails` 展示真实头像、名称、介绍、可见性、创建时间、系统提示词和 `runtime_model`；缺失字段不展示。公共 Agent 只读，自有私有 Agent 使用共享的 `AgentEditor` 编辑，调用既有配置保存接口，携带版本号并保留未编辑字段。
+`AgentSidebar`、`MessageList`、`MessageComposer`、`AgentDetails` 负责界面，`useChatSession` 负责真实请求与每个 Agent 的草稿。Markdown 使用 `react-markdown`、`remark-gfm`、`rehype-highlight`；SSE 使用 `eventsource-parser`。设置仅包含已接入的配置栏偏好，管理员另有后台入口。
 
-`useChatSession` 管理会话状态和草稿；`services/chat.ts` 处理聊天 API 与 SSE，`services/http.ts` 统一认证和 HTTP 错误。Markdown 使用 `react-markdown` 与 `remark-gfm`，SSE 使用 `eventsource-parser`。
-
-首次发送自动创建会话，URL 使用 `/chat?agentId=...&conversationId=...`，刷新恢复同一 Agent 和会话；旧的 `agent`、`conversation` 参数自动转换。生成中切换会话仍更新原会话，当前页面内的草稿分别保留。停止生成后，已生成的部分会保存到历史。支持 Enter 发送、Shift + Enter 换行和中文输入法；向上阅读历史时暂停自动滚动。
-
-`XA_BROWSER_INTEGRATION=1 make integration` 会构建用户端，启动使用 `qwen3.8-flash` 的独立真实 server，通过 Playwright 验证四栏位置、公共 Agent 添加、创建与编辑、版本配置保留、流式消息、停止保存、历史恢复、窄屏布局和断网错误。需要在本目录安装 Playwright Chromium 及其系统依赖，并配置 `.env` 中的管理员和百炼凭证；临时目录通过 `TMPDIR` 指向根目录 `.output/`。测试创建独立账号和 Agent，结束后清理自己的数据。普通 Go 检查不启动浏览器，直接 `npm test` 不允许调用真实模型。
-
-设置入口只提供已经接入的详情显示选项；个人记忆、学习反馈和账号资料编辑尚未接入，安排见 ROADMAP 的 Icebox。
+Ant Design 仅由管理端使用；Umi Max 的开发工具可能含有其传递依赖，但用户端禁用对应插件，源码和生产页面不加载 Ant Design。

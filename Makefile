@@ -58,9 +58,8 @@ check: prepare
 	cd web && npm run lint:antd
 	cd web && npm run build
 	cd web-user && npm run lint
-	cd web-user && npm run lint:antd
 	cd web-user && npm run build
 
 integration: prepare
 	bash scripts/run.sh migrate
-	set -a; source .env; set +a; cd server && go test -race -tags=integration -count=1 ./...
+	set -a; source .env; set +a; if [ "$(INTEGRATION_WEB)" = "1" ]; then export XA_BROWSER_INTEGRATION=1; fi; cd server && go test -race -tags=integration -count=1 ./...

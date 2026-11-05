@@ -1,13 +1,13 @@
 import { Link } from '@umijs/max';
-import { Result } from 'antd';
 
-/** 未知地址保留返回 Agent 列表的入口。 */
+/** 未匹配路由提供可用的返回入口。 */
 export default function NotFoundPage() {
   return (
-    <Result
-      status="404"
-      title="页面不存在"
-      extra={<Link to="/explore">返回 Agent 列表</Link>}
-    />
+    <div className="page-content">
+      <h1>页面不存在</h1>
+      <Link className="button" to="/chat">
+        返回对话
+      </Link>
+    </div>
   );
 }

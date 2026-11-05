@@ -30,7 +30,7 @@ export function useAgentLibrary(selectedID: string | null) {
       if (!controller.signal.aborted)
         setAgents(
           result.agents.sort(
-            (a, b) => Number(b.is_default) - Number(a.is_default),
+            (a, b) => Number(b.is_primary) - Number(a.is_primary),
           ),
         );
     };

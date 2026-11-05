@@ -53,7 +53,7 @@
 
 | 场景 | 操作脚本 | 验收点（可检查） | 涉及能力 |
 |---|---|---|---|
-| S1 主 Agent 记得我 | 注册 → 自动得到主 Agent → 会话 A 说「我叫小林，在准备雅思，目标 7 分」→ 新建会话 B 问「我在准备什么？」→ 打开「记忆」页查看并手改 memory.md → 会话 C 验证修改生效；新建任意 Agent 也知道我叫小林。 | 会话 B 答对；memory_items 出现 scope=user、namespace=profile 的条目且 source_ref 指回来源轮次；手改视图后转为 user_edited 条目并取代旧条目，下一轮生效；新 Agent 能读到 profile。 | 主 Agent 自动创建、Context Builder、memory_write / memory_search 工具、memory.md 视图渲染、memory_events |
+| S1 主 Agent 记得我 | 注册 → 自动得到主 Agent → 说「我叫小林，在准备雅思，目标 7 分」→ 超过最近 20 条历史后再问「我在准备什么？」→ 打开「记忆」页查看并手改 memory.md → 下一轮验证修改生效；新建任意 Agent 也知道我叫小林。 | 超出最近 20 条历史后仍能答对；memory_items 出现 scope=user、namespace=profile 的条目且 source_ref 指回来源轮次；手改视图后转为 user_edited 条目并取代旧条目，下一轮生效；新 Agent 能读到 profile。 | 主 Agent 自动创建、Context Builder、memory_write / memory_search 工具、memory.md 视图渲染、memory_events |
 | S2 口语教练 | 新建 Agent「口语教练」，写 soul.md（考官人格 + 评分标准）→ 新建知识库上传雅思 Part 2 题库与范文 → 绑定 → 「出一道题」→ 用户用文本（或语音转写）作答 → 按维度打分并指出错误 → 第二天新会话「帮我复习常犯错误」。 | 题目来自上传资料（可在 trace 中看到命中切片）；打分包含维度与理由；常犯错误写入 coach_review_items 并由 FSRS 排出 due_at；第二天开场抽 3–5 张到期卡片编进练习，按表现评分更新。 | Agent 创建与版本、知识库摄取、kb_search、go-fsrs 错题复习、（可选）ASR/TTS |
 | S3 一轮对话的全链路 | 管理端 → 运行记录 → 打开 S2 中「出一道题」那一轮 → 逐个展开 span。 | 能看到：上下文各段（soul / profile / memory / 历史）及 token 数；检索 query、top-k 片段与分数；每次 LLM 调用的输入输出、TTFT、耗时、token；工具参数与结果；记忆写入事件（ADD / SUPERSEDE / 候选）与每条召回记忆的 relevance / importance / retention 分数。 | run / span 模型、Eino callbacks、trace 页面 |
 | S4 知识库调优（加分项） | 管理端 → 知识库 → 查看文档切片 → 输入问题做检索测试，对比向量 / 关键词 / 混合三种结果 → 跑一份小评测集。 | 切片可见（大小、重叠、所属文档）；三种检索并排；评测输出 recall@5 与 MRR。 | 切分策略、pgvector、RRF 融合、离线评测 |
@@ -105,6 +105,12 @@ flowchart LR
 
 > 关键边界：soul.md 属于 Agent 版本（配置，可回滚、可复现，只有人能改）；记忆是数据，唯一真相是 memory_items。profile（user 层 namespace=profile）和 memory.md（该 Agent 可读的条目）都只是渲染视图，不再单独存整份 Markdown。【推断】
 
+Agent 由可插拔模块组成：SOUL、记忆、知识库、工具和模型。Context Builder 固定按「平台规则 → soul → 记忆 → 知识库片段 → 工具说明 → 最近历史 → 当前输入」拼接；模块未启用或尚未实现时跳过对应插槽，并为每段记录 token 估算。
+
+当前实现 SOUL 和模型；记忆、知识库与工具只有 `ContextModule` 接口及有序插槽，没有页面占位。每轮读取 Agent 当前版本，最近历史限 20 条，当前输入单独追加。回复记录保存 `agent_version_id` 和 `context_segments`（各段估算），后续追踪页可直接读取。S1 的长期记忆验收仍依赖后续记忆模块，不把最近历史当成长时记忆。
+
+一个用户与一个 Agent 保留一条连续对话，数据库唯一约束防止重复；首次发送前使用获取或创建接口。这样用户只需选择 Agent，配置变更也能立即作用于后续轮次。历史按消息 ID 游标分页，旧的同 Agent 会话迁移时先合并消息再清理重复会话。
+
 | 表 | 关键字段 | 说明 | 状态 |
 |---|---|---|---|
 | workspaces | id, slug | 已有；固定一行 default，不做多租户 | 冻结 |
@@ -120,7 +126,7 @@ flowchart LR
 | knowledge_bases | id, owner_user_id, name, chunk_size, chunk_overlap, embedding_model | 切分参数随知识库存，换参数需重建 | 新增 |
 | kb_documents | id, kb_id, s3_key, filename, checksum, status(pending\|processing\|ready\|failed), error | 原文件在 S3；checksum 去重 | 新增 |
 | kb_chunks | id, kb_id, document_id, ord, content, token_count, embedding vector(1024), metadata jsonb | HNSW(cosine) 索引 + 关键词索引；按 kb_id 过滤 | 新增 |
-| conversations | id, user_id, agent_id, agent_version_id, title, created_at | 创建时钉住版本，改 soul 不影响旧会话，便于复现 | 新增（已实现） |
+| conversations | id, user_id, agent_id, title, created_at | 同一用户与同一 Agent 只有一条对话，首次发消息时创建；配置变更作用于后续轮次，避免侧栏重复维护会话 | 新增（已实现） |
 | messages | id, conversation_id, run_id, role(user\|assistant\|tool), content, tool_calls jsonb | 历史消息来源 | 新增（已实现） |
 | runs | id, conversation_id, parent_run_id, delegation_depth, status, model, prompt_tokens, completion_tokens, ttft_ms, latency_ms, error | 一轮用户输入 = 一个 run（替代 conversation.Turn） | 新增 |
 | run_spans | id, run_id, parent_id, kind(context\|retrieval\|llm\|tool\|memory_write), name, input jsonb, output jsonb, tokens, started_at, duration_ms | 管理端 trace 页的唯一数据源 | 新增 |
@@ -140,7 +146,7 @@ sequenceDiagram
   participant DB as PG（消息 / trace）
   U->>API: POST /conversations/{id}/messages
   API->>RT: 授权 + Redis 会话锁 + 新建 run
-  Note over RT: Context Builder：平台规则 → soul.md → 核心记忆视图（profile + memory.md）→ 检索记忆 top-k → 知识库片段（分区）→ 工具说明 → 会话摘要 + 最近消息 → 当前输入
+  Note over RT: Context Builder：平台规则 → soul.md → 记忆 → 知识库片段 → 工具说明 → 最近历史 → 当前输入
   RT->>DB: span: context（各段 token 数）
   RT->>LLM: messages + tools（流式）
   LLM-->>RT: tool_call: kb_search
@@ -210,6 +216,8 @@ flowchart LR
 | 语音（可选） | ASR 转写 → 文本 Agent → TTS | 复用全部文本链路 | Realtime 全双工进 Icebox |
 
 ### 3.7 记忆系统与多 Agent
+
+本节描述后续记忆模块。当前 Builder 为记忆保留位于 SOUL 之后的有序插槽，未注册模块时跳过；页面不显示记忆占位。一个 Agent 的连续对话超过最近 20 条历史后，需依靠此模块召回更早事实，作为 S1 验收边界。
 
 > 来源：多 Agent 与记忆 / 遗忘曲线研究报告（读了 deepseek-ai/dsh-superagent-prototype `8c32a9dc`，以及 MemGPT、mem0、Zep、Generative Agents、MemoryBank、FSRS、LongMemEval、OWASP ASI06）。完整论证见 [memory-multiagent.md](memory-multiagent.md)。
 
@@ -470,8 +478,8 @@ flowchart LR
 | web/services/ant-design-pro, config/oneapi.json | 模板残留 | 删除 | 减少噪音 |
 | web/pages/user/{login,register} | 可用 | 保留 | — |
 | web-user /explore, /my-agents（pages/agents） | 可用；「我的」在前端过滤 | 改造 | 后端提供 owner=me 查询；/explore 是否保留取决于第 8 节问题 2 |
-| web-user /chat | 只有界面，发送禁用（**已接通**：SSE 流式对话，见第 6 节） | 改造 | 接 SSE，展示工具调用与「已记住」提示；左侧会话列表 |
-| web-user /history | 占位 | 合并 | 并入 /chat 侧边栏 |
+| web-user /chat | 原生 React 四栏、SSE、Markdown 高亮与复制、历史分页、SOUL 与模型版本配置 | 保留并扩展 | 左侧选择 Agent，每个 Agent 一条连续对话；后续接入工具调用与记忆记录 |
+| web-user /history | 已移除 | 合并 | 在对应 Agent 的对话中向上加载历史 |
 | web-user /memory | 占位 | 改造 | 按 Agent / namespace 浏览条目，可编辑、删除、确认候选；profile / memory.md 视图（场景 S1） |
 | web-user 新增 知识库 | — | 新增 | 上传文档、看处理状态、绑定到 Agent（场景 S2） |
 | web-user /feedback | 占位 | 删除 | → Icebox |
@@ -552,11 +560,11 @@ ROADMAP.md
 | 清理阶段 | ROADMAP / AGENTS 更新；删除占位模块；迁移改成独立命令（`server/cmd/migrate`，`make migrate`，server 启动不再自动迁移，表结构版本不对时直接报错退出）；私有 Agent 归属修复（只有创建者能看能管，附数据修正迁移）；禁用 / 降级立即生效（被禁用用户的已登录会话立刻失效） | ✅ 已完成 |
 | 百炼流式对话 | 会话和消息存进 PostgreSQL；SSE 流式返回；用户端 /chat 页面（新建会话选 Agent、流式回复、刷新后历史仍在）；每条回复记录模型名、token 用量、耗时 | ✅ 已完成 |
 
-已知缺口：回复中的 Markdown 按原文显示，尚未渲染（第 1 天补）。
+用户端已支持 Markdown 渲染、代码高亮和复制。
 
 ### 6.2 第 1 天：Markdown 渲染 + S1 记忆 + 管理端运行追踪页
 
-**目标**：主 Agent 跨会话记得用户（S1 跑通）；管理端能看到一轮对话的全链路（S3 雏形）。
+**目标**：主 Agent 在超出最近 20 条历史后仍记得用户（S1 跑通）；管理端能看到一轮对话的全链路（S3 雏形）。
 
 **交付物**：
 - 用户端 /chat 回复渲染 Markdown（标题、列表、代码块）。
@@ -568,7 +576,7 @@ ROADMAP.md
 - runs / run_spans（kind: context / retrieval / llm / tool / memory_write）记录；管理端 /runs 列表 + 单个 run 的 span 时间线。
 
 **验收标准**：
-- 按 S1 脚本操作：会话 A 说「我叫小林，在准备雅思，目标 7 分」，新会话 B 问「我在准备什么？」能答对。
+- 按 S1 脚本操作：超过最近 20 条历史后再问「我在准备什么？」仍能答对。
 - memory_items 出现 scope=user、namespace=profile 的条目，source_ref 指回来源轮次；手改后转为 user_edited 条目并取代旧条目，下一轮生效；新建的其他 Agent 也能读到 profile。
 - 管理端 /runs 打开任一轮，能看到上下文各段 token 数、LLM 调用（TTFT、耗时、token）、记忆写入事件。
 - go build / go test / 前端构建通过；提交推送 main；给出 /chat、/memory、/runs 验收链接。
@@ -624,7 +632,7 @@ ROADMAP.md
    - 有评测数字：改切分参数前后 recall@5 的变化。
 5. 可观测性：run / span 模型，Eino callbacks 统一埋点。
    - 能现场打开一轮对话讲 TTFT、token 都花在哪。
-6. 版本化配置：不可变 AgentVersion + 会话钉版本 + 409 乐观锁（已实现）。
+6. 版本化配置：不可变 AgentVersion + 每轮记录实际版本 + 409 乐观锁（已实现）。
    - 改人格不影响旧会话，问题可复现。
 7. 可靠异步：PG SKIP LOCKED 队列，与业务写入同事务。
    - 重试、幂等（checksum）、失败状态可见。

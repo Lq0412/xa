@@ -1,13 +1,8 @@
-import {
-  ArrowRightOutlined,
-  PlusOutlined,
-  RobotOutlined,
-  SearchOutlined,
-} from '@ant-design/icons';
 import { history, Link, useLocation, useModel } from '@umijs/max';
-import { Alert, Avatar, Button, Empty, Input, Skeleton, Tag } from 'antd';
 import { useEffect, useState } from 'react';
+import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentEditor } from '@/components/AgentEditor';
+import { Icon } from '@/components/Icon';
 import {
   type Agent,
   addPublicAgent,
@@ -17,10 +12,9 @@ import {
 } from '@/services/api';
 import { chatURL } from '@/services/chat';
 
-/** Agent 发现与个人列表使用真实数据；创建后直接进入个人列表。 */
+/** 发现与我的 Agent 只从图标栏进入，数据与对话页共享。 */
 export default function AgentsPage() {
-  const { pathname } = useLocation();
-  const mine = pathname === '/my-agents';
+  const mine = useLocation().pathname === '/my-agents';
   const { initialState } = useModel('@@initialState');
   const user = initialState?.currentUser;
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -31,8 +25,7 @@ export default function AgentsPage() {
   const [creating, setCreating] = useState(false);
   const [adding, setAdding] = useState<string>();
   const [added, setAdded] = useState(new Set<string>());
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 是保存成功或手动重试时触发重新查询的显式版本号。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 表示保存或重试后的显式读取。
   useEffect(() => {
     let disposed = false;
     setLoading(true);
@@ -63,105 +56,101 @@ export default function AgentsPage() {
       disposed = true;
     };
   }, [mine, user?.id, revision]);
-
   const visible = agents.filter((agent) =>
     `${agent.name} ${agent.description} ${(agent.tags ?? []).join(' ')}`
       .toLocaleLowerCase()
       .includes(query.trim().toLocaleLowerCase()),
   );
   const openCreate = () => {
+    if (!user) history.push('/login?redirect=/my-agents');
+    else setCreating(true);
+  };
+  const add = async (agent: Agent) => {
     if (!user) {
-      history.push('/login?redirect=/my-agents');
+      history.push(`/login?redirect=${encodeURIComponent(chatURL(agent.id))}`);
       return;
     }
-    setCreating(true);
+    setAdding(agent.id);
+    try {
+      await addPublicAgent(agent.id);
+      history.push(chatURL(agent.id));
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setAdding(undefined);
+    }
   };
   return (
     <div className="page-content agent-directory">
       <header className="page-heading">
-        <div>
-          <h1>{mine ? '我的 Agent' : '发现 Agent'}</h1>
-        </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        <h1>{mine ? '我的 Agent' : '发现 Agent'}</h1>
+        <button type="button" className="button primary" onClick={openCreate}>
+          <Icon name="plus" size={16} />
           新建 Agent
-        </Button>
+        </button>
       </header>
       <div className="directory-toolbar">
-        <Input
-          aria-label="搜索 Agent"
-          placeholder="搜索名称、介绍或标签"
-          prefix={<SearchOutlined />}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          allowClear
-          className="agent-search"
-        />
+        <label className="search-field">
+          <Icon name="search" size={17} />
+          <input
+            aria-label="搜索 Agent"
+            placeholder="搜索 Agent"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
       </div>
       {error ? (
-        <Alert
-          type="error"
-          showIcon
-          title="加载 Agent 失败"
-          description={error}
-          action={
-            <Button onClick={() => setRevision((value) => value + 1)}>
-              重试
-            </Button>
-          }
-        />
+        <div role="alert" className="error-banner">
+          {error}
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setRevision((value) => value + 1)}
+          >
+            重试
+          </button>
+        </div>
       ) : loading ? (
-        <Skeleton active paragraph={{ rows: 5 }} />
+        <p className="muted" role="status">
+          正在读取 Agent…
+        </p>
       ) : visible.length ? (
         <div className="agent-grid">
           {visible.map((agent) => (
             <article key={agent.id} className="agent-card">
               <div className="agent-card-top">
-                <Avatar
-                  shape="square"
-                  size={48}
-                  src={agent.avatar || undefined}
-                  icon={<RobotOutlined />}
-                />
-                <Tag>{agent.visibility === 'public' ? '公共' : '私有'}</Tag>
+                <AgentAvatar agent={agent} />
+                <span className="muted">
+                  {agent.is_primary
+                    ? '主 Agent'
+                    : agent.visibility === 'public'
+                      ? '公共'
+                      : '私有'}
+                </span>
               </div>
               <h2>{agent.name}</h2>
               {agent.description && <p>{agent.description}</p>}
               <div className="agent-tags">
                 {(agent.tags ?? []).map((tag) => (
-                  <Tag key={tag}>{tag}</Tag>
+                  <span key={tag}>{tag}</span>
                 ))}
               </div>
               <div className="agent-card-bottom">
                 {agent.status === 'offline' ? (
                   <span>已停用</span>
                 ) : agent.visibility === 'public' && !added.has(agent.id) ? (
-                  <Button
-                    size="small"
-                    loading={adding === agent.id}
+                  <button
+                    type="button"
+                    className="button quiet"
                     disabled={Boolean(adding)}
-                    onClick={async () => {
-                      if (!user) {
-                        history.push(
-                          `/login?redirect=${encodeURIComponent(chatURL(agent.id))}`,
-                        );
-                        return;
-                      }
-                      setAdding(agent.id);
-                      try {
-                        await addPublicAgent(agent.id);
-                        history.push(chatURL(agent.id));
-                      } catch (cause) {
-                        setError(errorMessage(cause));
-                      } finally {
-                        setAdding(undefined);
-                      }
-                    }}
+                    onClick={() => void add(agent)}
                   >
-                    添加并对话
-                  </Button>
+                    {adding === agent.id ? '添加中…' : '添加并对话'}
+                  </button>
                 ) : (
                   <Link to={chatURL(agent.id)}>
-                    进入对话 <ArrowRightOutlined />
+                    进入对话 <Icon name="arrow-right" size={16} />
                   </Link>
                 )}
               </div>
@@ -170,31 +159,28 @@ export default function AgentsPage() {
         </div>
       ) : (
         <div className="directory-empty">
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={
-              <h2>
-                {query
-                  ? '没有匹配的 Agent'
-                  : mine
-                    ? '还没有自己的 Agent'
-                    : '暂无公共 Agent'}
-              </h2>
-            }
+          <h2>
+            {query
+              ? '没有匹配的 Agent'
+              : mine
+                ? '还没有自己的 Agent'
+                : '暂无公共 Agent'}
+          </h2>
+          <button
+            type="button"
+            className="button"
+            onClick={query ? () => setQuery('') : openCreate}
           >
-            <Button onClick={query ? () => setQuery('') : openCreate}>
-              {query ? '清除搜索' : '新建 Agent'}
-            </Button>
-          </Empty>
+            {query ? '清除搜索' : '新建 Agent'}
+          </button>
         </div>
       )}
       {creating && (
         <AgentEditor
           onCancel={() => setCreating(false)}
-          onSaved={() => {
+          onSaved={(agent) => {
             setCreating(false);
-            setRevision((value) => value + 1);
-            history.push('/my-agents');
+            history.push(chatURL(agent.id));
           }}
         />
       )}

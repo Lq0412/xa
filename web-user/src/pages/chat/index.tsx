@@ -1,12 +1,9 @@
-import {
-  InfoCircleOutlined,
-  MenuOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
 import { history, useLocation, useModel } from '@umijs/max';
-import { Alert, Avatar, Button, Drawer, Grid } from 'antd';
 import { useState } from 'react';
 import { AgentEditor } from '@/components/AgentEditor';
+import { Dialog } from '@/components/Dialog';
+import { Icon } from '@/components/Icon';
+import { useMediaQuery } from '@/components/useMediaQuery';
 import { useDetailsPreference } from '@/layouts/DetailsPreference';
 import type { Agent } from '@/services/api';
 import { chatURL } from '@/services/chat';
@@ -18,26 +15,27 @@ import { useAgentLibrary } from './useAgentLibrary';
 import { useChatSession } from './useChatSession';
 import './chat.css';
 
-/** 对话页面只组合自定义界面，数据请求和消息更新由 useChatSession 管理。 */
+/** 四栏分别负责导航、Agent 选择、消息和配置；窄屏使用原生 dialog 隔离焦点。 */
 export default function ChatPage() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const library = useAgentLibrary(params.get('agentId') || params.get('agent'));
   const session = useChatSession(location.search, library.agents[0]);
   const { initialState } = useModel('@@initialState');
-  const screens = Grid.useBreakpoint();
+  const sidebarInline = useMediaQuery('(min-width: 768px)');
+  const detailsInline = useMediaQuery('(min-width: 1200px)');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const details = useDetailsPreference();
   const [editor, setEditor] = useState<{ agent?: Agent }>();
-
+  const saved = (agent: Agent) => {
+    library.refresh();
+    session.updateAgent(agent);
+  };
   const sidebar = (
     <AgentSidebar
       agents={library.agents}
-      conversations={session.conversations}
-      activeAgentID={session.agent?.id || session.agentID}
-      activeConversationID={session.conversationID}
+      activeAgentID={session.agent?.id || session.agentID || undefined}
       loading={library.loading}
-      historyLoading={session.listLoading}
       error={library.error}
       onRetry={library.refresh}
       onCreate={() => {
@@ -48,88 +46,83 @@ export default function ChatPage() {
         session.selectAgent(agent);
         setMobileSidebarOpen(false);
       }}
-      onNewConversation={(agent) => {
-        session.newConversation(agent);
-        setMobileSidebarOpen(false);
+    />
+  );
+  const panel = session.agent && (
+    <AgentDetails
+      key={session.agent.id}
+      agent={session.agent}
+      userID={initialState?.currentUser?.id}
+      onEdit={() => {
+        if (!detailsInline) details.setOpen(false);
+        setEditor({ agent: session.agent });
       }}
-      onSelectConversation={(id) => {
-        session.selectConversation(id);
-        setMobileSidebarOpen(false);
-      }}
+      onClose={detailsInline ? () => details.setOpen(false) : undefined}
+      onSaved={saved}
     />
   );
   return (
     <div className="chat-layout">
-      {screens.md ? (
+      {sidebarInline ? (
         <aside className="agent-sidebar" aria-label="对话 Agent">
           {sidebar}
         </aside>
       ) : (
-        <Drawer
-          title="Agent"
-          placement="left"
-          size={300}
-          open={mobileSidebarOpen}
-          onClose={() => setMobileSidebarOpen(false)}
-          closable={{ 'aria-label': '关闭 Agent 列表' }}
-          styles={{ body: { padding: 14 } }}
-        >
-          {sidebar}
-        </Drawer>
+        mobileSidebarOpen && (
+          <Dialog
+            title="我的 Agent"
+            side="left"
+            onClose={() => setMobileSidebarOpen(false)}
+          >
+            <div className="sheet-sidebar">{sidebar}</div>
+          </Dialog>
+        )
       )}
       <section className="conversation-main">
         <header className="conversation-header">
-          {!screens.md && (
+          {!sidebarInline && (
             <button
               type="button"
-              className="chat-icon-button"
+              className="icon-button"
               aria-label="打开 Agent 列表"
               onClick={() => {
                 details.setOpen(false);
                 setMobileSidebarOpen(true);
               }}
             >
-              <MenuOutlined />
+              <Icon name="menu" />
             </button>
           )}
-          <div className="conversation-identity">
-            <Avatar
-              size={36}
-              src={session.agent?.avatar || undefined}
-              icon={<RobotOutlined />}
-            />
-            <div>
-              <strong>{session.agent?.name || '选择 Agent'}</strong>
-            </div>
-          </div>
-          <Button
-            type="text"
-            icon={<InfoCircleOutlined />}
-            aria-label={details.open ? '收起 Agent 详情' : '展开 Agent 详情'}
+          <strong className="conversation-title">
+            {session.agent?.name || '选择 Agent'}
+          </strong>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={details.open ? '收起 Agent 配置' : '展开 Agent 配置'}
+            title="Agent 配置"
             aria-expanded={details.open}
             disabled={!session.agent}
             onClick={() => {
               setMobileSidebarOpen(false);
               details.setOpen(!details.open);
             }}
-          />
+          >
+            <Icon name="info" size={19} />
+          </button>
         </header>
         {(session.listError || session.sendError) && (
-          <Alert
-            className="chat-error"
-            type="error"
-            showIcon
-            title={session.listError || session.sendError}
-            action={
-              <Button
-                size="small"
-                onClick={session.listError ? session.retryList : session.retry}
-                disabled={session.sending}
-              >
-                重新加载记录
-              </Button>
-            }
-          />
+          <div className="error-banner chat-error" role="alert">
+            {session.listError || session.sendError}
+            <button
+              type="button"
+              className="text-button"
+              disabled={session.sending}
+              onClick={session.listError ? session.retryList : session.retry}
+            >
+              重新加载
+            </button>
+          </div>
         )}
         <MessageList
           key={session.key}
@@ -138,6 +131,10 @@ export default function ChatPage() {
           loading={session.loading || session.listLoading}
           error={session.loadError}
           onRetry={session.retry}
+          onLoadOlder={session.loadOlder}
+          hasMore={session.hasMore}
+          loadingOlder={session.loadingOlder}
+          olderError={session.olderError}
         />
         {session.agent && session.agent.status !== 'active' && (
           <p className="chat-unavailable">
@@ -159,38 +156,20 @@ export default function ChatPage() {
           onStop={session.stop}
         />
       </section>
-      {session.agent &&
-        (screens.xl ? (
-          details.open && (
-            <aside className="agent-details-panel" aria-label="Agent 详情栏">
-              <AgentDetails
-                key={session.agent.id}
-                agent={session.agent}
-                userID={initialState?.currentUser?.id}
-                onEdit={() => setEditor({ agent: session.agent })}
-                onClose={() => details.setOpen(false)}
-              />
-            </aside>
-          )
+      {panel &&
+        details.open &&
+        (detailsInline ? (
+          <aside className="agent-details-panel" aria-label="Agent 配置栏">
+            {panel}
+          </aside>
         ) : (
-          <Drawer
-            open={details.open}
+          <Dialog
+            title="Agent 配置"
+            side="right"
             onClose={() => details.setOpen(false)}
-            size={320}
-            closable={false}
-            styles={{ body: { padding: 0 } }}
           >
-            <AgentDetails
-              key={session.agent.id}
-              agent={session.agent}
-              userID={initialState?.currentUser?.id}
-              onEdit={() => {
-                details.setOpen(false);
-                setEditor({ agent: session.agent });
-              }}
-              onClose={() => details.setOpen(false)}
-            />
-          </Drawer>
+            {panel}
+          </Dialog>
         ))}
       {editor && (
         <AgentEditor
@@ -198,8 +177,7 @@ export default function ChatPage() {
           onCancel={() => setEditor(undefined)}
           onSaved={(agent) => {
             setEditor(undefined);
-            library.refresh();
-            session.updateAgent(agent);
+            saved(agent);
             if (!editor.agent) history.push(chatURL(agent.id));
           }}
         />

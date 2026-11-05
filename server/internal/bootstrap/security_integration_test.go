@@ -37,9 +37,32 @@ func TestPrivateAgentBelongsToCreatorAndSessionUsesCurrentUser(t *testing.T) {
 	if _, err := db.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, $1)`, workspaceID); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Exec(context.Background(), `DELETE FROM agent_definitions WHERE workspace_id = $1`, workspaceID)
-	defer db.Exec(context.Background(), `DELETE FROM users WHERE workspace_id = $1`, workspaceID)
-	defer db.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, workspaceID)
+	defer func() {
+		tx, err := db.Begin(context.Background())
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer tx.Rollback(context.Background())
+		for _, query := range []string{
+			`UPDATE agent_definitions SET current_version_id=NULL WHERE workspace_id=$1`,
+			`DELETE FROM agent_versions WHERE workspace_id=$1`,
+			`DELETE FROM agent_definitions WHERE workspace_id=$1`,
+			`DELETE FROM users WHERE workspace_id=$1`,
+			`DELETE FROM workspaces WHERE id=$1`,
+		} {
+			if _, err := tx.Exec(context.Background(), query, workspaceID); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+		if err := tx.Commit(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, workspace_id, email, password_hash, display_name, role, status) VALUES ($1,$2,$3,'unused','one','admin','active')`, adminOne, workspaceID, adminOne+"@example.com"); err != nil {
+		t.Fatal(err)
+	}
 
 	agentService := definition.NewService(definition.NewPGRepository(db))
 	created, err := agentService.Save(ctx, auth.Principal{UserID: adminOne, WorkspaceID: workspaceID, Roles: []string{"admin"}}, definition.SaveInput{Name: "private", Visibility: definition.VisibilityPrivate})
@@ -57,9 +80,6 @@ func TestPrivateAgentBelongsToCreatorAndSessionUsesCurrentUser(t *testing.T) {
 		t.Fatalf("其他管理员看到了私有 Agent: %+v", list)
 	}
 
-	if _, err := db.Exec(ctx, `INSERT INTO users (id, workspace_id, email, password_hash, display_name, role, status) VALUES ($1,$2,$3,'unused','one','admin','active')`, adminOne, workspaceID, adminOne+"@example.com"); err != nil {
-		t.Fatal(err)
-	}
 	users := user.NewPGRepository(db)
 	sessions := auth.NewRedisSessionStore(cache, time.Hour)
 	resolver := auth.NewRedisResolver(sessions, func(ctx context.Context, userID string) (auth.Principal, error) {

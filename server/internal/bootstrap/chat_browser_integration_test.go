@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"linq-bs/server/internal/agent/definition"
-	"linq-bs/server/internal/agent/prompt"
 	"linq-bs/server/internal/bootstrap"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/postgres"
@@ -64,6 +63,12 @@ func TestChatBrowser(t *testing.T) {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer tx.Rollback(ctx)
 		for _, query := range []string{
 			`DELETE FROM conversations WHERE user_id=$1`,
 			`UPDATE agent_definitions SET current_version_id=NULL WHERE owner_id=$1 OR id=$2`,
@@ -75,22 +80,27 @@ func TestChatBrowser(t *testing.T) {
 			if strings.Contains(query, "$2") {
 				args = append(args, publicID)
 			}
-			if _, err := db.Exec(ctx, query, args...); err != nil {
+			if _, err := tx.Exec(ctx, query, args...); err != nil {
 				t.Error(err)
 				return
 			}
 		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Error(err)
+		}
 	}()
-	// 通过真实领域服务创建独立测试数据，主 Agent 标记直接验证已有持久字段。
-	agents := definition.NewService(definition.NewPGRepository(db))
-	primary, err := agents.Save(t.Context(), auth.Principal{UserID: account.ID, WorkspaceID: account.WorkspaceID}, definition.SaveInput{
-		Name: "我的主 Agent", Visibility: definition.VisibilityPrivate,
-		Configuration: definition.Configuration{Prompts: []prompt.Slot{{Name: "system", Content: "请按用户要求用中文回答。", Enabled: true, Scope: "agent"}, {Name: "context", Content: "保留这个未启用片段", Enabled: false, Order: 1, Scope: "agent"}}},
+	// 直接使用注册时自动创建的主 Agent，真实设置本次测试所需的低成本模型。
+	agents := definition.NewService(definition.NewPGRepository(db), cfg.ChatModels)
+	actor := auth.Principal{UserID: account.ID, WorkspaceID: account.WorkspaceID}
+	library, err := (&definition.Library{DB: db}).List(t.Context(), actor)
+	if err != nil || len(library) != 1 || !library[0].IsPrimary {
+		t.Fatalf("注册主 Agent 错误: %+v %v", library, err)
+	}
+	primary, err := agents.Save(t.Context(), actor, definition.SaveInput{
+		AgentID: library[0].ID, ExpectedVersionID: library[0].CurrentVersionID, Name: "我的主 Agent", Visibility: definition.VisibilityPrivate,
+		Configuration: definition.Configuration{SoulMD: "请按用户要求用中文回答。", Model: "qwen3.8-flash"},
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(t.Context(), `UPDATE agent_definitions SET is_default=true WHERE id=$1`, primary.Definition.ID); err != nil {
 		t.Fatal(err)
 	}
 	admin, err := user.NewService(user.NewPGRepository(db)).Authenticate(t.Context(), cfg.Admin.Email, cfg.Admin.Password)
@@ -99,7 +109,7 @@ func TestChatBrowser(t *testing.T) {
 	}
 	public, err := agents.Save(t.Context(), auth.Principal{UserID: admin.ID, WorkspaceID: admin.WorkspaceID, Roles: []string{admin.Role}}, definition.SaveInput{
 		Name: "公共布局验收 " + rand.Text(), Visibility: definition.VisibilityPublic, Description: "真实公共 Agent 添加验证",
-		Configuration: definition.Configuration{Prompts: []prompt.Slot{{Name: "system", Content: "你是公共助手。", Enabled: true, Scope: "agent"}}},
+		Configuration: definition.Configuration{SoulMD: "你是公共助手。", Model: "qwen3.8-flash"},
 	})
 	if err != nil {
 		t.Fatal(err)

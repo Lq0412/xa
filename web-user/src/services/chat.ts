@@ -18,6 +18,7 @@ export type ChatMessage = {
   content: string;
   status: 'pending' | 'completed' | 'failed' | 'stopped';
   error?: string;
+  created_at?: string;
 };
 
 /** URL 只保存稳定 ID，旧链接由会话状态层读取后转换为统一格式。 */
@@ -42,9 +43,14 @@ export const createConversation = (agent_id: string, signal?: AbortSignal) =>
   });
 
 /** 历史读取失败必须由页面显示，不能伪装为空会话。 */
-export const listMessages = (id: string, signal?: AbortSignal) =>
-  request<{ messages: ChatMessage[] | null }>(
-    `/conversations/${encodeURIComponent(id)}/messages`,
+export const listMessages = (
+  id: string,
+  signal?: AbortSignal,
+  before?: string,
+  limit = 20,
+) =>
+  request<{ messages: ChatMessage[]; has_more: boolean; before?: string }>(
+    `/conversations/${encodeURIComponent(id)}/messages?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
     { signal },
   );
 

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -22,6 +24,7 @@ type Config struct {
 	Bailian         BailianConfig     `envPrefix:"XA_BAILIAN_"`
 	ChatModel       string            `env:"XA_CHAT_MODEL" envDefault:"qwen3.7-plus"`
 	LightModel      string            `env:"XA_LIGHT_MODEL" envDefault:"qwen3.8-flash"`
+	ChatModels      []string          `env:"XA_CHAT_MODELS" envDefault:"qwen3.7-plus,qwen3.8-flash"`
 	StartupTimeout  time.Duration     `env:"XA_STARTUP_TIMEOUT" envDefault:"15s"`
 	ShutdownTimeout time.Duration     `env:"XA_SHUTDOWN_TIMEOUT" envDefault:"10s"`
 	HealthTimeout   time.Duration     `env:"XA_HEALTH_TIMEOUT" envDefault:"3s"`
@@ -130,8 +133,19 @@ func (c Config) Validate() error {
 	if c.Bailian.APIKey == "" || c.Bailian.BaseURL == "" {
 		return fmt.Errorf("阿里百炼配置不能为空")
 	}
+	if len(c.ChatModels) == 0 {
+		return fmt.Errorf("至少配置一个可用对话模型")
+	}
+	for _, model := range c.ChatModels {
+		if strings.TrimSpace(model) == "" || model != strings.TrimSpace(model) {
+			return fmt.Errorf("对话模型名称不能为空")
+		}
+	}
 	if _, err := url.ParseRequestURI(c.Bailian.BaseURL); err != nil {
 		return fmt.Errorf("阿里百炼 BaseURL 无效")
+	}
+	if !slices.Contains(c.ChatModels, "qwen3.7-plus") || !slices.Contains(c.ChatModels, c.ChatModel) {
+		return fmt.Errorf("模型白名单必须包含主 Agent 默认模型 qwen3.7-plus 和 XA_CHAT_MODEL")
 	}
 	u, err := url.Parse("https://" + c.ObjectStore.Endpoint)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
@@ -145,3 +159,6 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
+
+// DefaultChatModels 与部署配置默认值一致，供不经过环境加载的领域调用使用。
+func DefaultChatModels() []string { return []string{"qwen3.7-plus", "qwen3.8-flash"} }

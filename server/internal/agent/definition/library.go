@@ -21,7 +21,7 @@ func (l *Library) List(ctx context.Context, actor auth.Principal) ([]AgentDefini
 		AND ((d.owner_type='user' AND d.owner_id=$2)
 		 OR (d.visibility='public' AND (d.created_by=$2 OR EXISTS (
 		     SELECT 1 FROM agent_library l WHERE l.agent_id=d.id AND l.user_id=$2))))
-		ORDER BY d.is_default DESC, d.updated_at DESC, d.id`, actor.WorkspaceID, actor.UserID)
+		ORDER BY d.is_primary DESC, d.updated_at DESC, d.id`, actor.WorkspaceID, actor.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("查询用户 Agent 列表: %w", err)
 	}

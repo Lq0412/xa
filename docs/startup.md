@@ -5,7 +5,7 @@
 ## 1. 环境
 
 - WSL / Linux、Bash、Go 1.26 或更新版本、Make、OpenSSL；race 检查需要 GCC 等 C 编译器。
-- Web 使用 Node.js 22 或更新版本和 npm；框架为 React 19、Ant Design 6 与 Umi Max 4。
+- Web 使用 Node.js 22 或更新版本和 npm；两个前端使用 React 19 与 Umi Max 4。管理端使用 Ant Design，用户端使用原生 HTML、独立 CSS 和 Lucide 图标。
 - Docker Engine 与 Compose。WSL 使用 `/usr/bin/docker` 原生客户端；其他安装路径通过 `make DOCKER=/path/to/docker ...` 指定。
 - Go module 位于 `server/`；下列 Make 命令均在仓库根目录运行。
 
@@ -19,7 +19,7 @@ make deps-status
 
 `make env` 根据 `.env.example` 创建权限为 600 的 `.env` 并生成随机本地凭证；已有文件不会覆盖。不要提交 `.env`。运行脚本会将其中的变量导入进程，直接运行二进制时需自行注入环境变量。
 
-用户端文本对话需要配置 `XA_BAILIAN_API_KEY` 和 `XA_BAILIAN_BASE_URL`；模型名默认分别为 `XA_CHAT_MODEL=qwen3.7-plus` 与 `XA_LIGHT_MODEL=qwen3.8-flash`。缺少百炼配置时 server 和 worker 会在启动校验阶段直接退出。密钥只放在本地 `.env`，不会写入日志或版本库。
+用户端文本对话需要配置 `XA_BAILIAN_API_KEY` 和 `XA_BAILIAN_BASE_URL`；模型名默认分别为 `XA_CHAT_MODEL=qwen3.7-plus` 与 `XA_LIGHT_MODEL=qwen3.8-flash`。`XA_CHAT_MODELS` 配置 Agent 可选模型白名单，默认 `qwen3.7-plus,qwen3.8-flash`；每轮使用 Agent 当前版本的模型。缺少百炼配置时 server 和 worker 会在启动校验阶段直接退出。密钥只放在本地 `.env`，不会写入日志或版本库。
 
 `make deps-up` 等待三个依赖 healthy，再初始化 S3 存储桶。新 PostgreSQL 数据卷自动启用 pgvector；不会创建业务表。启动后端前必须确认依赖健康且桶初始化成功。
 
@@ -72,11 +72,11 @@ make web-user-install
 make web-user
 ```
 
-用户端访问 `http://localhost:8002`，支持匿名浏览公共 Agent、注册登录、查看和创建自己的私有 Agent，并进入对话布局。对话页尚未接入模型调用，发送操作禁用；会话历史、个人记忆、学习反馈和账号设置的占位页面与导航已移除。Windows 访问 WSL 优先使用 `localhost`，本机曾出现 IPv4 `127.0.0.1` 转发失败、`localhost` 正常的情况。
+用户端访问 `http://localhost:8002`，支持匿名浏览公共 Agent、注册登录、创建私有 Agent 和流式文本对话。注册自动创建主 Agent；每个 Agent 保留一条连续对话，点击左侧 Agent 即可继续，向上滚动加载更早消息。右侧可编辑自己的 SOUL 和模型，保存生成新版本；公共 Agent 只读。停止生成后保留已经生成的内容。Windows 访问 WSL 优先使用 `localhost`，本机曾出现 IPv4 `127.0.0.1` 转发失败、`localhost` 正常的情况。
 
 两个前端的 Umi 开发服务器均将 `/api/` 和 `/health/` 请求转发到 `127.0.0.1:18080`，后端地址通过 `XA_API_PROXY` 配置。管理端默认提供到 `http://localhost:8002` 的用户端入口，用户端为管理员提供到 `http://localhost:8000` 的后台入口；可分别通过 `XA_USER_WEB_URL` 和 `XA_ADMIN_WEB_URL` 覆盖。两个入口共用账号，各自登录，不通过跳转 URL 传递令牌。
 
-Web 使用 ProLayout 侧边导航、ProTable 列表和 ModalForm 编辑窗，框架来源为 Ant Design Pro v6.0.3。刷新页面会向后端恢复会话，编辑使用版本校验防止覆盖并发修改。真实浏览器验收方法见 [Web 说明](../web/README.md)。
+管理端使用 ProLayout 侧边导航、ProTable 列表和 ModalForm 编辑窗，框架来源为 Ant Design Pro v6.0.3。刷新页面会向后端恢复会话，编辑使用版本校验防止覆盖并发修改。真实浏览器验收方法见 [Web 说明](../web/README.md)。
 
 配置无效或任一依赖无法连接时，进程直接退出且返回非零状态。worker 当前只运行依赖检查和生命周期，尚不领取业务任务。
 
@@ -96,6 +96,9 @@ curl --fail http://127.0.0.1:18081/health/ready
 - `GET /api/v1/available-agents`
 - `GET/POST /api/v1/agents`、`GET /api/v1/agents/{agent_id}`、`GET/PUT /api/v1/agents/{agent_id}/config`
 - `POST /api/v1/agents/{agent_id}/enable`、`POST /api/v1/agents/{agent_id}/offline`、`DELETE /api/v1/agents/{agent_id}`
+- `GET/POST /api/v1/conversations`、`GET/POST /api/v1/conversations/{conversation_id}/messages`，发送消息返回 SSE。
+
+`POST /api/v1/conversations` 按 `agent_id` 获取或创建当前用户的唯一对话；消息查询接受 `limit` 和上一页返回的 `before` 游标。
 
 登录返回的令牌通过 `Authorization: Bearer <token>` 传递。普通用户只能创建和修改自己的私有 Agent；公共 Agent 只能由管理员维护。
 
@@ -109,7 +112,9 @@ make web-build
 
 集成测试需要已启动的真实依赖，验证事务、缓存、对象上传读取删除、依赖异常、HTTP 启停和端口冲突。使用实际项目文件作为存储内容；测试创建的对象和缓存键会清理，不删除业务数据。
 
-`make check` 同时执行两个 Web 工程的 Biome、TypeScript、antd 检查和构建。浏览器验收统一运行 `cd web && npm test`，需要管理员测试账号通过 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入，并保持两个 Web 和 server 启动。可用 `XA_WEB_URL`、`XA_USER_WEB_URL` 覆盖测试访问地址。
+`make check` 同时执行两个 Web 工程的 Biome、TypeScript 和构建，antd 检查只用于管理端。管理端浏览器验收运行 `cd web && npm test`，需要管理员测试账号通过 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入，并保持两个 Web 和 server 启动。可用 `XA_WEB_URL`、`XA_USER_WEB_URL` 覆盖测试访问地址。
+
+完整对话验收运行 `make integration INTEGRATION_WEB=1`（等同于 `XA_BROWSER_INTEGRATION=1 make integration`），需要已安装 Playwright Chromium 及其系统依赖。它构建用户端并启动独立的真实 server，使用低成本 `qwen3.8-flash` 验证 SOUL 版本、生成、Markdown 与代码复制、停止保存、唯一对话、历史分页、刷新恢复和窄屏焦点；测试账号与数据自动清理，不更改日常服务的模型配置。普通集成测试也使用真实模型验证 SOUL 生效。
 
 前台进程使用 `Ctrl+C`，或向对应进程发送 `SIGTERM`。进程停止接收请求，取消正在运行的健康检查，等待 HTTP 退出，再释放外部连接。关闭超时会返回错误。
 

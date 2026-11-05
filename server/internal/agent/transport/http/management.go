@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"linq-bs/server/internal/agent/definition"
+	"linq-bs/server/internal/agent/prompt"
 	"linq-bs/server/internal/framework/auth"
 	frameworkhttp "linq-bs/server/internal/framework/http"
 	"linq-bs/server/internal/framework/workspace"
@@ -13,9 +14,8 @@ import (
 
 // ManagementHandler 暴露 Agent 配置管理接口；调用者身份始终从认证上下文读取。
 type ManagementHandler struct {
-	Agents definition.Service
-	// RuntimeModel 是当前文本对话实际使用的模型名，不包含供应商凭证。
-	RuntimeModel string
+	Agents        definition.Service
+	AllowedModels []string
 }
 
 type agentRequest struct {
@@ -108,10 +108,12 @@ func (h *ManagementHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		writeAgentError(w, r, err)
 		return
 	}
+	// 旧管理端继续通过 prompts 编辑，返回兼容投影；用户端使用 soul_md。
+	version.Configuration.Prompts = []prompt.Slot{{Name: "system", Content: version.Configuration.SoulMD, Enabled: true, Scope: "agent"}}
 	frameworkhttp.WriteJSON(w, http.StatusOK, struct {
 		definition.AgentVersion
-		RuntimeModel string `json:"runtime_model,omitempty"`
-	}{version, h.RuntimeModel})
+		AvailableModels []string `json:"available_models"`
+	}{version, h.AllowedModels})
 }
 
 func (h *ManagementHandler) Save(w http.ResponseWriter, r *http.Request) {

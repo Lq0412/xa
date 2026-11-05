@@ -6,19 +6,37 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"linq-bs/server/internal/agent/prompt"
 	"linq-bs/server/internal/framework/auth"
+	"linq-bs/server/internal/framework/config"
 )
 
 // ServiceImpl 负责 Agent 配置校验、版本生成和归属判定。
-type ServiceImpl struct{ repository Repository }
+type ServiceImpl struct {
+	repository    Repository
+	allowedModels map[string]struct{}
+	defaultModel  string
+}
 
-func NewService(repository Repository) *ServiceImpl { return &ServiceImpl{repository: repository} }
+func NewService(repository Repository, allowed ...[]string) *ServiceImpl {
+	models := config.DefaultChatModels()
+	if len(allowed) > 0 && len(allowed[0]) > 0 {
+		models = allowed[0]
+	}
+	allowedModels := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		allowedModels[model] = struct{}{}
+	}
+	return &ServiceImpl{repository: repository, allowedModels: allowedModels, defaultModel: models[0]}
+}
 
 func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input SaveInput) (Saved, error) {
+	input.Configuration = normalizeConfiguration(input.Configuration, s.defaultModel)
 	if err := s.Validate(ctx, actor, input); err != nil {
 		return Saved{}, err
 	}
@@ -29,6 +47,9 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 			OwnerType: ownerType(input.Visibility), Name: strings.TrimSpace(input.Name), Avatar: strings.TrimSpace(input.Avatar),
 			Description: strings.TrimSpace(input.Description), Tags: append([]string(nil), input.Tags...),
 			Visibility: input.Visibility, Status: StatusActive, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
+		}
+		if definition.OwnerType == "user" {
+			definition.OwnerUserID = actor.UserID
 		}
 		version, err := newVersion(definition, input.Configuration, actor.UserID, now, 1)
 		if err != nil {
@@ -50,6 +71,9 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 	if err := checkManage(actor, current); err != nil {
 		return Saved{}, err
 	}
+	if current.IsPrimary && input.Visibility != VisibilityPrivate {
+		return Saved{}, ErrForbidden
+	}
 	currentVersion, err := s.repository.FindVersion(ctx, actor, current.ID, current.CurrentVersionID)
 	if err != nil {
 		return Saved{}, err
@@ -60,9 +84,9 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 	definition.Description = strings.TrimSpace(input.Description)
 	definition.Tags = append([]string(nil), input.Tags...)
 	definition.Visibility = input.Visibility
-	definition.OwnerType = ownerType(input.Visibility)
-	if definition.OwnerType == "user" {
-		definition.OwnerID = actor.UserID
+	// 编辑不得改变归属类型；公共化属于独立管理流程。
+	if input.Visibility != current.Visibility {
+		return Saved{}, ErrForbidden
 	}
 	definition.UpdatedAt = now
 	version, err := newVersion(definition, input.Configuration, actor.UserID, now, currentVersion.VersionNumber+1)
@@ -70,7 +94,7 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 		return Saved{}, err
 	}
 	if input.ExpectedVersionID == "" {
-		input.ExpectedVersionID = current.CurrentVersionID
+		return Saved{}, ErrConflict
 	}
 	if err := s.repository.SaveRevision(ctx, actor, Saved{Definition: definition, Version: version}, input.ExpectedVersionID); err != nil {
 		return Saved{}, err
@@ -97,12 +121,38 @@ func (s *ServiceImpl) Validate(_ context.Context, actor auth.Principal, input Sa
 	default:
 		return ErrInvalid
 	}
+	if model := input.Configuration.Model; model != "" {
+		if _, ok := s.allowedModels[model]; !ok {
+			return fmt.Errorf("不支持的模型: %s: %w", model, ErrInvalid)
+		}
+	}
+	if len([]rune(input.Configuration.SoulMD)) > 20000 {
+		return ErrInvalid
+	}
 	for _, slot := range input.Configuration.Prompts {
 		if len([]rune(slot.Content)) > 20000 || len([]rune(slot.Name)) > 100 {
 			return ErrInvalid
 		}
 	}
 	return nil
+}
+
+func normalizeConfiguration(configuration Configuration, defaultModel string) Configuration {
+	if configuration.Prompts != nil {
+		slices.SortStableFunc(configuration.Prompts, func(a, b prompt.Slot) int { return a.Order - b.Order })
+		var parts []string
+		for _, slot := range configuration.Prompts {
+			if slot.Enabled && strings.TrimSpace(slot.Content) != "" {
+				parts = append(parts, slot.Content)
+			}
+		}
+		configuration.SoulMD = strings.Join(parts, "\n\n")
+		configuration.Prompts = nil
+	}
+	if configuration.Model == "" {
+		configuration.Model = defaultModel
+	}
+	return configuration
 }
 
 func (s *ServiceImpl) Get(ctx context.Context, actor auth.Principal, agentID string) (AgentDefinition, error) {

@@ -1,25 +1,17 @@
-import {
-  AppstoreOutlined,
-  CommentOutlined,
-  LogoutOutlined,
-  SettingOutlined,
-  TeamOutlined,
-  UserOutlined,
-} from '@ant-design/icons';
 import { history, Link, Outlet, useLocation, useModel } from '@umijs/max';
-import { Alert, App, Avatar, Button, Popover, Switch, Tooltip } from 'antd';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { Dialog } from '@/components/Dialog';
+import { Icon, type IconName } from '@/components/Icon';
 import { errorMessage, logout, TOKEN_KEY } from '@/services/api';
 import { DetailsPreference, useDetailsPreference } from './DetailsPreference';
 
-/** 页面导航只保留图标栏，业务列表由各页面负责。 */
-const navigation = [
-  { path: '/chat', name: '对话', icon: <CommentOutlined /> },
-  { path: '/explore', name: '发现 Agent', icon: <AppstoreOutlined /> },
-  { path: '/my-agents', name: '我的 Agent', icon: <TeamOutlined /> },
+const navigation: { path: string; name: string; icon: IconName }[] = [
+  { path: '/chat', name: '对话', icon: 'chat' },
+  { path: '/explore', name: '发现 Agent', icon: 'grid' },
+  { path: '/my-agents', name: '我的 Agent', icon: 'team' },
 ];
 
-/** 所有受保护页面共用身份守卫；接口仍由服务端校验最终权限。 */
+/** 用户端导航和身份守卫，不引入管理端组件或样式。 */
 export default function AppLayout() {
   return (
     <DetailsPreference>
@@ -28,13 +20,14 @@ export default function AppLayout() {
   );
 }
 
-/** 布局保留账号守卫、真实设置和退出入口。 */
 function WorkspaceLayout() {
   const { pathname, search } = useLocation();
   const { initialState, setInitialState } = useModel('@@initialState');
   const user = initialState?.currentUser;
-  const { message } = App.useApp();
   const details = useDetailsPreference();
+  const [settings, setSettings] = useState(false);
+  const [error, setError] = useState('');
+  const [signingOut, setSigningOut] = useState(false);
   const requiresLogin = ['/my-agents', '/chat'].includes(pathname);
   useEffect(() => {
     if (requiresLogin && !user && !initialState?.sessionError)
@@ -42,114 +35,140 @@ function WorkspaceLayout() {
         `/login?redirect=${encodeURIComponent(pathname + search)}`,
       );
   }, [requiresLogin, user, pathname, search, initialState?.sessionError]);
-
   const signOut = async () => {
+    setSigningOut(true);
+    setError('');
     try {
       await logout();
       localStorage.removeItem(TOKEN_KEY);
       await setInitialState({});
       history.replace('/explore');
     } catch (cause) {
-      message.error(errorMessage(cause));
+      setError(errorMessage(cause));
+    } finally {
+      setSigningOut(false);
     }
   };
-
   return (
     <div className="user-app">
       <nav className="icon-rail" aria-label="主导航">
-        <Link to="/explore" className="brand-mark" aria-label="xa 首页">
-          xa
-        </Link>
         <div className="rail-links">
           {navigation.map((item) => (
-            <Tooltip key={item.path} title={item.name} placement="right">
-              <Link
-                className={`rail-link ${pathname === item.path ? 'active' : ''}`}
-                to={item.path}
-                aria-label={item.name}
-                aria-current={pathname === item.path ? 'page' : undefined}
-              >
-                {item.icon}
-              </Link>
-            </Tooltip>
+            <Link
+              key={item.path}
+              className={`rail-link ${pathname === item.path ? 'active' : ''}`}
+              to={item.path}
+              aria-label={item.name}
+              title={item.name}
+              aria-current={pathname === item.path ? 'page' : undefined}
+            >
+              <Icon name={item.icon} size={23} />
+            </Link>
           ))}
         </div>
         <div className="rail-bottom">
-          <Popover
+          <button
+            type="button"
+            className="rail-link"
+            onClick={() => setSettings(true)}
+            aria-label="设置"
             title="设置"
-            trigger="click"
-            placement="rightBottom"
-            content={
-              <div className="rail-settings">
-                <label htmlFor="details-preference">
-                  展开 Agent 详情
-                  <Switch
-                    id="details-preference"
-                    aria-label="展开 Agent 详情"
-                    checked={details.open}
-                    onChange={details.setOpen}
-                  />
-                </label>
-                {user?.role === 'admin' && process.env.XA_ADMIN_WEB_URL && (
-                  <a
-                    href={process.env.XA_ADMIN_WEB_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    管理后台 ↗
-                  </a>
-                )}
-              </div>
-            }
           >
-            <Button
-              type="text"
-              className="rail-link"
-              icon={<SettingOutlined />}
-              aria-label="设置"
-            />
-          </Popover>
+            <Icon name="settings" size={22} />
+          </button>
           {user ? (
-            <Tooltip title={user.display_name || user.email} placement="right">
-              <span className="rail-link" role="img" aria-label="当前账号">
-                <Avatar size={30} icon={<UserOutlined />} />
+            <button
+              type="button"
+              className="rail-link"
+              onClick={() => setSettings(true)}
+              aria-label="当前账号"
+              title={user.display_name || user.email}
+            >
+              <span className="account-avatar">
+                {Array.from(user.display_name || user.email)[0]}
               </span>
-            </Tooltip>
+            </button>
           ) : (
-            <Tooltip title="登录" placement="right">
-              <Link to="/login" className="rail-link" aria-label="登录">
-                <Avatar size={30} icon={<UserOutlined />} />
-              </Link>
-            </Tooltip>
+            <Link
+              to="/login"
+              className="rail-link"
+              aria-label="登录"
+              title="登录"
+            >
+              <Icon name="user" />
+            </Link>
           )}
           {user && (
-            <Tooltip title="退出登录" placement="right">
-              <Button
-                type="text"
-                className="rail-link"
-                icon={<LogoutOutlined />}
-                aria-label="退出登录"
-                onClick={() => void signOut()}
-              />
-            </Tooltip>
+            <button
+              type="button"
+              className="rail-link"
+              aria-label="退出登录"
+              title="退出登录"
+              disabled={signingOut}
+              onClick={() => void signOut()}
+            >
+              <Icon name="logout" size={22} />
+            </button>
           )}
         </div>
       </nav>
       <main className={`user-main ${pathname === '/chat' ? 'chat-main' : ''}`}>
+        {error && (
+          <div className="error-banner" role="alert">
+            {error}
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setError('')}
+            >
+              关闭
+            </button>
+          </div>
+        )}
         {initialState?.sessionError ? (
           <div className="page-content">
-            <Alert
-              type="error"
-              title="读取登录状态失败"
-              description={initialState.sessionError}
-              showIcon
-              action={<Button onClick={() => location.reload()}>重试</Button>}
-            />
+            <div className="error-banner" role="alert">
+              {initialState.sessionError}
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => location.reload()}
+              >
+                重试
+              </button>
+            </div>
           </div>
         ) : requiresLogin && !user ? null : (
           <Outlet />
         )}
       </main>
+      {settings && (
+        <Dialog title="设置" onClose={() => setSettings(false)}>
+          <div className="settings-content">
+            {user && <p className="account-email">{user.email}</p>}
+            <label className="settings-row">
+              展开 Agent 配置
+              <input
+                type="checkbox"
+                role="switch"
+                aria-checked={details.open}
+                checked={details.open}
+                onChange={(event) => details.setOpen(event.target.checked)}
+              />
+            </label>
+            {user?.role === 'admin' && process.env.XA_ADMIN_WEB_URL && (
+              <a
+                className="settings-row"
+                href={process.env.XA_ADMIN_WEB_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                管理后台 <Icon name="arrow-right" size={16} />
+              </a>
+            )}
+          </div>
+        </Dialog>
+      )}
     </div>
   );
 }
