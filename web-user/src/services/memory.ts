@@ -1,4 +1,5 @@
 import { request } from './http';
+import { type DeadJob, manualMemoryBody, parseDeadJobs } from './memoryRetry';
 
 /** 记忆条目。编辑和恢复都不会原地修改，成功后返回新的 id。 */
 export type MemoryItem = {
@@ -74,7 +75,7 @@ export type MemoryEdit = {
   pinned: boolean;
 };
 
-/** 手动新增。subject_key 省略时服务端使用 namespace。 */
+/** 手动新增。不传 subject_key，由服务端按内容生成，前端不补固定键。 */
 export type MemoryCreate = {
   content: string;
   namespace: string;
@@ -85,7 +86,7 @@ export type MemoryCreate = {
   agent_id?: string;
 };
 
-/** 当前用户的记忆统计。deadJobIDs 只在响应里真正带了任务 ID 时才有值。 */
+/** 当前用户的记忆统计。deadJobs 最多 20 条，dead 才是失败任务总数。 */
 export type MemoryStats = {
   status: Record<string, number>;
   namespace: Record<string, number>;
@@ -94,7 +95,7 @@ export type MemoryStats = {
   dead: number;
   latest_summary_at?: string;
   latest_maintain_at?: string;
-  deadJobIDs: string[];
+  deadJobs: DeadJob[];
 };
 
 export type MemoryPage = {
@@ -161,27 +162,6 @@ function readCountMap(value: unknown) {
     counts[key] = count;
   }
   return counts;
-}
-
-/** 统计响应目前没有任务 ID。若以后带上，重试按钮才可用。 */
-function readDeadJobIDs(value: Record<string, unknown>) {
-  const direct = value.dead_job_ids ?? value.job_ids;
-  if (
-    Array.isArray(direct) &&
-    direct.every((item) => typeof item === 'string' && item !== '')
-  ) {
-    return direct;
-  }
-  if (!Array.isArray(value.jobs)) return [];
-  const ids: string[] = [];
-  for (const job of value.jobs) {
-    if (typeof job !== 'object' || job == null || Array.isArray(job)) continue;
-    const record = job as Record<string, unknown>;
-    if (typeof record.id !== 'string' || record.id === '') continue;
-    if (record.status != null && record.status !== 'dead') continue;
-    ids.push(record.id);
-  }
-  return ids;
 }
 
 /**
@@ -260,7 +240,7 @@ export async function getMemoryMarkdown(agentID: string, signal?: AbortSignal) {
 export const createMemory = (input: MemoryCreate) =>
   request<MemoryItem>('/memories', {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify(manualMemoryBody(input)),
   });
 
 /** 用新条目取代旧条目。旧 id 再编辑会返回 409。 */
@@ -325,7 +305,7 @@ export async function getMemoryStats(signal?: AbortSignal) {
       typeof result.latest_maintain_at === 'string'
         ? result.latest_maintain_at
         : undefined,
-    deadJobIDs: readDeadJobIDs(result),
+    deadJobs: parseDeadJobs(result.dead_jobs),
   } satisfies MemoryStats;
 }
 

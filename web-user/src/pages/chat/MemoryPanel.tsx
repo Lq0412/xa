@@ -23,6 +23,7 @@ import {
   type MemoryCreate,
   type MemoryEdit,
   type MemoryItem,
+  type MemoryPage,
   type MemoryPolicyResult,
   type MemoryStats,
   type MemoryView,
@@ -32,6 +33,12 @@ import {
   saveMemoryPolicy,
   updateMemory,
 } from '@/services/memory';
+import {
+  createRetryGate,
+  deadJobIDs,
+  runDeadRetry,
+  withRetryGate,
+} from '@/services/memoryRetry';
 
 /** 回复结束后抽取是异步的，稍等再读一次列表。 */
 const REFRESH_AFTER_TURN_MS = 3000;
@@ -299,7 +306,11 @@ export function useAgentMemory({
   const [loadingMore, setLoadingMore] = useState(false);
   const [activeCount, setActiveCount] = useState<number | null>(null);
   const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [statsStale, setStatsStale] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [retryNote, setRetryNote] = useState('');
+  const [retryAlert, setRetryAlert] = useState(false);
+  const [retryNeedsReload, setRetryNeedsReload] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [policySaving, setPolicySaving] = useState(false);
@@ -308,7 +319,15 @@ export function useAgentMemory({
   const [markdown, setMarkdown] = useState<MemoryView>();
   const [markdownLoading, setMarkdownLoading] = useState(false);
   const generation = useRef(0);
+  const statsEpoch = useRef(0);
   const loadingMoreRef = useRef(false);
+  const retryGate = useRef(createRetryGate());
+  const statsRef = useRef(stats);
+  const statusRef = useRef(status);
+  const agentRef = useRef(agentId);
+  statsRef.current = stats;
+  statusRef.current = status;
+  agentRef.current = agentId;
   const onPolicySavedRef = useRef(onPolicySaved);
   const onConflictRef = useRef(onConflict);
   const versionRef = useRef(version);
@@ -333,6 +352,10 @@ export function useAgentMemory({
     setStatus('active');
     setActiveCount(null);
     setStats(null);
+    setStatsStale(false);
+    setRetryNote('');
+    setRetryAlert(false);
+    setRetryNeedsReload(false);
   }, [agentId]);
 
   useEffect(() => {
@@ -349,7 +372,7 @@ export function useAgentMemory({
     return () => clearTimeout(timer);
   }, [agentId, cue.agentId, cue.seq]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 在对话结束、编辑和重试后触发重新读取。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision 在对话结束和编辑后触发重新读取。重试自己刷新列表。
   useEffect(() => {
     const current = ++generation.current;
     const controller = new AbortController();
@@ -379,16 +402,19 @@ export function useAgentMemory({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision 变化后重新统计生效条数，卡片不随筛选改变。
   useEffect(() => {
+    const epoch = statsEpoch.current;
     const controller = new AbortController();
     countMemories(
       { scope: 'all_visible', agent_id: agentId, status: 'active' },
       controller.signal,
     )
       .then((total) => {
-        if (!controller.signal.aborted) setActiveCount(total);
+        if (controller.signal.aborted || statsEpoch.current !== epoch) return;
+        setActiveCount(total);
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
+        if (controller.signal.aborted || statsEpoch.current !== epoch) return;
+        setError(errorMessage(cause));
       });
     return () => controller.abort();
   }, [agentId, revision]);
@@ -396,13 +422,17 @@ export function useAgentMemory({
   // biome-ignore lint/correctness/useExhaustiveDependencies: 打开详情和刷新后读取统计。
   useEffect(() => {
     if (!detailOpen) return;
+    const epoch = statsEpoch.current;
     const controller = new AbortController();
     getMemoryStats(controller.signal)
       .then((value) => {
-        if (!controller.signal.aborted) setStats(value);
+        if (controller.signal.aborted || statsEpoch.current !== epoch) return;
+        setStats(value);
+        setStatsStale(false);
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
+        if (controller.signal.aborted || statsEpoch.current !== epoch) return;
+        setError(errorMessage(cause));
       });
     return () => controller.abort();
   }, [agentId, detailOpen, revision]);
@@ -427,7 +457,12 @@ export function useAgentMemory({
     return () => controller.abort();
   }, [agentId, policy.enabled, preview, revision]);
 
-  const refresh = () => setRevision((value) => value + 1);
+  const refresh = () => {
+    setRetryNote('');
+    setRetryAlert(false);
+    setRetryNeedsReload(false);
+    setRevision((value) => value + 1);
+  };
   const reportConflict = () => {
     setNotice('该记忆已被更新，已刷新');
     setRevision((value) => value + 1);
@@ -543,21 +578,74 @@ export function useAgentMemory({
       setPolicySaving(false);
     }
   };
-  const retryDead = async () => {
-    if (!stats || stats.deadJobIDs.length === 0 || retrying) return;
-    setRetrying(true);
-    setError('');
-    try {
-      for (const id of stats.deadJobIDs) {
-        await retryMemoryJob(id);
+  const retryDead = () => {
+    // 进入闸门后才改界面。重复点击在这里返回，不会把进行中的按钮重新放开。
+    void withRetryGate(retryGate.current, async () => {
+      const current = statsRef.current;
+      if (!current || deadJobIDs(current.deadJobs).length === 0) return;
+      // 丢掉点击前还在飞的统计和列表，避免过期响应把刚重试过的 id 写回来。
+      generation.current += 1;
+      statsEpoch.current += 1;
+      setRetrying(true);
+      setRetryNote('');
+      setRetryAlert(false);
+      setRetryNeedsReload(false);
+      setError('');
+      try {
+        const outcome = await runDeadRetry<
+          MemoryStats,
+          { page: MemoryPage; total: number }
+        >({
+          stats: current,
+          retry: retryMemoryJob,
+          refreshStats: () => getMemoryStats(),
+          refreshList: async () => {
+            const page = await listMemories({
+              scope: 'all_visible',
+              agent_id: agentRef.current,
+              status: statusRef.current,
+              limit: PAGE_SIZE,
+              cursor: '',
+            });
+            const total = await countMemories({
+              scope: 'all_visible',
+              agent_id: agentRef.current,
+              status: 'active',
+            });
+            return { page, total };
+          },
+        });
+        if (outcome.ignored) return;
+        if (outcome.stats) {
+          setStats(outcome.stats);
+          setStatsStale(false);
+        } else {
+          const handled = new Set(outcome.feedback.handledIDs);
+          setStats((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  deadJobs: prev.deadJobs.filter((job) => !handled.has(job.id)),
+                }
+              : prev,
+          );
+          setStatsStale(true);
+        }
+        if (outcome.list) {
+          setItems(outcome.list.page.items);
+          setNextCursor(outcome.list.page.nextCursor);
+          setLoaded(true);
+          setActiveCount(outcome.list.total);
+        }
+        setRetryNote(outcome.note);
+        setRetryAlert(outcome.alert);
+        setRetryNeedsReload(outcome.needsReload);
+      } catch (cause) {
+        setError(errorMessage(cause));
+      } finally {
+        setRetrying(false);
       }
-      setNotice('已重新排队');
-      setRevision((value) => value + 1);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setRetrying(false);
-    }
+    });
   };
 
   return {
@@ -569,7 +657,11 @@ export function useAgentMemory({
     status,
     changeStatus,
     stats,
+    statsStale,
     retrying,
+    retryNote,
+    retryAlert,
+    retryNeedsReload,
     error,
     notice,
     policy,
@@ -1460,12 +1552,14 @@ export function MemoryDetail({
                 <>
                   {' · '}
                   {memory.stats.dead} 个整理任务失败
-                  {memory.stats.deadJobIDs.length > 0 && (
+                  {memory.statsStale ? '（统计未更新）' : ''}
+                  {(memory.retrying || memory.stats.deadJobs.length > 0) && (
                     <button
                       type="button"
                       className="ml-1 underline underline-offset-2 disabled:opacity-40"
                       disabled={memory.retrying}
-                      onClick={() => void memory.retryDead()}
+                      aria-busy={memory.retrying}
+                      onClick={memory.retryDead}
                     >
                       {memory.retrying ? '重试中…' : '重试'}
                     </button>
@@ -1477,6 +1571,23 @@ export function MemoryDetail({
             '…'
           )}
         </p>
+        {memory.retryNote && (
+          <p
+            className={`text-[11px] leading-5 ${memory.retryAlert ? 'text-rose-700' : 'text-zinc-500'}`}
+            role={memory.retryAlert ? 'alert' : 'status'}
+          >
+            {memory.retryNote}
+            {memory.retryNeedsReload && (
+              <button
+                type="button"
+                className="ml-1 underline underline-offset-2"
+                onClick={memory.refresh}
+              >
+                重新读取
+              </button>
+            )}
+          </p>
+        )}
         <div className="flex items-center justify-end gap-2 text-xs text-zinc-600">
           <span>memory.md 预览</span>
           <Switch
