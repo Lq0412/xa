@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"linq-bs/server/internal/agent/conversation"
 	"linq-bs/server/internal/agent/definition"
+	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/auth"
 	frameworkhttp "linq-bs/server/internal/framework/http"
 	"net/http"
@@ -109,6 +110,10 @@ func (h *ConversationHandler) Send(w http.ResponseWriter, r *http.Request) {
 	}
 	m, u, err := h.Conversations.Send(r.Context(), p, r.PathValue("conversation_id"), in.Content, emit)
 	if err != nil {
+		if errors.Is(err, runtime.ErrMessageTooLong) {
+			conversationError(w, r, err)
+			return
+		}
 		b, _ := json.Marshal(map[string]string{"message": err.Error()})
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", b)
 		flusher.Flush()
@@ -121,6 +126,10 @@ func (h *ConversationHandler) Send(w http.ResponseWriter, r *http.Request) {
 func conversationError(w http.ResponseWriter, r *http.Request, err error) {
 	status := 500
 	code := "conversation_unavailable"
+	if errors.Is(err, runtime.ErrMessageTooLong) {
+		status = http.StatusUnprocessableEntity
+		code = "message_too_long"
+	}
 	if errors.Is(err, auth.ErrUnauthenticated) {
 		status = 401
 		code = "unauthenticated"

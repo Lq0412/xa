@@ -145,7 +145,8 @@ func (m Module) Context(ctx context.Context) ([]string, error) {
 		return nil, nil
 	}
 	core := Render(items, m.Policy.CoreBudgetTokens)
-	vector, err := m.Service.Model.Embed(ctx, m.Current)
+	// 向量检索只使用有界查询；发送给聊天模型的当前消息仍保留完整原文。
+	vector, err := m.Service.Model.Embed(ctx, runtime.TruncateTokens(m.Current, 6000))
 	if err != nil {
 		return nil, err
 	}

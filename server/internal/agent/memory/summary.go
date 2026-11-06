@@ -32,46 +32,80 @@ type HistoryMessage struct {
 	Content string
 }
 
-// Window 从最近消息向前装入完整轮次；四轮本身超预算时拒绝请求，避免无限扩张 prompt。
-func (s *Service) Window(ctx context.Context, p auth.Principal, conversationID string, budget int) ([]HistoryMessage, error) {
+// Window 读取原始历史，再按轮次降级；数据库中的消息始终保留原文。
+func (s *Service) Window(ctx context.Context, p auth.Principal, conversationID string, budget int) (HistoryWindow, error) {
 	rows, err := s.DB.Query(ctx, `SELECT m.id,m.role,m.content FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.id=$1 AND c.user_id=$2 AND c.workspace_id=$3 AND m.status='completed' ORDER BY m.created_at DESC,m.id DESC`, conversationID, p.UserID, p.WorkspaceID)
 	if err != nil {
-		return nil, err
+		return HistoryWindow{}, err
 	}
 	defer rows.Close()
-	var reversed, turn []HistoryMessage
-	used, rounds := 0, 0
+	var reversed []HistoryMessage
 	for rows.Next() {
 		var m HistoryMessage
 		if err = rows.Scan(&m.ID, &m.Role, &m.Content); err != nil {
-			return nil, err
+			return HistoryWindow{}, err
 		}
-		turn = append(turn, m)
-		if m.Role != "user" {
-			continue
-		}
-		cost := 0
-		for _, v := range turn {
-			cost += runtime.EstimateTokens(v.Content)
-		}
-		if used+cost > budget {
-			if rounds < 4 {
-				return nil, fmt.Errorf("最近四轮超过 history_budget_tokens: %w", definition.ErrInvalid)
-			}
-			break
-		}
-		reversed = append(reversed, turn...)
-		turn = nil
-		used += cost
-		rounds++
+		reversed = append(reversed, m)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, err
+		return HistoryWindow{}, err
 	}
 	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
 		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
-	return reversed, nil
+	return SelectHistory(reversed, budget), nil
+}
+
+// HistoryWindow 将实际注入内容与预算审计一起返回，即使窗口为空也保留明细。
+type HistoryWindow struct {
+	Messages []HistoryMessage
+	Details  runtime.Segment
+}
+
+// SelectHistory 先丢最旧轮；最后一轮仍超长时，按消息分配剩余预算并截断。
+func SelectHistory(messages []HistoryMessage, budget int) HistoryWindow {
+	out := HistoryWindow{Messages: append([]HistoryMessage(nil), messages...), Details: runtime.Segment{Name: "history_budget", Role: "system"}}
+	total := 0
+	for _, m := range messages {
+		total += runtime.EstimateTokens(m.Content)
+	}
+	out.Details.OverBudget = total > budget
+	for total > budget && len(out.Messages) > 0 {
+		next := 1
+		for next < len(out.Messages) && out.Messages[next].Role != "user" {
+			next++
+		}
+		if next == len(out.Messages) {
+			break
+		}
+		for _, m := range out.Messages[:next] {
+			total -= runtime.EstimateTokens(m.Content)
+		}
+		out.Messages = out.Messages[next:]
+		out.Details.DroppedRounds++
+	}
+	remaining := max(0, budget)
+	for i := range out.Messages {
+		m := &out.Messages[i]
+		cost := runtime.EstimateTokens(m.Content)
+		// 为同轮后续消息保留份额，避免用户长文挤掉整条助手回复。
+		limit := remaining
+		if total > remaining {
+			limit = remaining / (len(out.Messages) - i)
+		}
+		if cost > limit {
+			m.Content = runtime.TruncateTokens(m.Content, limit)
+			out.Details.Truncated = true
+			out.Details.TruncatedMessageIDs = append(out.Details.TruncatedMessageIDs, m.ID)
+		}
+		remaining -= runtime.EstimateTokens(m.Content)
+		total -= cost
+	}
+	if len(out.Messages) > 0 {
+		out.Details.FromMessageID = out.Messages[0].ID
+		out.Details.UntilMessageID = out.Messages[len(out.Messages)-1].ID
+	}
+	return out
 }
 
 // Summary 是只追加的滚动快照，覆盖范围始终包含此前全部摘要。

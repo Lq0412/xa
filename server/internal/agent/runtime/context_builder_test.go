@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"errors"
 	"linq-bs/server/internal/infra/provider"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +36,29 @@ func TestBuilderOrderAndSkip(t *testing.T) {
 	}
 	if len(empty.Messages) != 1 || empty.Segments[0].Name != "current" {
 		t.Fatalf("空模块没有跳过: %+v", empty)
+	}
+}
+
+func TestCurrentPreservedAndContextLimit(t *testing.T) {
+	current := "  \n" + strings.Repeat("长文", 10000) + "\n  "
+	result, err := (Builder{}).Build(t.Context(), Input{Current: current})
+	if err != nil || len(result.Messages) != 1 || result.Messages[0].Content != current {
+		t.Fatalf("当前消息未完整保留: %v", err)
+	}
+	if err := ValidateCurrent(strings.Repeat("字", ModelContextTokens)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = (Builder{}).Build(t.Context(), Input{Current: strings.Repeat("字", ModelContextTokens+1)})
+	if !errors.Is(err, ErrMessageTooLong) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestTruncateTokensUnicode(t *testing.T) {
+	for _, text := range []string{strings.Repeat("中文🙂", 100), strings.Repeat("abcd", 100)} {
+		got := TruncateTokens(text, 20)
+		if EstimateTokens(got) > 20 || !strings.HasSuffix(got, "…（已截断）") {
+			t.Fatal(got)
+		}
 	}
 }

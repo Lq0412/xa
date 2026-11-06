@@ -7,7 +7,8 @@
 召回全量精确排序；失败任务不重试；没有遗忘；列表无分页。
 
 ## 1. 短期记忆：对话窗口 + 滚动摘要（解决“轮次变多”）
-- 历史改为按 token 预算取：history_budget_tokens（默认 6000），从最新往前装，至少保留最近 4 轮完整；不再固定 20 条。
+- 历史按 history_budget_tokens（默认 6000）限制：超预算从最旧轮开始丢弃，最后一轮仍超长时按消息分配剩余预算并截断，末尾标注“…（已截断）”，标注计入预算。不再强制保留四轮，也不因历史超预算拒绝请求。
+- 当前用户消息完整保留，包括首尾空白，不参与历史预算。只有当前消息自身估算超过当前百炼文本模型的 1,000,000 token 上下文上限时，在 SSE 开始前返回 HTTP 422、`message_too_long`，提示“消息太长，超出模型可处理的长度，请缩短或分段发送”。估算口径仍为中文约一字一个 token、ASCII 约四字符一个 token，不替代供应商 tokenizer。
 - 新表 conversation_summaries(id, conversation_id, agent_id, owner_user_id, content, covers_from_message_id, covers_until_message_id, message_count, estimated_tokens, version, created_at)，同一会话只追加，最新一条生效。
 - 触发：窗口外“未被摘要覆盖”的消息累计超过 summary_trigger_tokens（默认 3000）时，入队 summary 任务（复用持久任务队列，见 §5）。
 - 增量摘要：旧摘要 + 新一段被挤出窗口的消息 → 新摘要（qwen3.8-flash，关思考，≤ summary_budget_tokens 默认 800）。内容要求：用户目标、已做决定、未完成事项、关键事实与数字、对话进展；不编造。
@@ -18,6 +19,7 @@
 - 抽取输入：当前用户消息 + 上一条助手回复 + 最近 2 轮（仅作理解指代的上下文），只抽用户亲口陈述的事实。
 - 去重候选：不再给最近 200 条，改为“同 subject_key 的条目 + 向量最相似 top-20（同 scope 可见范围）”。
 - 操作集：ADD / UPDATE / DELETE / NOOP。DELETE 用于用户说“忘掉…/不再是…”，置 status=deleted、valid_to=now，写事件；仍不覆盖 user_edited（UPDATE 遇 user_edited 改为 NOOP 并记 reason）。
+- DELETE 接口和抽取 DELETE 在删除事务中按记忆 ID 幂等入队 `rewrite_summary`。通过 conversation_id 或 source_ref 查找同一所有者的来源会话；找不到会话则跳过。任务从执行时的最新摘要移除事实，追加版本并保持覆盖范围和消息数，旧摘要及原始消息不删除。无摘要时写跳过事件；不遍历其他会话或重新摘要历史。停用 Agent 或关闭记忆不阻止已入队的遗忘清理。
 - 用户显式“记住…”：importance≥8，可 pinned。
 - kind 启用：fact / preference / episode（带时间的事件）/ procedure（用户希望的做事方式）。
 - 写入来源抽象：所有写入都经 Memory Service，source_type 字段区分 chat_extraction / user_edit / tool / import / delegation（后三种先留枚举与接口，tool 等工具模块上线后接 remember/forget 工具）。
@@ -37,7 +39,7 @@
 - 时间可注入（Clock 接口），测试里可快进。
 
 ## 5. 任务队列可靠性
-- memory_tasks 泛化为 memory_jobs(id, kind: extract|summarize|maintain, ref, owner_user_id, status, attempts, next_run_at, last_error, created_at, completed_at)，幂等键 (kind, ref)。
+- memory_tasks 泛化为 memory_jobs(id, kind: extract|summarize|maintain|rewrite_summary, ref, owner_user_id, status, attempts, next_run_at, last_error, created_at, completed_at)，幂等键 (kind, ref)。rewrite_summary 的 ref 为被删除记忆 ID，复用退避、dead 和手动 retry；事件为 SUMMARY_REWRITE_QUEUED、SUMMARY_REWRITTEN、SUMMARY_REWRITE_SKIPPED、REWRITE_SUMMARY_FAILED。
 - 失败指数退避重试（30s/2m/10m），3 次后 dead；保留 EXTRACT_FAILED 等事件。worker 多实例安全（SKIP LOCKED + 同用户 advisory lock）。
 - 每日维护任务由 worker 定时入队。
 
@@ -46,6 +48,7 @@ enabled, core_budget_tokens(800), recall_top_k(5), min_relevance(0.35), history_
 
 ## 7. 可观测性（给后续 runs 页面用）
 - 每条助手消息的 context_segments 增加明细：memory_core 条目 id、recall 条目 id+分数、summary id 及版本、history 起止消息 id、各段 token 估算。
+- `history_budget` 审计段记录 `over_budget`、`truncated`、`dropped_rounds`、`truncated_message_ids` 和保留历史起止 ID；此段不注入模型，estimated_tokens=0，实际历史成本仍在 history 段中。向量候选检索查询独立限制为 6000 估算 token，聊天和抽取模型中的当前消息仍完整。
 - 新接口 GET /api/v1/memory/stats：各状态/namespace 数量、待处理/失败/dead 任务数、最近一次摘要与维护时间。
 
 ## 8. API（全部保持现有 6 个接口向后兼容，只新增）
@@ -73,12 +76,13 @@ enabled, core_budget_tokens(800), recall_top_k(5), min_relevance(0.35), history_
 8. 失败重试：模拟模型失败，任务按退避重试，3 次后 dead，retry 接口可恢复。
 9. 召回阈值：无关问题不注入记忆。
 10. 现有 6 个接口行为不变（前端已在用）。
+11. 真实项目长文超过历史预算后仍正常回复，历史具有 over_budget/truncated 明细，当前原文完整；删除已进入摘要的记忆，幂等入队并生成不含该事实的新摘要版本；超模型上下文返回 422。
 检查：gofmt、go vet/test/build、make migrate、make integration 全过；make up 后服务正常；diff 无 Key。
 更新 docs/blueprint.md 记忆章节，标明后续 6.4 的遗忘曲线已在此完成，只剩多 Agent 共享与评测扩展。
 
 ## 实现说明（S1 收尾）
 
-当前实现新增 007/008 迁移：扩展 memory_items 状态、来源、保留率字段，建立 conversation_summaries、memory_jobs 和合并来源关系；历史窗口按 token 估算保留完整轮次，最近四轮本身超预算时拒绝请求。qwen3.8-flash 关闭思考后将旧摘要和新增消息滚动合并，Context Builder 通过 session_summary 注入最新版本。召回使用 pgvector 0.8.6 的 HNSW 候选 50 条，再按相关性、importance 和 retention 精排并应用 min_relevance。worker 前两次失败分别等待 30 秒、2 分钟，第三次失败进入 dead（保留 10 分钟 next_run_at，但不会自动领取）；每日维护计算 retention、归档低价值条目，并将同一授权范围内模型确认的重复事实合并为新版本。
+当前实现新增 007/008/009 迁移：扩展 memory_items 状态、来源、保留率字段，建立 conversation_summaries、memory_jobs 和合并来源关系，并允许摘要重写任务；历史窗口按最旧轮丢弃、最后一轮截断逐级降级。qwen3.8-flash 关闭思考后将旧摘要和新增消息滚动合并，Context Builder 通过 session_summary 注入最新版本。召回使用 pgvector 0.8.6 的 HNSW 候选 50 条，再按相关性、importance 和 retention 精排并应用 min_relevance。worker 前两次失败分别等待 30 秒、2 分钟，第三次失败进入 dead（保留 10 分钟 next_run_at，但不会自动领取）；每日维护计算 retention、归档低价值条目，并将同一授权范围内模型确认的重复事实合并为新版本。
 
 为保持旧客户端行为，不带分页参数的旧列表请求仍返回完整列表；显式分页和 all_visible 查询默认每页 50 条。完整接口说明见 [记忆 API](api/memory.md)。
 

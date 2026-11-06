@@ -29,7 +29,9 @@
 }
 ```
 
-content、namespace、importance 必填。content 非空且不超过 2000 个 Unicode 字符；importance 为 1–10。namespace 和 subject_key 匹配 `^[a-z][a-z0-9_.-]{0,63}$`。subject_key 默认等于 namespace；kind 默认 fact，可选 fact/preference/episode/procedure；scope 默认 user，可选 user/agent，agent 时必须提供可访问的 agent_id。来源固定为手动编辑。相同作用域、namespace、subject_key 已有 active 条目时返回 409。凭证类内容拒绝保存。
+content、namespace、importance 必填。content 非空且不超过 2000 个 Unicode 字符；importance 为 1–10。namespace 和 subject_key 匹配 `^[a-z][a-z0-9_.-]{0,63}$`。kind 默认 fact，可选 fact/preference/episode/procedure；scope 默认 user，可选 user/agent，agent 时必须提供可访问的 agent_id。来源固定为手动编辑。凭证类内容拒绝保存。
+
+省略 subject_key 或传空字符串时，使用 qwen3.8-flash（关闭思考）根据内容生成稳定英文键；生成失败或键不合法时使用 `manual_<12位随机id>`。在同一用户、作用域、Agent 和 namespace 内，仅 active 条目的余弦相似度大于 0.92 且模型确认同一事实时返回 409；不同事实发生键冲突时自动添加随机后缀，最终键不超过 64 字符。重复判定不依赖生成键完全相同；向量或判定模型失败返回服务错误。显式提供非空 subject_key 时保持原行为：相同作用域、namespace、subject_key 已有 active 条目就返回 409。
 
 201 响应（完整 Item，其他返回 Item 的接口使用同样结构）：
 
@@ -93,6 +95,10 @@ source 保留旧值 auto/user_edited；自动抽取的 source_type 为 chat_extr
 
 摘要按版本只追加，覆盖范围累计，原始消息不删除。
 
+删除记忆（DELETE 接口或抽取 DELETE）会在同一事务内为来源会话入队 `rewrite_summary`，按记忆 ID 去重。会话按 conversation_id/source_ref 查找并校验所有者，找不到则跳过。worker 从执行时的最新摘要移除事实，生成新版本，保持覆盖范围与消息数；只处理来源会话的最新摘要，不修改旧版本或原始消息。无摘要时记录跳过事件。重写异步生效，复用 memory_jobs 的 30 秒、2 分钟重试和第三次 dead 机制，dead 可用 retry 接口重试。
+
+相关事件：`SUMMARY_REWRITE_QUEUED`（入队）、`SUMMARY_REWRITTEN`（成功，before/after 为摘要快照）、`SUMMARY_REWRITE_SKIPPED`（没有摘要）、`REWRITE_SUMMARY_FAILED`（失败）。关闭记忆或停用 Agent 不取消已入队的清理。
+
 ### GET /api/v1/memory/stats
 
 无请求体。200 响应：
@@ -104,12 +110,21 @@ source 保留旧值 auto/user_edited；自动抽取的 source_type 为 chat_extr
   "pending": 2,
   "failed": 1,
   "dead": 0,
+  "dead_jobs": [],
   "latest_summary_at": "2026-11-05T00:00:00Z",
   "latest_maintain_at": "2026-11-05T00:01:00Z"
 }
 ```
 
 status 统计全部状态，namespace 仅统计 active；不存在的分组省略。pending 包括待重试任务，failed 包括有失败次数的 pending，因此两者可重叠；dead 单独统计。没有成功摘要/维护时，相应 latest 字段省略。统计为空时 status/namespace 为 {}。
+
+dead_jobs 仅返回当前用户的 dead 任务，按 updated_at 倒序最多 20 条，没有时为 `[]`。每条包含 `id`、`kind`、`last_error_summary`、`updated_at`；例如：
+
+```json
+{"id":"job_generated","kind":"extract","last_error_summary":"模型服务请求失败","updated_at":"2026-11-05T00:01:00Z"}
+```
+
+updated_at 为任务最近更新时间；迁移前的任务使用 completed_at 或 created_at 初始化。last_error_summary 只使用固定错误类别（少于 200 字符），不返回原始错误、记忆、消息、凭证或请求体。重试成功后任务立即从 dead_jobs 消失。
 
 ### POST /api/v1/memory/jobs/{job_id}/retry
 
@@ -225,6 +240,20 @@ events 响应：
 before/after 实际为该事件操作前后完整 Item、合并时的 Item 数组或 null；上例 after 的 {} 表示该位置的对象类型，字段与完整 Item 相同。events 沿取代链与合并父版本返回全部相关历史；新增 ARCHIVE/RESTORE/MERGE 和任务失败事件不改变旧字段。
 
 ## 错误和兼容性
+
+发送消息时，历史超过 history_budget_tokens 不返回错误：先丢最旧轮，最后一轮仍超长时截断消息并添加“…（已截断）”。当前用户消息始终完整保留。助手消息的 context_segments 中，`history_budget` 审计段（不注入模型，estimated_tokens=0）记录：
+
+```json
+{"name":"history_budget","role":"system","estimated_tokens":0,"over_budget":true,"truncated":true,"dropped_rounds":3,"truncated_message_ids":["message_long"],"from_message_id":"message_long","until_message_id":"message_last"}
+```
+
+仅降级时增加该审计段，false、0 和空数组字段省略。实际注入的历史 token 仍在 history 段中。当前消息自身按统一口径估算超过模型上下文上限（当前 qwen3.7-plus/qwen3.8-flash 为 1,000,000 token）时，`POST /api/v1/conversations/{conversation_id}/messages` 在开始 SSE 前返回 HTTP 422：
+
+```json
+{"code":"message_too_long","message":"消息太长，超出模型可处理的长度，请缩短或分段发送","request_id":"request_generated"}
+```
+
+token 采用中文约一字一个、ASCII 约四字符一个的估算，供应商实际 tokenizer 和最大输入限制仍以模型服务为准。
 
 通用错误 JSON：
 

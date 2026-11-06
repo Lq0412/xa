@@ -181,8 +181,7 @@ func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, bef
 }
 
 func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string, emit func(string) error) (Message, provider.Usage, error) {
-	content = strings.TrimSpace(content)
-	if content == "" {
+	if strings.TrimSpace(content) == "" {
 		return Message{}, provider.Usage{}, fmt.Errorf("消息不能为空")
 	}
 	var c Conversation
@@ -225,10 +224,14 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if windowService == nil {
 		windowService = &memory.Service{DB: s.DB}
 	}
-	history, err := windowService.Window(ctx, p, id, policy.HistoryBudgetTokens)
+	if err := runtime.ValidateCurrent(content); err != nil {
+		return Message{}, provider.Usage{}, err
+	}
+	window, err := windowService.Window(ctx, p, id, policy.HistoryBudgetTokens)
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
+	history := window.Messages
 	historyMessages := make([]provider.Message, 0, len(history))
 	previousUser := ""
 	for _, m := range history {
@@ -262,6 +265,9 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	})
 	if err != nil {
 		return Message{}, provider.Usage{}, err
+	}
+	if window.Details.OverBudget {
+		contextResult.Segments = slices.Insert(contextResult.Segments, len(contextResult.Segments)-1, window.Details)
 	}
 	for i := range contextResult.Segments {
 		seg := &contextResult.Segments[i]
@@ -342,8 +348,8 @@ func (s *Service) loadMessagesBudget(ctx context.Context, p auth.Principal, id s
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Message, 0, len(window))
-	for _, m := range window {
+	out := make([]Message, 0, len(window.Messages))
+	for _, m := range window.Messages {
 		out = append(out, Message{ID: m.ID, Role: m.Role, Content: m.Content})
 	}
 	return out, nil

@@ -274,6 +274,9 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, id string) error
 	if err := event(ctx, tx, p, &id, old.SourceRef, "DELETE", "user", old, after, ""); err != nil {
 		return err
 	}
+	if err := s.enqueueSummaryRewrite(ctx, tx, p, old); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -336,10 +339,8 @@ func (s *Service) Add(ctx context.Context, p auth.Principal, in AddInput) (Item,
 	if in.Kind == "" {
 		in.Kind = "fact"
 	}
-	if in.SubjectKey == "" {
-		in.SubjectKey = in.Namespace
-	}
-	if !valid(EditInput{Content: in.Content, Namespace: in.Namespace, Importance: in.Importance}) || !namespacePattern.MatchString(in.SubjectKey) || (in.Kind != "fact" && in.Kind != "preference" && in.Kind != "episode" && in.Kind != "procedure") {
+	automaticKey := in.SubjectKey == ""
+	if !valid(EditInput{Content: in.Content, Namespace: in.Namespace, Importance: in.Importance}) || (!automaticKey && !namespacePattern.MatchString(in.SubjectKey)) || (in.Kind != "fact" && in.Kind != "preference" && in.Kind != "episode" && in.Kind != "procedure") {
 		return Item{}, definition.ErrInvalid
 	}
 	var aid *string
@@ -354,6 +355,12 @@ func (s *Service) Add(ctx context.Context, p auth.Principal, in AddInput) (Item,
 	} else if in.Scope != "user" {
 		return Item{}, definition.ErrInvalid
 	}
+	if automaticKey {
+		if prohibitedContent.MatchString(in.Content) {
+			return Item{}, definition.ErrInvalid
+		}
+		in.SubjectKey = s.generateSubjectKey(ctx, in.Content)
+	}
 	v, err := s.Model.Embed(ctx, in.Content)
 	if err != nil {
 		return Item{}, err
@@ -363,6 +370,9 @@ func (s *Service) Add(ctx context.Context, p auth.Principal, in AddInput) (Item,
 		return Item{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
+	if automaticKey {
+		return s.addAutomatic(ctx, tx, p, in, aid, v)
+	}
 	item, err := replace(ctx, tx, p, nil, Item{Scope: in.Scope, AgentID: aid, Namespace: in.Namespace, SubjectKey: in.SubjectKey, Content: in.Content, Kind: in.Kind, Importance: in.Importance, Pinned: in.Pinned, Source: "user_edited"}, v)
 	if err != nil {
 		return Item{}, err
@@ -377,6 +387,7 @@ type Stats struct {
 	Pending        int            `json:"pending"`
 	Failed         int            `json:"failed"`
 	Dead           int            `json:"dead"`
+	DeadJobs       []DeadJob      `json:"dead_jobs"`
 	LatestSummary  *time.Time     `json:"latest_summary_at,omitempty"`
 	LatestMaintain *time.Time     `json:"latest_maintain_at,omitempty"`
 }
@@ -401,7 +412,7 @@ func (s *Service) Stats(ctx context.Context, p auth.Principal) (Stats, error) {
 	if err := authenticated(p); err != nil {
 		return Stats{}, err
 	}
-	out := Stats{Status: map[string]int{}, Namespace: map[string]int{}}
+	out := Stats{Status: map[string]int{}, Namespace: map[string]int{}, DeadJobs: []DeadJob{}}
 	rows, err := s.DB.Query(ctx, `SELECT status,count(*) FROM memory_items WHERE workspace_id=$1 AND owner_user_id=$2 GROUP BY status`, p.WorkspaceID, p.UserID)
 	if err != nil {
 		return out, err
@@ -440,7 +451,8 @@ func (s *Service) Stats(ctx context.Context, p auth.Principal) (Stats, error) {
 	if err := s.DB.QueryRow(ctx, `SELECT (SELECT max(created_at) FROM conversation_summaries WHERE owner_user_id=$1),(SELECT max(completed_at) FROM memory_jobs WHERE owner_user_id=$1 AND kind='maintain' AND status='completed')`, p.UserID).Scan(&out.LatestSummary, &out.LatestMaintain); err != nil {
 		return out, err
 	}
-	return out, nil
+	out.DeadJobs, err = s.deadJobs(ctx, p)
+	return out, err
 }
 
 // Events 沿双向取代链返回整条事实的历史，并在每层限制归属。

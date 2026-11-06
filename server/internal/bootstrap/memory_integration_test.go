@@ -91,6 +91,9 @@ func TestMemoryS1(t *testing.T) {
 	}
 	model := provider.NewBailian(cfg.Bailian.APIKey, cfg.Bailian.BaseURL)
 	mem := &memory.Service{DB: db, Agents: agents, Model: model}
+	t.Run("manual_keys_and_dead_jobs", func(t *testing.T) {
+		testMemoryAPIFixes(t, ctx, mem, newUser(), newUser())
+	})
 	chats := &conversation.Service{DB: db, Agents: agents, Model: model, Memory: mem, AllowedModels: cfg.ChatModels}
 	chat, err := chats.GetOrCreate(ctx, p, primary.ID)
 	if err != nil {
@@ -252,8 +255,11 @@ func TestMemoryS1(t *testing.T) {
 		t.Fatal(err)
 	}
 	events, err = mem.Events(ctx, p, items[0].ID)
-	if err != nil || len(events) != 4 || events[3].Op != "DELETE" {
-		t.Fatal("删除事件缺失")
+	if err != nil || len(events) != 5 || events[3].Op != "DELETE" || events[4].Op != "SUMMARY_REWRITE_QUEUED" {
+		t.Fatal("删除或摘要重写入队事件缺失")
+	}
+	if processed, err := mem.ProcessNext(ctx); !processed || err != nil {
+		t.Fatalf("摘要重写任务未完成: %v", err)
 	}
 	// 已关闭的真实模块即使没有服务依赖也不能读取数据库或调用模型。
 	result, err := (runtime.Builder{Memory: memory.Module{Policy: definition.MemoryPolicy{Enabled: false}}}).Build(ctx, runtime.Input{Current: "你好"})

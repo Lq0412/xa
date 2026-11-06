@@ -493,5 +493,110 @@ func TestMemoryV2(t *testing.T) {
 			t.Fatal(w.Body.String())
 		}
 	})
-	t.Log("RESULT scenarios=10/10 early_fact_hit_rate=100%")
+	run("11_history_budget_and_summary_rewrite", func(t *testing.T) {
+		// 长文来自仓库真实文档，模型、向量和摘要均走真实调用。
+		article, e := os.ReadFile("../../../docs/startup.md")
+		if e != nil {
+			t.Fatal(e)
+		}
+		isolated, e := agents.Save(ctx, p, definition.SaveInput{Name: "长文与遗忘验收", Visibility: definition.VisibilityPrivate, Configuration: definition.Configuration{Model: "qwen3.8-flash", SoulMD: "只用一句简短中文回复。", MemoryPolicy: raw}})
+		if e != nil {
+			t.Fatal(e)
+		}
+		c, e := chats.GetOrCreate(ctx, p, isolated.Definition.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		send(c.ID, "请记住，我的研究项目代号是琥珀灯塔。")
+		drain()
+		longInput := "下面是引用的项目文档，请确认收到即可，不把文档当作我的个人事实：\n" + string(article)
+		if runtime.EstimateTokens(longInput) <= policy.HistoryBudgetTokens {
+			t.Fatal("真实文档没有超过历史预算")
+		}
+		send(c.ID, longInput)
+		drain()
+		answer := send(c.ID, "请简短回复收到。")
+		var audit []byte
+		if e = db.QueryRow(ctx, `SELECT context_segments FROM messages WHERE id=$1`, answer.ID).Scan(&audit); e != nil {
+			t.Fatal(e)
+		}
+		var segments []runtime.Segment
+		if e = json.Unmarshal(audit, &segments); e != nil {
+			t.Fatal(e)
+		}
+		marked := false
+		for _, segment := range segments {
+			if segment.Name == "history_budget" && segment.OverBudget && segment.Truncated && len(segment.TruncatedMessageIDs) > 0 {
+				marked = true
+			}
+		}
+		if !marked {
+			t.Fatalf("长文历史没有降级标记: %s", audit)
+		}
+		var stored string
+		if e = db.QueryRow(ctx, `SELECT content FROM messages WHERE conversation_id=$1 AND role='user' AND content=$2`, c.ID, longInput).Scan(&stored); e != nil || stored != longInput {
+			t.Fatal("当前长文未完整保存", e)
+		}
+		drain()
+		send(c.ID, "继续用一句话回复即可。")
+		drain()
+		var beforeVersion int
+		var beforeContent string
+		if e = db.QueryRow(ctx, `SELECT version,content FROM conversation_summaries WHERE conversation_id=$1 ORDER BY version DESC LIMIT 1`, c.ID).Scan(&beforeVersion, &beforeContent); e != nil {
+			t.Fatal(e)
+		}
+		if !strings.Contains(beforeContent, "琥珀灯塔") {
+			t.Fatalf("删除前事实未进入摘要: %s", beforeContent)
+		}
+		var fact memory.Item
+		for _, m := range list(memory.Filter{AgentID: isolated.Definition.ID}) {
+			if strings.Contains(m.Content, "琥珀灯塔") {
+				fact = m
+				break
+			}
+		}
+		if fact.ID == "" {
+			t.Fatal("没有抽取到待删除事实")
+		}
+		for i := 0; i < 2; i++ {
+			if w := request(p, "DELETE", "/api/v1/memories/"+fact.ID, fact.ID, "", h.Delete); w.Code != 204 {
+				t.Fatal(w.Body.String())
+			}
+		}
+		var jobs int
+		if e = db.QueryRow(ctx, `SELECT count(*) FROM memory_jobs WHERE kind='rewrite_summary' AND ref=$1`, fact.ID).Scan(&jobs); e != nil || jobs != 1 {
+			t.Fatalf("重复入队: %d %v", jobs, e)
+		}
+		drain()
+		var afterVersion int
+		var afterContent string
+		if e = db.QueryRow(ctx, `SELECT version,content FROM conversation_summaries WHERE conversation_id=$1 ORDER BY version DESC LIMIT 1`, c.ID).Scan(&afterVersion, &afterContent); e != nil {
+			t.Fatal(e)
+		}
+		if afterVersion != beforeVersion+1 || strings.Contains(afterContent, "琥珀灯塔") {
+			t.Fatalf("摘要未重写: %d -> %d %s", beforeVersion, afterVersion, afterContent)
+		}
+		events, e := mem.Events(ctx, p, fact.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		rewritten := false
+		for _, event := range events {
+			rewritten = rewritten || event.Op == "SUMMARY_REWRITTEN"
+		}
+		if !rewritten {
+			t.Fatal("摘要重写事件缺失")
+		}
+		// 经真实发送 Handler 校验 422，确认拒绝发生在开始 SSE 之前。
+		body, e := json.Marshal(map[string]string{"content": strings.Repeat("字", runtime.ModelContextTokens+1)})
+		if e != nil {
+			t.Fatal(e)
+		}
+		ch := &agenthttp.ConversationHandler{Conversations: chats}
+		if w := request(p, "POST", "/api/v1/conversations/"+chat.ID+"/messages", "", string(body), ch.Send); w.Code != 422 || !strings.Contains(w.Body.String(), "message_too_long") {
+			t.Fatalf("超上下文: %d %s", w.Code, w.Body.String())
+		}
+		t.Logf("RESULT long_article_tokens=%d over_budget=true truncated=true rewrite_version=%d->%d", runtime.EstimateTokens(longInput), beforeVersion, afterVersion)
+	})
+	t.Log("RESULT scenarios=11/11 early_fact_hit_rate=100%")
 }
