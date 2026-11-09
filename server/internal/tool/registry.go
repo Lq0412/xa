@@ -27,6 +27,12 @@ func (r *Registry) Register(t Tool) error {
 	if _, exists := r.tools[spec.Name]; exists {
 		return fmt.Errorf("工具重复注册: %s", spec.Name)
 	}
+	if err := ValidateSchemaDocument(spec.InputSchema); err != nil {
+		return fmt.Errorf("工具 %s 的 InputSchema: %w", spec.Name, err)
+	}
+	if err := ValidateSchemaDocument(spec.ConfigSchema); err != nil {
+		return fmt.Errorf("工具 %s 的 ConfigSchema: %w", spec.Name, err)
+	}
 	r.tools[spec.Name] = t
 	return nil
 }
@@ -113,8 +119,15 @@ func validateBinding(b binding.ToolBinding, spec Spec) error {
 		}
 	}
 	for field := range config {
-		if _, ok := schema.Properties[field]; !ok {
-			return fmt.Errorf("configuration 含未声明字段")
+		if len(spec.ConfigSchema) > 0 {
+			if _, ok := schema.Properties[field]; !ok {
+				return fmt.Errorf("configuration 含未声明字段")
+			}
+		}
+	}
+	if len(spec.ConfigSchema) > 0 {
+		if violations := ValidateJSON(spec.ConfigSchema, b.Configuration); len(violations) > 0 {
+			return fmt.Errorf("configuration %s", violations[0].Error())
 		}
 	}
 	return nil

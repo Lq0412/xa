@@ -56,11 +56,17 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 		return auth.Principal{UserID: current.ID, WorkspaceID: current.WorkspaceID, Roles: []string{current.Role}}, nil
 	})
 	agents := agentdefinition.NewService(agentdefinition.NewPGRepository(db), s.config.ChatModels)
+	model := provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL)
+	memories := &memory.Service{DB: db, Agents: agents, Model: model}
+	registry, err := NewToolRegistry(memories, db)
+	if err != nil {
+		return nil, err
+	}
+	agents.ToolValidator = registry.ValidateBindings
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
 	agentHandler := &agenthttp.ManagementHandler{Agents: agents, AllowedModels: s.config.ChatModels}
 	libraryHandler := &agenthttp.LibraryHandler{Library: &agentdefinition.Library{DB: db}}
-	model := provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL)
-	memories := &memory.Service{DB: db, Agents: agents, Model: model}
+	toolsHandler := &agenthttp.ToolsHandler{Registry: registry, Agents: agents}
 	memoryHandler := &agenthttp.MemoryHandler{Memory: memories, Agents: agents}
 	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: model, Memory: memories, AllowedModels: s.config.ChatModels}}
 
@@ -92,6 +98,9 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("POST /api/v1/agents/{agent_id}/enable", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Enable)))
 	mux.Handle("POST /api/v1/agents/{agent_id}/offline", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Disable)))
 	mux.Handle("DELETE /api/v1/agents/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Delete)))
+	mux.Handle("GET /api/v1/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.Catalog)))
+	mux.Handle("GET /api/v1/agents/{agent_id}/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.GetAgentTools)))
+	mux.Handle("PUT /api/v1/agents/{agent_id}/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.PutAgentTools)))
 	mux.Handle("POST /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Create)))
 	mux.Handle("GET /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.List)))
 	mux.Handle("GET /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Messages)))
