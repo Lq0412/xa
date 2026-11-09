@@ -241,6 +241,7 @@ export function MessageList({
                       )}
                       <article
                         data-message-id={message.id}
+                        data-parts-count={message.parts?.length ?? 0}
                         className={`message-row flex w-full min-w-0 ${mine ? 'user justify-end' : 'assistant justify-start'}`}
                         aria-label={
                           mine ? '你的消息' : `${agent?.name || '助手'}的回复`
@@ -249,9 +250,9 @@ export function MessageList({
                         <div
                           className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-7 ${mine ? 'bg-[#fff4cc] text-zinc-900' : 'bg-zinc-100 text-zinc-900'}`}
                         >
-                          {!mine && message.parts?.length ? (
+                          {!mine && (message.parts?.length ?? 0) > 0 ? (
                             <div className="space-y-1">
-                              {message.parts.map((part) => {
+                              {message.parts?.map((part) => {
                                 const key = partKey(part);
                                 if (part.type === 'reasoning')
                                   return (
@@ -264,10 +265,18 @@ export function MessageList({
                                   );
                                 if (part.type === 'tool')
                                   return <ToolCallChip key={key} part={part} />;
-                                return (
-                                  <Markdown key={key}>{part.text}</Markdown>
-                                );
+                                if (part.type === 'text' && part.text)
+                                  return (
+                                    <Markdown key={key}>{part.text}</Markdown>
+                                  );
+                                return null;
                               })}
+                              {message.content &&
+                              !message.parts?.some(
+                                (p) => p.type === 'text' && p.text,
+                              ) ? (
+                                <Markdown>{message.content}</Markdown>
+                              ) : null}
                             </div>
                           ) : message.content ? (
                             mine ? (

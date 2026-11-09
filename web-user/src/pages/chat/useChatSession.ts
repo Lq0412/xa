@@ -125,11 +125,26 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
           },
         });
         const historyPage = await listMessages(convId, controller.signal);
-        update(targetKey, (state) => ({
-          messages: historyPage.messages ?? state.messages,
-          hasMore: historyPage.has_more,
-          before: historyPage.before,
-        }));
+        update(targetKey, (state) => {
+          const latest = (historyPage.messages ?? []).map((message) => {
+            const local = state.messages.find(
+              (item) => item.id === message.id || item.run_id === active.id,
+            );
+            if (message.parts?.length) return message;
+            if (local?.parts?.length)
+              return {
+                ...message,
+                parts: local.parts,
+                content: message.content || local.content,
+              };
+            return message;
+          });
+          return {
+            messages: latest.length ? latest : state.messages,
+            hasMore: historyPage.has_more,
+            before: historyPage.before,
+          };
+        });
       } catch (cause) {
         if (!controller.signal.aborted) {
           update(targetKey, { sendError: errorMessage(cause) });
@@ -393,13 +408,29 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       }));
       const historyPage = await listMessages(id, controller.signal);
       update(targetKey, (state) => {
-        const latest = historyPage.messages ?? [];
+        const latest = (historyPage.messages ?? []).map((message) => {
+          const local = state.messages.find(
+            (item) =>
+              item.id === message.id ||
+              item.id === assistantID ||
+              item.id === savedID,
+          );
+          if (message.parts?.length) return message;
+          if (local?.parts?.length)
+            return {
+              ...message,
+              parts: local.parts,
+              content: message.content || local.content,
+            };
+          return message;
+        });
         const ids = new Set(latest.map((item) => item.id));
         const older = state.messages.filter(
           (item) =>
             !ids.has(item.id) &&
             item.id !== localUserID &&
-            item.id !== assistantID,
+            item.id !== assistantID &&
+            item.id !== savedID,
         );
         return {
           messages: [...older, ...latest],

@@ -64,26 +64,34 @@ export function applyRunEvent(
     case 'tool.completed': {
       const callId = ev.call_id as string | undefined;
       const index = ev.index as number | undefined;
-      let part = next.find(
-        (p): p is Extract<MessagePart, { type: 'tool' }> =>
-          p.type === 'tool' &&
-          ((callId && p.call_id === callId) ||
-            (!callId && p.index === index && !p.call_id)),
-      );
-      if (!part) {
+      const name = String(ev.name ?? '');
+      let partIdx = next.findIndex((p) => {
+        if (p.type !== 'tool') return false;
+        const tool = p as Extract<MessagePart, { type: 'tool' }>;
+        if (callId && tool.call_id === callId) return true;
+        if (!callId && index != null && tool.index === index) return true;
+        if (name && tool.name === name) return true;
+        return false;
+      });
+      let part: Extract<MessagePart, { type: 'tool' }>;
+      if (partIdx >= 0) {
+        part = next[partIdx] as Extract<MessagePart, { type: 'tool' }>;
+      } else {
         part = {
           type: 'tool',
-          name: String(ev.name ?? ''),
+          name,
           title: String(ev.title ?? ev.name ?? '工具'),
           status: 'preparing',
           call_id: callId,
           index,
         };
         next.push(part);
+        partIdx = next.length - 1;
       }
+      if (ev.type === 'tool.called' && callId) part.call_id = callId;
+      if (ev.type === 'tool.started' && callId) part.call_id = callId;
       if (ev.type === 'tool.preparing') part.status = 'preparing';
       if (ev.type === 'tool.called') {
-        part.call_id = String(ev.call_id ?? part.call_id);
         part.status = String(ev.status) === 'rejected' ? 'rejected' : 'pending';
         if (ev.args_preview) part.args_preview = String(ev.args_preview);
       }
@@ -94,6 +102,7 @@ export function applyRunEvent(
         if (Array.isArray(ev.items)) part.items = ev.items as ToolPart['items'];
         if (ev.duration_ms) part.duration_ms = Number(ev.duration_ms);
       }
+      next[partIdx] = part;
       break;
     }
   }

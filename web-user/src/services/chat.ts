@@ -131,7 +131,13 @@ export async function streamMessage(
     throw new ApiError(502, '服务未返回有效的消息流');
   const reader = response.body
     .pipeThrough(new TextDecoderStream())
-    .pipeThrough(new EventSourceParserStream({ onError: 'terminate' }))
+    .pipeThrough(
+      new EventSourceParserStream({
+        onError: () => {
+          /* 分片中间态由解析器自行恢复 */
+        },
+      }),
+    )
     .getReader();
   try {
     for (;;) {
@@ -166,6 +172,40 @@ export type StreamRunHandlers = {
   onRunID?: (runId: string) => void;
 };
 
+type SseFrame = { event: string; data: string };
+
+async function* readSseFrames(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<SseFrame> {
+  const reader = (body as ReadableStream<Uint8Array<ArrayBuffer>>)
+    .pipeThrough(new TextDecoderStream())
+    .getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      for (;;) {
+        const sep = buf.indexOf('\n\n');
+        if (sep < 0) break;
+        const block = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        if (block.startsWith(':')) continue;
+        let event = '';
+        let data = '';
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) data += line.slice(5).trim();
+        }
+        if (data) yield { event, data };
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 /** SSE v2：X-XA-Stream: 2，支持取消与续传由调用方处理 run_id。 */
 export async function streamRun(
   conversationId: string,
@@ -196,40 +236,30 @@ export async function streamRun(
   let contentText = '';
   let runId = '';
   let messageId = '';
-  const reader = response.body
-    .pipeThrough(new TextDecoderStream())
-    .pipeThrough(new EventSourceParserStream({ onError: 'terminate' }))
-    .getReader();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const ev = JSON.parse(value.data) as RunStreamEvent;
-      if (typeof ev.run_id === 'string') {
-        runId = ev.run_id;
-        handlers.onRunID?.(runId);
-      }
-      if (ev.type === 'message.delta') {
-        const d = String(ev.delta ?? '');
-        contentText += d;
-      }
-      parts = applyRunEvent(parts, { ...ev, type: value.event || ev.type });
-      handlers.onParts(parts, contentText);
-      if (
-        value.event === 'run.completed' ||
-        value.event === 'run.failed' ||
-        value.event === 'run.cancelled'
-      ) {
-        messageId = String(ev.message_id ?? '');
-        if (value.event !== 'run.completed')
-          throw new ApiError(502, String(ev.message ?? '生成失败'));
-        break;
-      }
+  for await (const frame of readSseFrames(response.body)) {
+    const ev = JSON.parse(frame.data) as RunStreamEvent;
+    const typ = String(frame.event || ev.type || '');
+    if (typeof ev.run_id === 'string') {
+      runId = ev.run_id;
+      handlers.onRunID?.(runId);
     }
-    return { messageId, runId };
-  } finally {
-    reader.releaseLock();
+    if (typ === 'message.delta') {
+      contentText += String(ev.delta ?? '');
+    }
+    parts = applyRunEvent(parts, { ...ev, type: typ });
+    handlers.onParts(parts, contentText);
+    if (
+      typ === 'run.completed' ||
+      typ === 'run.failed' ||
+      typ === 'run.cancelled'
+    ) {
+      messageId = String(ev.message_id ?? '');
+      if (typ !== 'run.completed')
+        throw new ApiError(502, String(ev.message ?? '生成失败'));
+      break;
+    }
   }
+  return { messageId, runId };
 }
 
 export async function cancelRun(runId: string, signal?: AbortSignal) {
@@ -255,29 +285,20 @@ export async function resumeRun(
   if (!response.body) throw new ApiError(502, '续传失败');
   let parts: MessagePart[] = [];
   let contentText = '';
-  const reader = response.body
-    .pipeThrough(new TextDecoderStream())
-    .pipeThrough(new EventSourceParserStream({ onError: 'terminate' }))
-    .getReader();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const ev = JSON.parse(value.data) as RunStreamEvent;
-      if (ev.type === 'message.delta') contentText += String(ev.delta ?? '');
-      parts = applyRunEvent(parts, { ...ev, type: value.event || ev.type });
-      handlers.onParts(parts, contentText);
-      if (
-        value.event === 'run.completed' ||
-        value.event === 'run.failed' ||
-        value.event === 'run.cancelled'
-      ) {
-        if (value.event !== 'run.completed')
-          throw new ApiError(502, String(ev.message ?? '生成失败'));
-        break;
-      }
+  for await (const frame of readSseFrames(response.body)) {
+    const ev = JSON.parse(frame.data) as RunStreamEvent;
+    const typ = String(frame.event || ev.type || '');
+    if (typ === 'message.delta') contentText += String(ev.delta ?? '');
+    parts = applyRunEvent(parts, { ...ev, type: typ });
+    handlers.onParts(parts, contentText);
+    if (
+      typ === 'run.completed' ||
+      typ === 'run.failed' ||
+      typ === 'run.cancelled'
+    ) {
+      if (typ !== 'run.completed')
+        throw new ApiError(502, String(ev.message ?? '生成失败'));
+      break;
     }
-  } finally {
-    reader.releaseLock();
   }
 }

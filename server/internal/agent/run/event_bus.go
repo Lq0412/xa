@@ -134,6 +134,10 @@ func (b *EventBus) Emit(ctx context.Context, typ string, payload map[string]any)
 		return nil
 	}
 	b.batch = append(b.batch, pe)
+	if strings.HasPrefix(typ, "tool.") {
+		b.flushBatchLocked(false)
+		return nil
+	}
 	if len(b.batch) >= 32 {
 		b.flushBatchLocked(false)
 	} else if b.flushTimer == nil {

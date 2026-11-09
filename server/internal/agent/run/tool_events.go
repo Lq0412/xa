@@ -106,7 +106,11 @@ func streamSink(ctx context.Context, rc *RunContext) func(provider.StreamEvent) 
 			if ev.Reasoning == "" || rc.Emitter == nil {
 				return nil
 			}
-			itemID := itemIDOr("", rc.Step)
+			step := rc.Step
+			if step <= 0 {
+				step = 1
+			}
+			itemID := itemIDOr("", step)
 			if rc.Bus != nil {
 				return rc.Bus.ReasoningDelta(ctx, itemID, ev.Reasoning)
 			}
