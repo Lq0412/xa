@@ -156,7 +156,10 @@ func (NeedsApproval) Spec() tool.Spec {
 		Approval: tool.ApprovalPolicy{Default: tool.ApprovalAlways, Overridable: true}}
 }
 
+var approvalCalls atomic.Int64
+
 func (NeedsApproval) Execute(context.Context, tool.Call, tool.Env) (tool.Result, error) {
+	approvalCalls.Add(1)
 	return tool.Result{Data: map[string]any{"approved": true}}, nil
 }
 
@@ -164,6 +167,7 @@ func (NeedsApproval) Execute(context.Context, tool.Call, tool.Env) (tool.Result,
 func ResetCounters() {
 	readCalls.Store(0)
 	writeCalls.Store(0)
+	approvalCalls.Store(0)
 }
 
 // ReadCount 返回只读调用次数。
@@ -171,3 +175,6 @@ func ReadCount() int64 { return readCalls.Load() }
 
 // WriteCount 返回写入调用次数。
 func WriteCount() int64 { return writeCalls.Load() }
+
+// ApprovalCount 返回需审批假工具 Execute 被调用次数。
+func ApprovalCount() int64 { return approvalCalls.Load() }

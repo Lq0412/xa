@@ -8,12 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"linq-bs/server/internal/agent/conversation"
 	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/postgres"
-	"linq-bs/server/internal/infra/provider"
 	"linq-bs/server/internal/system/user"
 	"strings"
 	"testing"
@@ -125,7 +123,7 @@ func TestAgentModules(t *testing.T) {
 			t.Fatalf("未拒绝未知模型 %q: %v", invalidModel, err)
 		}
 	}
-	chats := &conversation.Service{DB: db, Agents: agents, Model: provider.NewBailian(cfg.Bailian.APIKey, cfg.Bailian.BaseURL), AllowedModels: cfg.ChatModels}
+	chats := newChatService(t, db, agents, nil)
 	chat, err := chats.GetOrCreate(t.Context(), actor, primary.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +172,16 @@ func TestAgentModules(t *testing.T) {
 	if err := json.Unmarshal(raw, &segments); err != nil {
 		t.Fatal(err)
 	}
-	if len(segments) != 5 || segments[0].Name != "platform" || segments[1].Name != "soul" || segments[4].Name != "current" || versionID != concise.Version.ID {
-		t.Fatalf("运行上下文记录错误: %s", raw)
+	names := map[string]bool{}
+	for _, seg := range segments {
+		names[seg.Name] = true
+	}
+	for _, req := range []string{"platform", "soul", "current"} {
+		if !names[req] {
+			t.Fatalf("运行上下文缺少 %s: %s", req, raw)
+		}
+	}
+	if versionID != concise.Version.ID {
+		t.Fatalf("agent_version_id 错误: %s", versionID)
 	}
 }

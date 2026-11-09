@@ -147,6 +147,18 @@ func estimateTokens(content string) int {
 	return EstimateTokens(content)
 }
 
+// EstimateTokensFromMessages 估算消息列表的 token 总量。
+func EstimateTokensFromMessages(messages []provider.Message) int {
+	total := 0
+	for _, m := range messages {
+		total += EstimateTokens(m.Content)
+		for _, tc := range m.ToolCalls {
+			total += EstimateTokens(tc.Name + tc.Arguments)
+		}
+	}
+	return total
+}
+
 // EstimateTokens 供记忆预算与 Builder 共用相同估算口径。
 func EstimateTokens(content string) int {
 	ascii, other := 0, 0

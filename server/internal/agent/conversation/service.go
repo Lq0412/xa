@@ -14,9 +14,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/agent/memory"
+	"linq-bs/server/internal/agent/run"
 	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/infra/provider"
+	"linq-bs/server/internal/tool"
 )
 
 type Conversation struct {
@@ -39,6 +41,7 @@ type Message struct {
 	LatencyMS        int64     `json:"latency_ms"`
 	Status           string    `json:"status"`
 	Error            string    `json:"error,omitempty"`
+	RunID            string    `json:"run_id,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -46,8 +49,11 @@ type Service struct {
 	DB            *pgxpool.Pool
 	Agents        definition.Service
 	Model         provider.ChatModel
+	Provider      provider.ChatProvider
 	AllowedModels []string
 	Memory        *memory.Service
+	Runs          *run.RunService
+	Registry      *tool.Registry
 }
 
 func (s *Service) Create(ctx context.Context, p auth.Principal, agentID string) (Conversation, error) {
@@ -134,7 +140,7 @@ func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, bef
 	if !exists {
 		return MessagePage{}, definition.ErrNotFound
 	}
-	query := `SELECT m.id,m.conversation_id,m.role,m.content,m.model,m.prompt_tokens,m.completion_tokens,m.latency_ms,m.status,m.error,m.created_at
+	query := `SELECT m.id,m.conversation_id,m.role,m.content,m.model,m.prompt_tokens,m.completion_tokens,m.latency_ms,m.status,m.error,COALESCE(m.run_id,''),m.created_at
 		FROM messages m JOIN conversations c ON c.id=m.conversation_id
 		WHERE m.conversation_id=$1 AND c.workspace_id=$2 AND c.user_id=$3`
 	args := []any{id, p.WorkspaceID, p.UserID}
@@ -158,7 +164,7 @@ func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, bef
 	out := make([]Message, 0, limit)
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Model, &m.PromptTokens, &m.CompletionTokens, &m.LatencyMS, &m.Status, &m.Error, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Model, &m.PromptTokens, &m.CompletionTokens, &m.LatencyMS, &m.Status, &m.Error, &m.RunID, &m.CreatedAt); err != nil {
 			return MessagePage{}, err
 		}
 		out = append(out, m)
@@ -232,18 +238,40 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		return Message{}, provider.Usage{}, err
 	}
 	history := window.Messages
-	historyMessages := make([]provider.Message, 0, len(history))
+	visible := make([]run.VisibleMessage, 0, len(history))
 	previousUser := ""
 	for _, m := range history {
-		historyMessages = append(historyMessages, provider.Message{Role: m.Role, Content: m.Content})
+		visible = append(visible, run.VisibleMessage{ID: m.ID, Role: m.Role, Content: m.Content, RunID: m.RunID, Status: "completed"})
 		if m.Role == "user" {
 			previousUser = m.Content
 		}
+	}
+	limits, err := definition.ParseRuntimeLimits(version.Configuration.RuntimeLimits)
+	if err != nil {
+		return Message{}, provider.Usage{}, err
+	}
+	runStore := run.NewPGStore(s.DB)
+	projector := run.HistoryProjector{Store: runStore, Limits: limits}
+	historyMessages, err := projector.Project(ctx, id, visible, policy.HistoryBudgetTokens)
+	if err != nil {
+		return Message{}, provider.Usage{}, err
+	}
+	if s.Registry == nil {
+		return Message{}, provider.Usage{}, fmt.Errorf("工具注册表未配置")
+	}
+	toolset, err := s.Registry.Resolve(tool.ResolveInput{
+		Bindings: version.Configuration.Tools, MemoryPolicy: policy, Principal: p, CanApprove: false,
+	})
+	if err != nil {
+		return Message{}, provider.Usage{}, err
 	}
 	builder := runtime.Builder{}
 	memoryDetails := []runtime.Segment{}
 	if s.Memory != nil {
 		builder.Memory = &memory.Module{Service: s.Memory, Actor: p, AgentID: a.ID, Current: content + "\n" + previousUser, Policy: policy, Details: &memoryDetails}
+	}
+	if len(toolset.Entries) > 0 {
+		builder.Tools = runtime.Tools{Toolset: toolset}
 	}
 	var sessionSummary string
 	var summaryID string
@@ -260,7 +288,7 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		}
 	}
 	contextResult, err := builder.Build(ctx, runtime.Input{
-		PlatformRules: "你是 xa 平台中的 Agent。遵守用户权限和隐私边界，清晰回答当前问题。",
+		PlatformRules: run.BuildPlatformRules("你是 xa 平台中的 Agent。遵守用户权限和隐私边界，清晰回答当前问题。"),
 		SoulMD:        version.Configuration.SoulMD, History: historyMessages, Current: content, SessionSummary: sessionSummary,
 	})
 	if err != nil {
@@ -284,58 +312,75 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if !slices.Contains(s.AllowedModels, modelName) {
 		return Message{}, provider.Usage{}, fmt.Errorf("不支持的模型 %s: %w", modelName, definition.ErrInvalid)
 	}
+	if seg, err := run.ToolSchemaSegment(toolset); err == nil && seg.Name != "" {
+		contextResult.Segments = append(contextResult.Segments, seg)
+	}
 	segments, err := json.Marshal(contextResult.Segments)
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
 	now := time.Now().UTC()
 	userID := "msg_" + uuid.NewString()
-	if _, err := s.DB.Exec(ctx, `INSERT INTO messages(id,conversation_id,role,content,status,created_at) VALUES($1,$2,'user',$3,'completed',$4)`, userID, id, content, now); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO messages(id,conversation_id,role,content,status,created_at) VALUES($1,$2,'user',$3,'completed',$4)`, userID, id, content, now); err != nil {
 		return Message{}, provider.Usage{}, err
 	}
-	var answer strings.Builder
-	began := time.Now()
-	usage, callErr := s.Model.Stream(ctx, modelName, contextResult.Messages, func(d string) error { answer.WriteString(d); return emit(d) })
-	latency := time.Since(began).Milliseconds()
-	status := "completed"
-	errText := ""
+	if s.Runs == nil {
+		return Message{}, provider.Usage{}, fmt.Errorf("RunService 未配置")
+	}
+	assistantID, usage, _, callErr := s.Runs.ExecuteChat(ctx, tx, run.ChatStartInput{
+		Principal: p, Conversation: run.ConversationRef{ID: id, Title: c.Title, AgentID: a.ID},
+		Agent: a, Version: version, UserContent: content, UserMessageID: userID,
+		InitialMessages: contextResult.Messages, Segments: segments, Toolset: toolset, Limits: limits,
+		MemoryPolicy: policy, MemoryEnabled: policy.Enabled, AllowedModels: s.AllowedModels,
+	}, emit)
+	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelSave()
+	var status, errText string
 	if callErr != nil {
-		status = "failed"
-		errText = callErr.Error()
+		_ = tx.Rollback(saveCtx)
+		errText = PublicError(callErr)
 		if errors.Is(ctx.Err(), context.Canceled) {
 			errText = "已停止生成"
 		}
-	}
-	// 浏览器停止接收时请求 context 已取消；最终记录使用有时限的独立 context 保存。
-	// 沿用 failed 状态，error 明确区分主动停止，刷新后仍能查看已经生成的部分。
-	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancelSave()
-	assistantID := "msg_" + uuid.NewString()
-	_, dbErr := tx.Exec(saveCtx, `INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at,context_segments,agent_version_id) VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, assistantID, id, answer.String(), modelName, usage.PromptTokens, usage.CompletionTokens, latency, status, errText, time.Now().UTC(), segments, version.ID)
-	if dbErr != nil {
-		return Message{}, usage, dbErr
+		return Message{}, usage, callErr
 	}
 	if c.Title == "" {
-		r := []rune(content)
-		if len(r) > 30 {
-			r = r[:30]
+		rn := []rune(content)
+		if len(rn) > 30 {
+			rn = rn[:30]
 		}
-		_, dbErr = tx.Exec(saveCtx, `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2`, string(r), id)
-	} else {
-		_, dbErr = tx.Exec(saveCtx, `UPDATE conversations SET updated_at=now() WHERE id=$1`, id)
-	}
-	if dbErr != nil {
-		return Message{}, usage, dbErr
-	}
-	if s.Memory != nil && policy.Enabled && callErr == nil {
-		if err := s.Memory.EnqueueTx(saveCtx, tx, userID); err != nil {
+		if _, err := tx.Exec(saveCtx, `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2`, string(rn), id); err != nil {
 			return Message{}, usage, err
 		}
+	} else if _, err := tx.Exec(saveCtx, `UPDATE conversations SET updated_at=now() WHERE id=$1`, id); err != nil {
+		return Message{}, usage, err
 	}
 	if err := tx.Commit(saveCtx); err != nil {
 		return Message{}, usage, err
 	}
-	return Message{ID: assistantID, ConversationID: id, Role: "assistant", Content: answer.String(), Model: modelName, PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, LatencyMS: latency, Status: status, Error: errText}, usage, callErr
+	if s.Memory != nil && policy.Enabled {
+		enqueueTx, err := s.DB.Begin(saveCtx)
+		if err != nil {
+			return Message{}, usage, err
+		}
+		if err := s.Memory.EnqueueTx(saveCtx, enqueueTx, userID); err != nil {
+			_ = enqueueTx.Rollback(saveCtx)
+			return Message{}, usage, err
+		}
+		if err := enqueueTx.Commit(saveCtx); err != nil {
+			return Message{}, usage, err
+		}
+	}
+	var runID string
+	_ = s.DB.QueryRow(context.WithoutCancel(ctx), `SELECT run_id FROM messages WHERE id=$1`, assistantID).Scan(&runID)
+	var answer string
+	var latencyMS int64
+	_ = s.DB.QueryRow(context.WithoutCancel(ctx), `SELECT content,latency_ms,status,error FROM messages WHERE id=$1`, assistantID).Scan(&answer, &latencyMS, &status, &errText)
+	return Message{
+		ID: assistantID, ConversationID: id, Role: "assistant", Content: answer, Model: modelName,
+		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, LatencyMS: latencyMS,
+		Status: status, Error: errText, RunID: runID,
+	}, usage, callErr
 }
 
 func (s *Service) loadMessages(ctx context.Context, p auth.Principal, id string, limit int) ([]Message, error) {

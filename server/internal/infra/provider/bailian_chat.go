@@ -63,7 +63,7 @@ func (m *BailianModel) encodeRequest(req ChatRequest) ([]byte, error) {
 	if len(req.Tools) > 0 && req.ResponseSchema != nil {
 		return bad("Tools 与 ResponseSchema 不能同时设置")
 	}
-	body := bailianRequest{Model: req.Model, Stream: true, StreamOptions: map[string]bool{"include_usage": true}, MaxTokens: req.MaxOutputTokens}
+	body := bailianRequest{Model: req.Model, Stream: true, StreamOptions: map[string]bool{"include_usage": true}, EnableThinking: false, MaxTokens: req.MaxOutputTokens}
 	for _, message := range req.Messages {
 		wire := bailianMessage{Role: message.Role, Content: message.Content}
 		switch message.Role {

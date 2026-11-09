@@ -114,7 +114,7 @@ func (h *ConversationHandler) Send(w http.ResponseWriter, r *http.Request) {
 			conversationError(w, r, err)
 			return
 		}
-		b, _ := json.Marshal(map[string]string{"message": err.Error()})
+		b, _ := json.Marshal(map[string]string{"message": conversation.PublicError(err)})
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", b)
 		flusher.Flush()
 		return

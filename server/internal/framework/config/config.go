@@ -25,9 +25,19 @@ type Config struct {
 	ChatModel       string            `env:"XA_CHAT_MODEL" envDefault:"qwen3.7-plus"`
 	LightModel      string            `env:"XA_LIGHT_MODEL" envDefault:"qwen3.8-flash"`
 	ChatModels      []string          `env:"XA_CHAT_MODELS" envDefault:"qwen3.7-plus,qwen3.8-flash"`
+	Run             RunConfig         `envPrefix:"XA_RUN_"`
 	StartupTimeout  time.Duration     `env:"XA_STARTUP_TIMEOUT" envDefault:"15s"`
 	ShutdownTimeout time.Duration     `env:"XA_SHUTDOWN_TIMEOUT" envDefault:"10s"`
 	HealthTimeout   time.Duration     `env:"XA_HEALTH_TIMEOUT" envDefault:"3s"`
+}
+
+// RunConfig 定义 P3 引擎预算上限（与 agent definition.ParseRuntimeLimits 的 cap 一致）。
+type RunConfig struct {
+	MaxModelTurnsCap int `env:"MAX_MODEL_TURNS_CAP" envDefault:"20"`
+	MaxToolCallsCap  int `env:"MAX_TOOL_CALLS_CAP" envDefault:"64"`
+	MaxParallelCap   int `env:"MAX_PARALLEL_CAP" envDefault:"8"`
+	MaxWallCapSec    int `env:"MAX_WALL_CAP" envDefault:"600"`
+	MaxTokensCap     int `env:"MAX_TOKENS_CAP" envDefault:"400000"`
 }
 
 // BailianConfig 保存阿里百炼 OpenAI 兼容接口配置。

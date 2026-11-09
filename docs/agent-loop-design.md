@@ -851,6 +851,7 @@ if cur: batches.append(Parallel(cur))
 ```
 - 批次严格按顺序执行，前一批全部完成后才开始下一批，因此“先搜索后删除”这类依赖关系天然成立。
 - **并行批**：信号量为 `max_parallel_tools`，每个调用有独立的超时 ctx。某个调用失败不会取消同批其他调用。全部完成后，**按调用原始顺序**追加 tool 消息，与完成先后无关，从而保证模型输入是确定的。
+- **P3 取舍（v1 / `conversation.Send`）**：整轮对话共用调用方开启的一条 `pgx.Tx` 时，`RunContext.Tx` 非空，调度层对并行批**退化为串行** `executeOne`（模型请求仍可使用 `parallel_tool_calls`）。`tool_results.call_index` 仍按模型调用顺序写入。待工具结果落库与对话事务解耦（后续里程碑）后再恢复批内并行；验收见 `TestAcceptanceParallelReadonlyTools`、`TestSchedulerTxPathSerializesParallelDelays`。
 - **串行批**：只有一个调用。如果 `Approval==always`：
   - 查 `run_approvals(run_id, call_id)`；
   - 不存在：创建 pending 审批，发出 `approval.required`，把 tool_results 状态设为 `awaiting_approval`，runs 状态设为 `waiting_approval`，返回 `Suspended`。后续批次留待恢复后执行；
