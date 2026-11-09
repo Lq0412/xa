@@ -67,7 +67,7 @@ func (s *Service) Recall(ctx context.Context, p auth.Principal, agentID, query s
 	}
 	sql := `WITH candidates AS MATERIALIZED (
 SELECT id,content,importance,embedding,CASE WHEN pinned OR source='user_edited' THEN 1 ELSE exp(-greatest(0,extract(epoch FROM ($7::timestamptz-COALESCE(last_used_at,created_at))))/(strength_days*86400.0)) END AS retention
-FROM memory_items WHERE workspace_id=$1 AND owner_user_id=$2 AND status='active' AND (scope='user' OR (scope='agent' AND agent_id=$3))`
+FROM memory_items WHERE workspace_id=$1 AND owner_user_id=$2 AND status='active' AND sensitive=false AND (scope='user' OR (scope='agent' AND agent_id=$3))`
 	args := []any{p.WorkspaceID, p.UserID, agentID, string(raw), minRel, topK, s.now(), exclude}
 	if o.Namespace != "" {
 		sql += ` AND namespace=$9`

@@ -43,6 +43,8 @@
 - 需要的库直接导入，不用 try-except 包裹 import。
 - 使用成熟库处理 JSON、YAML、TOML、CSV、HTML、XML、PDF 等格式，不手写解析器。
 - 使用真实依赖和真实数据验证功能，不使用 mock、伪造数据、硬编码返回值或只为通过测试的 workaround。
+- 生产启动路径不得注册 `server/internal/tool/fake`。
+- 引擎单元测试和工具循环回归可以使用 `FakeProvider` 与 `tool/fake`；`make integration` 使用真实 PostgreSQL。需要真实模型的场景使用百炼，不得在日志、测试输出或仓库中写入密钥。
 - 依赖数量不设限制；已有成熟库能完成的功能直接使用对应库。
 - Python 文件不添加文件头 docstring 和 shebang；注释使用中文，保留英文术语，只解释不直观的逻辑。
 - 编写代码时，为每个模块、公共类型、导出函数、关键流程和不直观的实现添加必要的中文注释，说明职责、约束和设计原因；注释保留英文标识符，不使用无意义的逐行翻译。
@@ -117,8 +119,9 @@ Ant Design 仅用于管理端 `web/`。用户端 `web-user/` 使用 React、Tail
 ## 协作与验证
 
 - 提交代码前先阅读对应项目的 `CONTRIBUTING.md`。
-- 本地和远端只保留 `main`，直接在 `main` 完成修改、验证、提交和推送，不创建工作分支或 PR。
-- 禁止强制推送，禁止添加 `Co-authored-by` 等 AI 自动签名；提交信息遵循根目录 `CONTRIBUTING.md`。
+- 每期开发在独立分支上进行，开一个 PR，不直接推 `main`，也不由开发者自己合并。独立验收通过后，由验收方 squash 合并进 `main`。
+- 禁止向 `main` 强制推送。未合并的本期 PR 分支如果需要去掉错误署名，可以 amend 后只向该分支 force-push。
+- 提交作者和提交者只署 `Lq0412 <Lq0412@users.noreply.github.com>`，禁止添加 `Co-authored-by` 或任何 AI 署名；提交信息遵循根目录 `CONTRIBUTING.md`。
 - 清理旧分支前确认其提交已包含在 `main` 中；存在失败检查时只报告实际状态。
 - 以疑问句结尾的消息只回答问题本身，不附加反问或额外方案。
 
@@ -135,7 +138,7 @@ git -c user.name="Lq0412" \
 常规流程如下：
 
 ```text
-在 main 完成修改 → 执行验证 → 提交 → 推送 main → 确认本地与远端一致
+从最新 main 拉出本期分支 → 在分支上修改并验证 → 提交（无 Co-authored-by）→ 推送分支并打开 PR → 等待独立验收后 squash 合并
 ```
 
 ## 命令与本地服务
