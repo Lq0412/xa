@@ -31,13 +31,19 @@ type Config struct {
 	HealthTimeout   time.Duration     `env:"XA_HEALTH_TIMEOUT" envDefault:"3s"`
 }
 
-// RunConfig 定义 P3 引擎预算上限（与 agent definition.ParseRuntimeLimits 的 cap 一致）。
+// RunConfig 定义 run 引擎与流式推送相关配置。
 type RunConfig struct {
 	MaxModelTurnsCap int `env:"MAX_MODEL_TURNS_CAP" envDefault:"20"`
 	MaxToolCallsCap  int `env:"MAX_TOOL_CALLS_CAP" envDefault:"64"`
 	MaxParallelCap   int `env:"MAX_PARALLEL_CAP" envDefault:"8"`
 	MaxWallCapSec    int `env:"MAX_WALL_CAP" envDefault:"600"`
 	MaxTokensCap     int `env:"MAX_TOKENS_CAP" envDefault:"400000"`
+
+	ReconnectGraceSec int `env:"RECONNECT_GRACE" envDefault:"30"`
+	LeaseTTLMS        int `env:"LEASE_TTL" envDefault:"30000"`
+	StaleAfterSec     int `env:"STALE_AFTER" envDefault:"30"`
+	SweepIntervalSec  int `env:"SWEEP_INTERVAL" envDefault:"15"`
+	MaxActivePerUser  int `env:"MAX_ACTIVE_PER_USER" envDefault:"3"`
 }
 
 // BailianConfig 保存阿里百炼 OpenAI 兼容接口配置。

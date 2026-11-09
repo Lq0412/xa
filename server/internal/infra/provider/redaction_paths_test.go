@@ -24,7 +24,7 @@ func TestProviderRedactionPaths(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, streamErr := m.assemble(t.Context(), strings.NewReader("data: "+string(encoded)+"\n\n"), nil, time.Now())
+		_, streamErr := m.assemble(t.Context(), strings.NewReader("data: "+string(encoded)+"\n\n"), nil, time.Now(), false)
 		for _, failure := range []error{m.providerError(400, problem, false), streamErr, &ProviderError{Kind: ProviderErrorBadRequest, Message: text}} {
 			var pe *ProviderError
 			if !errors.As(failure, &pe) {

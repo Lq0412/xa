@@ -63,21 +63,14 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 		rc.mu.Lock()
 		rc.stepCallIndex = 0
 		rc.mu.Unlock()
+		if rc.Emitter != nil {
+			_ = rc.Emitter.Emit(ctx, EventStepStarted, map[string]any{"step": rc.Step})
+		}
 		if rc.VisibleText.Len() > 0 && rc.Emitter != nil {
 			rc.Emitter.PendingSeparator("\n\n")
 		}
-		textSink := func(ev provider.StreamEvent) error {
-			if ev.Type != provider.EventTextDelta || ev.Text == "" {
-				return nil
-			}
-			rc.Emitted = true
-			rc.VisibleText.WriteString(ev.Text)
-			if rc.Emitter != nil {
-				return rc.Emitter.TextDelta(ev.Text)
-			}
-			return nil
-		}
-		resp, err := callModelWithRetry(ctx, rc, req, textSink)
+		req.EnableThinking = rc.EnableThinking
+		resp, err := callModelWithRetry(ctx, rc, req, streamSink(ctx, rc))
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return Outcome{Kind: OutcomeCancelled, Code: "cancelled", Message: "已停止生成"}, nil
@@ -99,6 +92,10 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 		if err := appendAssistantStep(ctx, rc, resp); err != nil {
 			return Outcome{}, err
 		}
+		if rc.Bus != nil {
+			_ = rc.Bus.ReasoningCompleted(ctx, resp.FinishReason == provider.FinishLength)
+		}
+		emitStepCompleted(ctx, rc, resp)
 		if len(calls) == 0 {
 			if resp.FinishReason == provider.FinishContentFilter {
 				return Outcome{Kind: OutcomeFailed, Code: "content_filtered", Message: "内容未通过安全审核"}, nil
@@ -106,6 +103,9 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 			return Outcome{Kind: OutcomeCompleted, Truncated: resp.FinishReason == provider.FinishLength}, nil
 		}
 		plan := Validate(calls, rc)
+		for _, pc := range plan.Items {
+			emitToolCalled(ctx, rc, pc)
+		}
 		if err := insertRejectedResults(ctx, rc, plan); err != nil {
 			return Outcome{}, err
 		}
@@ -171,6 +171,8 @@ func insertRejectedResults(ctx context.Context, rc *RunContext, plan CallPlan) e
 		}); err != nil {
 			return err
 		}
+		entry, _ := rc.Toolset.EntryByName(pc.Call.Name)
+		emitToolCompleted(ctx, rc, row, entry, 0)
 	}
 	return nil
 }

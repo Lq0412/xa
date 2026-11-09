@@ -124,6 +124,7 @@ type ChatStartInput struct {
 	MemoryPolicy    definition.MemoryPolicy
 	MemoryEnabled   bool
 	AllowedModels   []string
+	EnableThinking  bool
 }
 
 // ConversationRef 避免 run 包依赖 conversation 的全部类型。

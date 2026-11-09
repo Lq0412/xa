@@ -4,25 +4,43 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	redisclient "github.com/redis/go-redis/v9"
 	"linq-bs/server/internal/agent/memory"
 	"linq-bs/server/internal/agent/runtime"
+	"linq-bs/server/internal/framework/config"
 	"linq-bs/server/internal/infra/provider"
 	"linq-bs/server/internal/tool"
 )
 
-// RunService 装配并同步执行 chat run。
+// RunService 装配并执行 chat run（含流式推送与并发控制）。
 type RunService struct {
-	DB       *pgxpool.Pool
-	Store    Store
-	Engine   Engine
-	Registry *tool.Registry
-	Provider provider.ChatProvider
-	Memory   *memory.Service
+	DB         *pgxpool.Pool
+	Store      Store
+	Engine     Engine
+	Registry   *tool.Registry
+	Provider   provider.ChatProvider
+	Memory     *memory.Service
+	Redis      redisclient.Cmdable
+	RedisOK    func() bool
+	Config     config.RunConfig
+	Coord      *Coordinator
+	InstanceID string
+	wg         sync.WaitGroup
+}
+
+// StartDrive 在后台执行 run。
+func (s *RunService) StartDrive(parent context.Context, in StreamStartInput, bus *EventBus, v1 *Emitter) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		_ = s.DriveRun(parent, in, bus, v1)
+	}()
 }
 
 // ExecuteChat 在调用方事务上下文中完成一次同步 run（不含 advisory lock）。
@@ -69,8 +87,9 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 	rc := &RunContext{
 		Run: run, Toolset: toolset, Messages: append([]provider.Message(nil), in.InitialMessages...),
 		Budget: NewBudget(in.Limits), Store: s.Store, Provider: s.Provider, Registry: s.Registry,
-		Env: env, Limits: in.Limits, Emitter: NewV1Emitter(emit), WallStarted: now, Tx: tx,
-		CallHashes: map[string]int{}, PerToolCalls: map[string]int{},
+		Env: env, Limits: in.Limits, Emitter: &V1Sink{E: NewV1Emitter(emit)}, WallStarted: now, Tx: tx,
+		EnableThinking: in.EnableThinking,
+		CallHashes:     map[string]int{}, PerToolCalls: map[string]int{},
 	}
 	began := time.Now()
 	outcome, execErr := s.Engine.Execute(ctx, rc)

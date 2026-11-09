@@ -24,6 +24,7 @@ const (
 // PlannedCall 描述一步内单个工具调用的校验结果。
 type PlannedCall struct {
 	Call         provider.ToolCall
+	Index        int
 	Accepted     bool
 	ErrorCode    string
 	ErrorMessage string
@@ -60,7 +61,7 @@ func Validate(calls []provider.ToolCall, rc *RunContext) CallPlan {
 		maxPerStep = 8
 	}
 	for i, call := range calls {
-		pc := PlannedCall{Call: call}
+		pc := PlannedCall{Call: call, Index: i}
 		if i >= maxPerStep {
 			pc.ErrorCode = RejectTooManyCallsInStep
 			pc.ErrorMessage = "本步工具调用过多"

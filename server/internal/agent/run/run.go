@@ -33,7 +33,9 @@ type RunContext struct {
 	Budget           *Budget
 	VisibleText      strings.Builder
 	Store            Store
-	Emitter          *Emitter
+	Emitter          EventSink
+	Bus              *EventBus
+	EnableThinking   bool
 	Provider         provider.ChatProvider
 	Registry         *tool.Registry
 	Env              tool.Env

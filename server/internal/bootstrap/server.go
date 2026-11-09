@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"context"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,7 +36,17 @@ func NewServer(cfg config.Config, logger *slog.Logger) *Server {
 
 // Run 启动 server 进程。
 func (s *Server) Run(ctx context.Context) error {
-	return runWithHandler(ctx, "server", s.config.HTTP.ServerAddress, s.config, s.logger, s.handler)
+	return runWithHandler(ctx, "server", s.config.HTTP.ServerAddress, s.config, s.logger, func(db *pgxpool.Pool, cache *redisclient.Client, checks []frameworkhttp.Check) (http.Handler, error) {
+		h, err := s.handler(db, cache, checks)
+		if err != nil {
+			return nil, err
+		}
+		go (&agentrun.Sweeper{
+			DB: db, Interval: time.Duration(s.config.Run.SweepIntervalSec) * time.Second,
+			Stale: time.Duration(s.config.Run.StaleAfterSec) * time.Second,
+		}).Run(ctx)
+		return h, nil
+	})
 }
 
 func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []frameworkhttp.Check) (http.Handler, error) {
@@ -66,16 +78,22 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	}
 	agents.ToolValidator = registry.ValidateBindings
 	runStore := agentrun.NewPGStore(db)
-	runSvc := &agentrun.RunService{DB: db, Store: runStore, Registry: registry, Provider: chatProvider, Memory: memories, Engine: &agentrun.NativeEngine{}}
+	runSvc := &agentrun.RunService{
+		DB: db, Store: runStore, Registry: registry, Provider: chatProvider, Memory: memories,
+		Engine: &agentrun.NativeEngine{}, Redis: cache, RedisOK: func() bool { return cache != nil },
+		Config: s.config.Run, Coord: agentrun.NewCoordinator(), InstanceID: "server",
+	}
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
 	agentHandler := &agenthttp.ManagementHandler{Agents: agents, AllowedModels: s.config.ChatModels}
 	libraryHandler := &agenthttp.LibraryHandler{Library: &agentdefinition.Library{DB: db}}
 	toolsHandler := &agenthttp.ToolsHandler{Registry: registry, Agents: agents}
 	memoryHandler := &agenthttp.MemoryHandler{Memory: memories, Agents: agents}
-	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{
+	convSvc := &conversation.Service{
 		DB: db, Agents: agents, Model: model, Provider: chatProvider, Memory: memories,
 		AllowedModels: s.config.ChatModels, Runs: runSvc, Registry: registry,
-	}}
+	}
+	conversationHandler := &agenthttp.ConversationHandler{Conversations: convSvc}
+	runHandler := &agenthttp.RunHandler{Conversations: convSvc, Runs: runSvc}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.List)))
@@ -113,5 +131,11 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("GET /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Messages)))
 	mux.Handle("GET /api/v1/conversations/{conversation_id}/summary", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Summary)))
 	mux.Handle("POST /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Send)))
-	return mux, nil
+	mux.Handle("GET /api/v1/runs/{run_id}/events", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Events)))
+	mux.Handle("POST /api/v1/runs/{run_id}/cancel", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Cancel)))
+	handler := http.Handler(mux)
+	if raw := strings.TrimSpace(os.Getenv("XA_HTTP_CORS_ORIGINS")); raw != "" {
+		handler = frameworkhttp.WithAllowOrigins(strings.Split(raw, ","), mux)
+	}
+	return handler, nil
 }

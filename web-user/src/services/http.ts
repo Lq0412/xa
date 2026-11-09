@@ -14,6 +14,15 @@ export class ApiError extends Error {
   }
 }
 
+function streamApiRoot(path: string, method: string) {
+  const base = String(process.env.XA_API_STREAM_BASE || '').replace(/\/$/, '');
+  if (!base) return '/api/v1';
+  const stream =
+    (method === 'POST' && /\/conversations\/[^/]+\/messages$/.test(path)) ||
+    /\/runs\/[^/]+\/events/.test(path);
+  return stream ? `${base}/api/v1` : '/api/v1';
+}
+
 /** 发起认证请求；调用者决定读取 JSON 还是 SSE 响应体。 */
 export async function fetchApi(
   path: string,
@@ -21,7 +30,8 @@ export async function fetchApi(
   checkSession = true,
 ) {
   const token = localStorage.getItem(TOKEN_KEY);
-  const response = await fetch(`/api/v1${path}`, {
+  const method = (options.method || 'GET').toUpperCase();
+  const response = await fetch(`${streamApiRoot(path, method)}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',

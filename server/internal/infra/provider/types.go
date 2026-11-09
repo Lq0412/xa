@@ -59,6 +59,7 @@ type ChatRequest struct {
 	ParallelToolCalls *bool
 	MaxOutputTokens   int
 	ResponseSchema    *ResponseSchema
+	EnableThinking    bool
 	Trace             TraceHints
 }
 
@@ -66,16 +67,18 @@ type ChatRequest struct {
 type StreamEventType string
 
 const (
-	EventTextDelta     StreamEventType = "text_delta"
-	EventToolCallStart StreamEventType = "tool_call_start"
-	EventToolArgsDelta StreamEventType = "tool_args_delta"
-	EventUsage         StreamEventType = "usage"
+	EventTextDelta      StreamEventType = "text_delta"
+	EventReasoningDelta StreamEventType = "reasoning_delta"
+	EventToolCallStart  StreamEventType = "tool_call_start"
+	EventToolArgsDelta  StreamEventType = "tool_args_delta"
+	EventUsage          StreamEventType = "usage"
 )
 
 // StreamEvent 是模型流的中立增量事件。
 type StreamEvent struct {
 	Type      StreamEventType
 	Text      string
+	Reasoning string
 	Index     int
 	ToolName  string
 	ArgsDelta string

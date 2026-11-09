@@ -2,13 +2,17 @@ import { history } from '@umijs/max';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type Agent, getAgent } from '@/services/api';
 import {
+  type ActiveRun,
   type ChatMessage,
   type Conversation,
+  cancelRun,
   chatURL,
   createConversation,
   listConversations,
   listMessages,
-  streamMessage,
+  mergeMessagePartsFromLocal,
+  resumeRun,
+  streamRun,
 } from '@/services/chat';
 import { errorMessage } from '@/services/http';
 import type { MemoryCue } from './MemoryPanel';
@@ -63,6 +67,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     seq: 0,
   });
   const controllers = useRef(new Map<string, AbortController>());
+  const activeRun = useRef<{ runId: string } | null>(null);
   const mounted = useRef(true);
 
   const update = useCallback(
@@ -81,6 +86,108 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       setSessions(next);
     },
     [],
+  );
+
+  const resumeActiveRun = useCallback(
+    async (convId: string, targetKey: string, active: ActiveRun) => {
+      if (active.status !== 'running' && active.status !== 'waiting_approval')
+        return;
+      const assistantId = `resume-${active.id}`;
+      const controller = new AbortController();
+      controllers.current.set(`resume:${targetKey}`, controller);
+      update(targetKey, (state) => {
+        if (state.messages.some((m) => m.run_id === active.id)) {
+          return { messages: state.messages, sending: true };
+        }
+        const lastIdx = state.messages.length - 1;
+        const last = state.messages[lastIdx];
+        if (
+          last?.role === 'assistant' &&
+          last.status === 'pending' &&
+          !last.run_id
+        ) {
+          return {
+            messages: state.messages.map((m, i) =>
+              i === lastIdx ? { ...m, run_id: active.id } : m,
+            ),
+            sending: true,
+          };
+        }
+        return {
+          messages: [
+            ...state.messages,
+            {
+              id: assistantId,
+              conversation_id: convId,
+              role: 'assistant' as const,
+              content: '',
+              status: 'pending' as const,
+              run_id: active.id,
+            },
+          ],
+          sending: true,
+        };
+      });
+      activeRun.current = { runId: active.id };
+      try {
+        const cached = cache.current.get(targetKey)?.messages ?? [];
+        const seed =
+          cached.find((m) => m.run_id === active.id) ??
+          [...cached].reverse().find((m) => m.role === 'assistant');
+        const after = active.last_event_seq > 0 ? active.last_event_seq : 0;
+        await resumeRun(
+          active.id,
+          after,
+          controller.signal,
+          {
+            onParts: (parts, content) => {
+              update(targetKey, (state) => ({
+                messages: state.messages.map((message) =>
+                  message.run_id === active.id || message.id === assistantId
+                    ? { ...message, content, parts, run_id: active.id }
+                    : message,
+                ),
+              }));
+            },
+          },
+          {
+            parts: seed?.parts,
+            content: seed?.content,
+          },
+        );
+        const historyPage = await listMessages(convId, controller.signal);
+        update(targetKey, (state) => {
+          const latest = (historyPage.messages ?? []).map((message) => {
+            const local = state.messages.find(
+              (item) => item.id === message.id || item.run_id === active.id,
+            );
+            if (message.parts?.length)
+              return mergeMessagePartsFromLocal(message, local);
+            if (local?.parts?.length)
+              return {
+                ...message,
+                parts: local.parts,
+                content: message.content || local.content,
+              };
+            return message;
+          });
+          return {
+            messages: latest.length ? latest : state.messages,
+            hasMore: historyPage.has_more,
+            before: historyPage.before,
+          };
+        });
+      } catch (cause) {
+        if (!controller.signal.aborted) {
+          update(targetKey, { sendError: errorMessage(cause) });
+        }
+      } finally {
+        update(targetKey, { sending: false });
+        controllers.current.delete(`resume:${targetKey}`);
+        activeRun.current = null;
+      }
+    },
+    [update],
   );
 
   useEffect(() => {
@@ -166,6 +273,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
               messages: [],
               has_more: false,
               before: undefined,
+              active_run: undefined,
             }),
       ]);
       update(key, {
@@ -177,6 +285,9 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         loaded: true,
         sendError: '',
       });
+      if (conversationID && result.active_run) {
+        void resumeActiveRun(conversationID, key, result.active_run);
+      }
       if (
         selectedKey.current === key &&
         search !== chatURL(targetAgent, conversationID || undefined).slice(5)
@@ -198,6 +309,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     listLoading,
     search,
     update,
+    resumeActiveRun,
   ]);
 
   useEffect(() => {
@@ -293,20 +405,29 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
           ...items.filter((conversation) => conversation.id !== id),
         ];
       });
-      const savedID = await streamMessage(
+      activeRun.current = null;
+      const idempotencyKey = crypto.randomUUID();
+      const result = await streamRun(
         id,
         text,
         controller.signal,
-        (delta) => {
-          update(targetKey, (state) => ({
-            messages: state.messages.map((message) =>
-              message.id === assistantID
-                ? { ...message, content: message.content + delta }
-                : message,
-            ),
-          }));
+        {
+          onRunID: (runId) => {
+            activeRun.current = { runId };
+          },
+          onParts: (parts, content) => {
+            update(targetKey, (state) => ({
+              messages: state.messages.map((message) =>
+                message.id === assistantID
+                  ? { ...message, content, parts }
+                  : message,
+              ),
+            }));
+          },
         },
+        { idempotencyKey },
       );
+      const savedID = result.messageId ?? assistantID;
       completed = true;
       // 抽取在回复落库后异步进行，详情栏稍后自己刷新一次。
       setMemoryCue((cue) => ({ agentId: turnAgentID, seq: cue.seq + 1 }));
@@ -317,20 +438,37 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
             : message,
         ),
       }));
-      const result = await listMessages(id, controller.signal);
+      const historyPage = await listMessages(id, controller.signal);
       update(targetKey, (state) => {
-        const latest = result.messages ?? [];
+        const latest = (historyPage.messages ?? []).map((message) => {
+          const local = state.messages.find(
+            (item) =>
+              item.id === message.id ||
+              item.id === assistantID ||
+              item.id === savedID,
+          );
+          if (message.parts?.length)
+            return mergeMessagePartsFromLocal(message, local);
+          if (local?.parts?.length)
+            return {
+              ...message,
+              parts: local.parts,
+              content: message.content || local.content,
+            };
+          return message;
+        });
         const ids = new Set(latest.map((item) => item.id));
         const older = state.messages.filter(
           (item) =>
             !ids.has(item.id) &&
             item.id !== localUserID &&
-            item.id !== assistantID,
+            item.id !== assistantID &&
+            item.id !== savedID,
         );
         return {
           messages: [...older, ...latest],
-          hasMore: older.length ? state.hasMore : result.has_more,
-          before: older.length ? state.before : result.before,
+          hasMore: older.length ? state.hasMore : historyPage.has_more,
+          before: older.length ? state.before : historyPage.before,
         };
       });
     } catch (cause) {
@@ -409,7 +547,11 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       }
     },
     send,
-    stop: () => controllers.current.get(`send:${key}`)?.abort(),
+    stop: () => {
+      const runId = activeRun.current?.runId;
+      if (runId) void cancelRun(runId);
+      controllers.current.get(`send:${key}`)?.abort();
+    },
     setDraft: (draft: string) => update(key, { draft }),
     retry: () => void load(),
     retryList: () => setRevision((value) => value + 1),

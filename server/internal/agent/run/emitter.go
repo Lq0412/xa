@@ -1,6 +1,9 @@
 package run
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // Emitter 将 v2 事件投影为 v1 SSE 回调（delta / 待分隔符）。
 type Emitter struct {
@@ -20,6 +23,16 @@ func (e *Emitter) PendingSeparator(sep string) {
 		sep = "\n\n"
 	}
 	e.pendingSeparator = true
+}
+
+// Emit 仅投影 message.delta 到 v1；其它 v2 事件在 v1 路径忽略。
+func (e *Emitter) Emit(ctx context.Context, typ string, payload map[string]any) error {
+	if typ == EventMessageDelta {
+		d, _ := payload["delta"].(string)
+		return e.TextDelta(d)
+	}
+	_ = ctx
+	return nil
 }
 
 // TextDelta 下发可见文本增量；必要时先补分隔符。

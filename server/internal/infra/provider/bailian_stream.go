@@ -80,7 +80,7 @@ func (a *streamAssembler) emit(event StreamEvent, sink func(StreamEvent) error, 
 	return nil
 }
 
-func (m *BailianModel) assemble(ctx context.Context, reader io.Reader, sink func(StreamEvent) error, start time.Time) (Response, error) {
+func (m *BailianModel) assemble(ctx context.Context, reader io.Reader, sink func(StreamEvent) error, start time.Time, thinkingEnabled bool) (Response, error) {
 	a := streamAssembler{calls: make(map[int]*partialCall)}
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 4<<20)
@@ -125,8 +125,14 @@ func (m *BailianModel) assemble(ctx context.Context, reader io.Reader, sink func
 				a.anomaly("multi_choice")
 				continue
 			}
-			if choice.Delta.Reasoning != "" {
-				a.anomaly("reasoning_present")
+			if text := choice.Delta.Reasoning; text != "" {
+				if thinkingEnabled {
+					if err := a.emit(StreamEvent{Type: EventReasoningDelta, Reasoning: text}, sink, start); err != nil {
+						return a.response(), err
+					}
+				} else {
+					a.anomaly("reasoning_present")
+				}
 			}
 			if text := choice.Delta.Content; text != "" {
 				a.text.WriteString(text)

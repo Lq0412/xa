@@ -31,18 +31,19 @@ type Conversation struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 type Message struct {
-	ID               string    `json:"id"`
-	ConversationID   string    `json:"conversation_id"`
-	Role             string    `json:"role"`
-	Content          string    `json:"content"`
-	Model            string    `json:"model"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	LatencyMS        int64     `json:"latency_ms"`
-	Status           string    `json:"status"`
-	Error            string    `json:"error,omitempty"`
-	RunID            string    `json:"run_id,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID               string        `json:"id"`
+	ConversationID   string        `json:"conversation_id"`
+	Role             string        `json:"role"`
+	Content          string        `json:"content"`
+	Model            string        `json:"model"`
+	PromptTokens     int           `json:"prompt_tokens"`
+	CompletionTokens int           `json:"completion_tokens"`
+	LatencyMS        int64         `json:"latency_ms"`
+	Status           string        `json:"status"`
+	Error            string        `json:"error,omitempty"`
+	RunID            string        `json:"run_id,omitempty"`
+	Parts            []MessagePart `json:"parts,omitempty"`
+	CreatedAt        time.Time     `json:"created_at"`
 }
 
 type Service struct {
@@ -100,10 +101,18 @@ func (s *Service) List(ctx context.Context, p auth.Principal) ([]Conversation, e
 	return out, rows.Err()
 }
 
+// ActiveRun 是会话内仍在执行的 run，供断线续传。
+type ActiveRun struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	LastEventSeq int64  `json:"last_event_seq"`
+}
+
 type MessagePage struct {
-	Messages []Message `json:"messages"`
-	HasMore  bool      `json:"has_more"`
-	Before   string    `json:"before,omitempty"`
+	Messages  []Message  `json:"messages"`
+	HasMore   bool       `json:"has_more"`
+	Before    string     `json:"before,omitempty"`
+	ActiveRun *ActiveRun `json:"active_run,omitempty"`
 }
 
 // Summary 只向会话所有者返回最新摘要及覆盖范围。
@@ -179,9 +188,18 @@ func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, bef
 	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
 		out[left], out[right] = out[right], out[left]
 	}
+	if err := attachPartsToMessages(ctx, s.DB, out); err != nil {
+		return MessagePage{}, err
+	}
 	page := MessagePage{Messages: out, HasMore: hasMore}
 	if hasMore && len(out) > 0 {
 		page.Before = out[0].ID
+	}
+	store := run.NewPGStore(s.DB)
+	if active, err := store.ActiveRunForConversation(ctx, id, p.UserID); err != nil {
+		return MessagePage{}, err
+	} else if active != nil {
+		page.ActiveRun = &ActiveRun{ID: active.ID, Status: active.Status, LastEventSeq: active.LastEventSeq}
 	}
 	return page, nil
 }
@@ -332,6 +350,7 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		Agent: a, Version: version, UserContent: content, UserMessageID: userID,
 		InitialMessages: contextResult.Messages, Segments: segments, Toolset: toolset, Limits: limits,
 		MemoryPolicy: policy, MemoryEnabled: policy.Enabled, AllowedModels: s.AllowedModels,
+		EnableThinking: definition.ChatEnableThinking(version.Configuration),
 	}, emit)
 	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelSave()

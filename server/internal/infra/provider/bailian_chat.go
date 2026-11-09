@@ -63,7 +63,7 @@ func (m *BailianModel) encodeRequest(req ChatRequest) ([]byte, error) {
 	if len(req.Tools) > 0 && req.ResponseSchema != nil {
 		return bad("Tools 与 ResponseSchema 不能同时设置")
 	}
-	body := bailianRequest{Model: req.Model, Stream: true, StreamOptions: map[string]bool{"include_usage": true}, EnableThinking: false, MaxTokens: req.MaxOutputTokens}
+	body := bailianRequest{Model: req.Model, Stream: true, StreamOptions: map[string]bool{"include_usage": true}, EnableThinking: req.EnableThinking, MaxTokens: req.MaxOutputTokens}
 	for _, message := range req.Messages {
 		wire := bailianMessage{Role: message.Role, Content: message.Content}
 		switch message.Role {
@@ -191,7 +191,7 @@ func (m *BailianModel) Chat(ctx context.Context, req ChatRequest, sink func(Stre
 		failure.RetryAfter = retryAfter(resp.Header.Get("Retry-After"), time.Now())
 		return result, failure
 	}
-	result, err = m.assemble(callCtx, reader, sink, start)
+	result, err = m.assemble(callCtx, reader, sink, start, req.EnableThinking)
 	// 仅提供观测标签，不把正文 JSON 转换成可执行调用；后续运行时可写入 span。
 	if req.ToolChoice.Mode == ToolChoiceNone && strings.Contains(result.Message.Content, `"name"`) && strings.Contains(result.Message.Content, `"arguments"`) {
 		result.Anomalies = append(result.Anomalies, "text_looks_like_tool_call")

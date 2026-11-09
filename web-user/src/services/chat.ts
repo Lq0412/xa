@@ -1,5 +1,7 @@
 import { ParseError } from 'eventsource-parser';
 import { EventSourceParserStream } from 'eventsource-parser/stream';
+import type { MessagePart } from './chat-parts';
+import { applyRunEvent, type RunStreamEvent } from './chat-run';
 import { ApiError, fetchApi, request } from './http';
 
 /** 服务端保存的会话摘要，ID 同时用于路由和请求归属。 */
@@ -18,8 +20,33 @@ export type ChatMessage = {
   content: string;
   status: 'pending' | 'completed' | 'failed' | 'stopped';
   error?: string;
+  run_id?: string;
+  parts?: MessagePart[];
   created_at?: string;
 };
+
+/** 历史 API 会剥离思考正文，流式态合并时保留本地已收到的 reasoning 文本。 */
+export function mergeMessagePartsFromLocal(
+  server: ChatMessage,
+  local?: ChatMessage,
+): ChatMessage {
+  if (!server.parts?.length || !local?.parts?.length) return server;
+  const parts = server.parts.map((sp) => {
+    if (sp.type !== 'reasoning') return sp;
+    const lp = local.parts?.find(
+      (p) => p.type === 'reasoning' && p.item_id === sp.item_id,
+    );
+    if (
+      lp?.type === 'reasoning' &&
+      lp.text.trim().length > 0 &&
+      !String(sp.text || '').trim()
+    ) {
+      return { ...sp, text: lp.text };
+    }
+    return sp;
+  });
+  return { ...server, parts };
+}
 
 /** URL 只保存稳定 ID，旧链接由会话状态层读取后转换为统一格式。 */
 export function chatURL(agentId: string, conversationId?: string) {
@@ -82,13 +109,24 @@ export async function getConversationSummary(id: string, signal?: AbortSignal) {
 }
 
 /** 历史读取失败必须由页面显示，不能伪装为空会话。 */
+export type ActiveRun = {
+  id: string;
+  status: string;
+  last_event_seq: number;
+};
+
 export const listMessages = (
   id: string,
   signal?: AbortSignal,
   before?: string,
   limit = 20,
 ) =>
-  request<{ messages: ChatMessage[]; has_more: boolean; before?: string }>(
+  request<{
+    messages: ChatMessage[];
+    has_more: boolean;
+    before?: string;
+    active_run?: ActiveRun | null;
+  }>(
     `/conversations/${encodeURIComponent(id)}/messages?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
     { signal },
   );
@@ -116,7 +154,13 @@ export async function streamMessage(
     throw new ApiError(502, '服务未返回有效的消息流');
   const reader = response.body
     .pipeThrough(new TextDecoderStream())
-    .pipeThrough(new EventSourceParserStream({ onError: 'terminate' }))
+    .pipeThrough(
+      new EventSourceParserStream({
+        onError: () => {
+          /* 分片中间态由解析器自行恢复 */
+        },
+      }),
+    )
     .getReader();
   try {
     for (;;) {
@@ -143,5 +187,144 @@ export async function streamMessage(
   } finally {
     cleanup.abort();
     reader.releaseLock();
+  }
+}
+
+export type StreamRunHandlers = {
+  onParts: (parts: MessagePart[], content: string) => void;
+  onRunID?: (runId: string) => void;
+};
+
+type SseFrame = { event: string; data: string };
+
+async function* readSseFrames(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<SseFrame> {
+  const reader = (body as ReadableStream<Uint8Array<ArrayBuffer>>)
+    .pipeThrough(new TextDecoderStream())
+    .getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      for (;;) {
+        const sep = buf.indexOf('\n\n');
+        if (sep < 0) break;
+        const block = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        if (block.startsWith(':')) continue;
+        let event = '';
+        let data = '';
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) data += line.slice(5).trim();
+        }
+        if (data) yield { event, data };
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** SSE v2：X-XA-Stream: 2，支持取消与续传由调用方处理 run_id。 */
+export async function streamRun(
+  conversationId: string,
+  content: string,
+  signal: AbortSignal,
+  handlers: StreamRunHandlers,
+  opts?: { idempotencyKey?: string; afterSeq?: number },
+): Promise<{ messageId?: string; runId?: string }> {
+  const headers: Record<string, string> = { 'X-XA-Stream': '2' };
+  if (opts?.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
+  if (opts?.afterSeq != null && opts.afterSeq > 0)
+    headers['Last-Event-ID'] = String(opts.afterSeq);
+  const response = await fetchApi(
+    `/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ content }),
+      signal,
+    },
+  );
+  if (
+    !response.body ||
+    !response.headers.get('content-type')?.includes('text/event-stream')
+  )
+    throw new ApiError(502, '服务未返回有效的消息流');
+  let parts: MessagePart[] = [];
+  let contentText = '';
+  let runId = '';
+  let messageId = '';
+  for await (const frame of readSseFrames(response.body)) {
+    const ev = JSON.parse(frame.data) as RunStreamEvent;
+    const typ = String(frame.event || ev.type || '');
+    if (typeof ev.run_id === 'string') {
+      runId = ev.run_id;
+      handlers.onRunID?.(runId);
+    }
+    if (typ === 'message.delta') {
+      contentText += String(ev.delta ?? '');
+    }
+    parts = applyRunEvent(parts, { ...ev, type: typ });
+    handlers.onParts(parts, contentText);
+    if (
+      typ === 'run.completed' ||
+      typ === 'run.failed' ||
+      typ === 'run.cancelled'
+    ) {
+      messageId = String(ev.message_id ?? '');
+      if (typ !== 'run.completed')
+        throw new ApiError(502, String(ev.message ?? '生成失败'));
+      break;
+    }
+  }
+  return { messageId, runId };
+}
+
+export async function cancelRun(runId: string, signal?: AbortSignal) {
+  await fetchApi(`/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+export async function resumeRun(
+  runId: string,
+  afterSeq: number,
+  signal: AbortSignal,
+  handlers: StreamRunHandlers,
+  initial?: { parts?: MessagePart[]; content?: string },
+) {
+  const response = await fetchApi(
+    `/runs/${encodeURIComponent(runId)}/events?after=${afterSeq}`,
+    {
+      signal,
+      headers: afterSeq > 0 ? { 'Last-Event-ID': String(afterSeq) } : {},
+    },
+  );
+  if (!response.body) throw new ApiError(502, '续传失败');
+  let parts: MessagePart[] = initial?.parts?.length
+    ? (initial.parts.map((p) => ({ ...p })) as MessagePart[])
+    : [];
+  let contentText = initial?.content ?? '';
+  for await (const frame of readSseFrames(response.body)) {
+    const ev = JSON.parse(frame.data) as RunStreamEvent;
+    const typ = String(frame.event || ev.type || '');
+    if (typ === 'message.delta') contentText += String(ev.delta ?? '');
+    parts = applyRunEvent(parts, { ...ev, type: typ });
+    handlers.onParts(parts, contentText);
+    if (
+      typ === 'run.completed' ||
+      typ === 'run.failed' ||
+      typ === 'run.cancelled'
+    ) {
+      if (typ !== 'run.completed')
+        throw new ApiError(502, String(ev.message ?? '生成失败'));
+      break;
+    }
   }
 }
