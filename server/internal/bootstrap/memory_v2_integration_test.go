@@ -107,7 +107,7 @@ func TestMemoryV2(t *testing.T) {
 	}
 	model := provider.NewBailian(cfg.Bailian.APIKey, cfg.Bailian.BaseURL)
 	mem := &memory.Service{DB: db, Agents: agents, Model: model}
-	chats := &conversation.Service{DB: db, Agents: agents, Model: model, Memory: mem, AllowedModels: cfg.ChatModels}
+	chats := newChatService(t, db, agents, mem)
 	chat, err := chats.GetOrCreate(ctx, p, primary.ID)
 	if err != nil {
 		t.Fatal(err)

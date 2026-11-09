@@ -85,6 +85,7 @@ func TestMemoryS1(t *testing.T) {
 	save := definition.SaveInput{AgentID: primary.ID, Name: primary.Name, Visibility: primary.Visibility, ExpectedVersionID: version.ID, Configuration: version.Configuration}
 	save.Configuration.Model = "qwen3.8-flash"
 	save.Configuration.SoulMD = "简短回答，不超过一句话。回答用户个人情况时使用记忆中的事实。"
+	save.Configuration.MemoryPolicy = json.RawMessage(`{"enabled":true,"history_budget_tokens":6000,"core_budget_tokens":800,"summary_trigger_tokens":3000}`)
 	saved, err := agents.Save(ctx, p, save)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +95,7 @@ func TestMemoryS1(t *testing.T) {
 	t.Run("manual_keys_and_dead_jobs", func(t *testing.T) {
 		testMemoryAPIFixes(t, ctx, mem, newUser(), newUser())
 	})
-	chats := &conversation.Service{DB: db, Agents: agents, Model: model, Memory: mem, AllowedModels: cfg.ChatModels}
+	chats := newChatService(t, db, agents, mem)
 	chat, err := chats.GetOrCreate(ctx, p, primary.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +121,17 @@ func TestMemoryS1(t *testing.T) {
 			}
 		}
 	}
-	send(chat.ID, "我叫小林，在准备雅思，目标 7 分")
+	msg := send(chat.ID, "我叫小林，在准备雅思，目标 7 分")
+	if msg.Status != "completed" {
+		t.Fatalf("首条回复未成功: status=%s err=%q", msg.Status, msg.Error)
+	}
+	var enqueued int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM memory_tasks WHERE status='pending'`).Scan(&enqueued); err != nil {
+		t.Fatal(err)
+	}
+	if enqueued == 0 {
+		t.Fatal("记忆抽取任务未入队")
+	}
 	drain()
 	items, err := mem.List(ctx, p, memory.Filter{Scope: "user", Namespace: "profile"})
 	if err != nil || len(items) == 0 {

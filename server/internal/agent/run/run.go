@@ -3,8 +3,10 @@ package run
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/infra/provider"
 	"linq-bs/server/internal/tool"
@@ -20,6 +22,9 @@ type Engine interface {
 
 // RunContext 承载单次 run 的可变执行状态。
 type RunContext struct {
+	mu               sync.Mutex
+	dbMu             sync.Mutex // 串行化同一对话事务内的 PG 写入，供并行只读工具批次使用
+	Tx               pgx.Tx     // Send 事务；非空时所有 run_messages / tool_results 须在同一事务内写入
 	Run              Run
 	Toolset          tool.Toolset
 	Messages         []provider.Message
@@ -48,10 +53,21 @@ type Outcome struct {
 	Truncated bool
 }
 
+// appendMessage 在并行调度中安全追加模型视图消息。
+func (rc *RunContext) appendMessage(m provider.Message) {
+	rc.mu.Lock()
+	rc.Messages = append(rc.Messages, m)
+	rc.mu.Unlock()
+}
+
 // ModelMessages 在收尾轮追加 system 提示并返回当前消息列表。
 func (rc *RunContext) ModelMessages(wrapUp bool) []provider.Message {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
 	if !wrapUp {
-		return rc.Messages
+		out := make([]provider.Message, len(rc.Messages))
+		copy(out, rc.Messages)
+		return out
 	}
 	out := make([]provider.Message, len(rc.Messages), len(rc.Messages)+1)
 	copy(out, rc.Messages)
@@ -63,6 +79,41 @@ func (rc *RunContext) ModelMessages(wrapUp bool) []provider.Message {
 }
 
 // RemainingWall 返回距离墙钟预算结束的剩余时间。
+func (rc *RunContext) nextOrdinal(ctx context.Context) (int, error) {
+	return rc.Store.NextOrdinal(ctx, rc.Tx, rc.Run.ID)
+}
+
+func (rc *RunContext) appendRunMessage(ctx context.Context, msg RunMessage) error {
+	if msg.Ordinal == 0 {
+		ord, err := rc.nextOrdinal(ctx)
+		if err != nil {
+			return err
+		}
+		msg.Ordinal = ord
+	}
+	rc.dbMu.Lock()
+	defer rc.dbMu.Unlock()
+	return rc.Store.AppendRunMessage(ctx, rc.Tx, msg)
+}
+
+// withToolTx 在 Chat 事务或独立短事务中执行工具持久化。
+func (rc *RunContext) withToolTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	if rc.Tx != nil {
+		rc.dbMu.Lock()
+		defer rc.dbMu.Unlock()
+		return fn(rc.Tx)
+	}
+	tx, err := rc.Store.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (rc *RunContext) RemainingWall() time.Duration {
 	if rc.WallStarted.IsZero() {
 		return time.Duration(rc.Limits.MaxWallTimeMS) * time.Millisecond

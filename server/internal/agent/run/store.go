@@ -14,7 +14,7 @@ type Store interface {
 	UpdateRun(ctx context.Context, tx pgx.Tx, run Run) error
 	GetRun(ctx context.Context, id string) (Run, error)
 
-	NextOrdinal(ctx context.Context, runID string) (int, error)
+	NextOrdinal(ctx context.Context, tx pgx.Tx, runID string) (int, error)
 	AppendRunMessage(ctx context.Context, tx pgx.Tx, msg RunMessage) error
 	ListRunMessages(ctx context.Context, runID string) ([]RunMessage, error)
 

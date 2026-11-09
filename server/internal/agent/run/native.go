@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"linq-bs/server/internal/infra/provider"
 )
 
@@ -111,24 +112,16 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 			}
 			return Outcome{}, err
 		}
-		if out.AllFailed {
-			rc.Budget.ConsecutiveFailSteps++
-		} else {
-			rc.Budget.ConsecutiveFailSteps = 0
-		}
+		rc.Budget.RecordToolStepFailure(out.AllFailed)
 	}
 }
 
 func appendAssistantStep(ctx context.Context, rc *RunContext, resp provider.Response) error {
-	rc.Messages = append(rc.Messages, provider.Message{
+	rc.appendMessage(provider.Message{
 		Role: resp.Message.Role, Content: resp.Message.Content, ToolCalls: resp.Message.ToolCalls,
 	})
-	ord, err := rc.Store.NextOrdinal(ctx, rc.Run.ID)
-	if err != nil {
-		return err
-	}
-	return rc.Store.AppendRunMessage(ctx, nil, RunMessage{
-		RunID: rc.Run.ID, Step: rc.Step, Ordinal: ord, Role: "assistant",
+	return rc.appendRunMessage(ctx, RunMessage{
+		RunID: rc.Run.ID, Step: rc.Step, Role: "assistant",
 		Content: resp.Message.Content, ToolCalls: resp.Message.ToolCalls,
 		FinishReason: string(resp.FinishReason),
 	})
@@ -143,13 +136,9 @@ func insertRejectedResults(ctx context.Context, rc *RunContext, plan CallPlan) e
 		if pc.CountsBudget {
 			rc.Budget.AddToolBudget()
 		}
-		rc.Messages = append(rc.Messages, toolMessage(pc.Call.Name, pc.Call.ID, content))
-		ord, err := rc.Store.NextOrdinal(ctx, rc.Run.ID)
-		if err != nil {
-			return err
-		}
-		if err := rc.Store.AppendRunMessage(ctx, nil, RunMessage{
-			RunID: rc.Run.ID, Step: rc.Step, Ordinal: ord, Role: "tool",
+		rc.appendMessage(toolMessage(pc.Call.Name, pc.Call.ID, content))
+		if err := rc.appendRunMessage(ctx, RunMessage{
+			RunID: rc.Run.ID, Step: rc.Step, Role: "tool",
 			Content: content, ToolCallID: pc.Call.ID, ToolName: pc.Call.Name,
 		}); err != nil {
 			return err
@@ -161,15 +150,11 @@ func insertRejectedResults(ctx context.Context, rc *RunContext, plan CallPlan) e
 			ToolName: pc.Call.Name, Status: "rejected", ErrorCode: pc.ErrorCode,
 			ErrorMessage: pc.ErrorMessage, ModelContent: content,
 		}
-		tx, err := rc.Store.BeginTx(ctx)
-		if err != nil {
+		if err := rc.withToolTx(ctx, func(tx pgx.Tx) error {
+			return rc.Store.InsertToolResult(ctx, tx, row)
+		}); err != nil {
 			return err
 		}
-		if err := rc.Store.InsertToolResult(ctx, tx, row); err != nil {
-			_ = tx.Rollback(ctx)
-			return err
-		}
-		_ = tx.Commit(ctx)
 	}
 	return nil
 }

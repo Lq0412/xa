@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,7 +99,11 @@ func TestSchedulerWriteBarrier(t *testing.T) {
 	}
 }
 
-var testPeak, testCur atomic.Int32
+var (
+	testPeakMu sync.Mutex
+	testPeak   int
+	testCur    int
+)
 
 type peakSleepTool struct{}
 
@@ -110,14 +114,18 @@ func (peakSleepTool) Spec() tool.Spec {
 }
 
 func (peakSleepTool) Execute(ctx context.Context, call tool.Call, env tool.Env) (tool.Result, error) {
-	n := testCur.Add(1)
-	for {
-		old := testPeak.Load()
-		if n <= old || testPeak.CompareAndSwap(old, n) {
-			break
-		}
+	testPeakMu.Lock()
+	testCur++
+	n := testCur
+	if n > testPeak {
+		testPeak = n
 	}
-	defer testCur.Add(-1)
+	testPeakMu.Unlock()
+	defer func() {
+		testPeakMu.Lock()
+		testCur--
+		testPeakMu.Unlock()
+	}()
 	time.Sleep(30 * time.Millisecond)
 	return tool.Result{Data: map[string]any{"ok": true}}, nil
 }
@@ -129,8 +137,9 @@ func TestSchedulerBatchingAndParallelCap(t *testing.T) {
 	store := NewMemStore()
 	limits := definition.RuntimeLimits{MaxParallelTools: 2, MaxToolCalls: 8, MaxModelTurns: 2}
 	rc := testRC(t, store, reg, &FakeProvider{}, limits, ts)
-	testPeak.Store(0)
-	testCur.Store(0)
+	testPeakMu.Lock()
+	testPeak, testCur = 0, 0
+	testPeakMu.Unlock()
 	accepted := []PlannedCall{
 		{Accepted: true, Call: provider.ToolCall{ID: "1", Name: "peak_sleep", Arguments: `{}`}},
 		{Accepted: true, Call: provider.ToolCall{ID: "2", Name: "peak_sleep", Arguments: `{}`}},
@@ -139,8 +148,11 @@ func TestSchedulerBatchingAndParallelCap(t *testing.T) {
 	if _, err := (Scheduler{}).Run(context.Background(), rc, accepted); err != nil {
 		t.Fatal(err)
 	}
-	if testPeak.Load() > 2 {
-		t.Fatalf("并发峰值 %d 超过 2", testPeak.Load())
+	testPeakMu.Lock()
+	peak := testPeak
+	testPeakMu.Unlock()
+	if peak > 2 {
+		t.Fatalf("并发峰值 %d 超过 2", peak)
 	}
 }
 

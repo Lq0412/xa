@@ -327,28 +327,23 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if s.Runs == nil {
 		return Message{}, provider.Usage{}, fmt.Errorf("RunService 未配置")
 	}
-	assistantID, usage, outcome, callErr := s.Runs.ExecuteChat(ctx, tx, run.ChatStartInput{
+	assistantID, usage, _, callErr := s.Runs.ExecuteChat(ctx, tx, run.ChatStartInput{
 		Principal: p, Conversation: run.ConversationRef{ID: id, Title: c.Title, AgentID: a.ID},
 		Agent: a, Version: version, UserContent: content, UserMessageID: userID,
 		InitialMessages: contextResult.Messages, Segments: segments, Toolset: toolset, Limits: limits,
 		MemoryPolicy: policy, MemoryEnabled: policy.Enabled, AllowedModels: s.AllowedModels,
 	}, emit)
-	status := "completed"
-	errText := ""
+	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelSave()
+	var status, errText string
 	if callErr != nil {
-		status = "failed"
+		_ = tx.Rollback(saveCtx)
 		errText = PublicError(callErr)
 		if errors.Is(ctx.Err(), context.Canceled) {
 			errText = "已停止生成"
 		}
-	} else if outcome.Kind != run.OutcomeCompleted {
-		status = "failed"
-		if outcome.Message != "" {
-			errText = outcome.Message
-		}
+		return Message{}, usage, callErr
 	}
-	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancelSave()
 	if c.Title == "" {
 		rn := []rune(content)
 		if len(rn) > 30 {
@@ -362,6 +357,19 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	}
 	if err := tx.Commit(saveCtx); err != nil {
 		return Message{}, usage, err
+	}
+	if s.Memory != nil && policy.Enabled {
+		enqueueTx, err := s.DB.Begin(saveCtx)
+		if err != nil {
+			return Message{}, usage, err
+		}
+		if err := s.Memory.EnqueueTx(saveCtx, enqueueTx, userID); err != nil {
+			_ = enqueueTx.Rollback(saveCtx)
+			return Message{}, usage, err
+		}
+		if err := enqueueTx.Commit(saveCtx); err != nil {
+			return Message{}, usage, err
+		}
 	}
 	var runID string
 	_ = s.DB.QueryRow(context.WithoutCancel(ctx), `SELECT run_id FROM messages WHERE id=$1`, assistantID).Scan(&runID)

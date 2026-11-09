@@ -69,23 +69,23 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 	rc := &RunContext{
 		Run: run, Toolset: toolset, Messages: append([]provider.Message(nil), in.InitialMessages...),
 		Budget: NewBudget(in.Limits), Store: s.Store, Provider: s.Provider, Registry: s.Registry,
-		Env: env, Limits: in.Limits, Emitter: NewV1Emitter(emit), WallStarted: now,
+		Env: env, Limits: in.Limits, Emitter: NewV1Emitter(emit), WallStarted: now, Tx: tx,
 		CallHashes: map[string]int{}, PerToolCalls: map[string]int{},
 	}
 	began := time.Now()
 	outcome, execErr := s.Engine.Execute(ctx, rc)
+	if execErr != nil {
+		return "", provider.Usage{}, outcome, execErr
+	}
 	latency := time.Since(began).Milliseconds()
 	usage = provider.Usage{PromptTokens: rc.Run.PromptTokens, CompletionTokens: rc.Run.CompletionTokens}
 	visible := rc.VisibleText.String()
 	if visible == "" && outcome.Kind == OutcomeCompleted {
 		visible = "（无回复内容）"
 	}
-	status := "completed"
 	errText := ""
-	assistantStatus := status
+	assistantStatus := "completed"
 	switch outcome.Kind {
-	case OutcomeCompleted:
-		run.Status = "completed"
 	case OutcomeBudgetExhausted:
 		run.Status = "budget_exhausted"
 		assistantStatus = "failed"
@@ -102,28 +102,32 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 		assistantStatus = "failed"
 		if outcome.Message != "" {
 			errText = outcome.Message
-		} else {
+		} else if execErr != nil {
 			errText = "生成失败"
 		}
 	default:
-		run.Status = "failed"
-		assistantStatus = "failed"
-		errText = "生成失败"
+		run.Status = "completed"
+	}
+	// 与旧 Send 一致：模型调用无 error 时，有可见正文即视为 completed。
+	if execErr == nil && visible != "" && outcome.Kind != OutcomeBudgetExhausted && outcome.Kind != OutcomeCancelled {
+		run.Status = "completed"
+		assistantStatus = "completed"
+		errText = ""
 	}
 	run.Steps = rc.Step
 	run.ModelTurns = rc.Budget.Turns
 	run.ToolCalls = rc.Budget.ToolCalls
 	run.LatencyMS = latency
 	run.ActiveMS = ActiveMS(rc.WallStarted)
-	run.ErrorCode = outcome.Code
+	if outcome.Code != "" {
+		run.ErrorCode = outcome.Code
+	} else {
+		run.ErrorCode = string(outcome.Kind)
+	}
 	run.Error = errText
 	ended := time.Now().UTC()
 	run.EndedAt = &ended
 	assistantID = "msg_" + uuid.NewString()
-	run.FinalMessageID = assistantID
-	if err := s.Store.UpdateRun(ctx, tx, run); err != nil {
-		return "", usage, outcome, err
-	}
 	_, err = tx.Exec(ctx, `
 INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at,context_segments,agent_version_id,run_id)
 VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
@@ -133,7 +137,16 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 	if err != nil {
 		return "", usage, outcome, err
 	}
-	if s.Memory != nil && in.MemoryEnabled && outcome.Kind == OutcomeCompleted && execErr == nil {
+	run.FinalMessageID = assistantID
+	if err := s.Store.SaveRunContext(ctx, tx, RunContextSnapshot{
+		RunID: runID, Messages: rc.Messages, Segments: in.Segments,
+	}); err != nil {
+		return "", usage, outcome, err
+	}
+	if err := s.Store.UpdateRun(ctx, tx, run); err != nil {
+		return "", usage, outcome, err
+	}
+	if s.Memory != nil && in.MemoryEnabled && execErr == nil {
 		if err := s.Memory.EnqueueTx(ctx, tx, in.UserMessageID); err != nil {
 			return "", usage, outcome, err
 		}

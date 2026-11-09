@@ -87,6 +87,22 @@ func planBatches(calls []PlannedCall, rc *RunContext) []batchPlan {
 }
 
 func runParallelBatch(ctx context.Context, rc *RunContext, calls []PlannedCall) (failed int, err error) {
+	// 同一 pgx.Tx 不能跨 goroutine 并发使用；Chat 事务路径退化为串行仍保留模型侧 parallel_tool_calls。
+	if rc.Tx != nil {
+		for _, pc := range calls {
+			if ctx.Err() != nil {
+				return failed, ctx.Err()
+			}
+			if e := executeOne(ctx, rc, pc); e != nil {
+				if ctx.Err() != nil {
+					return failed + 1, e
+				}
+				failed++
+				err = e
+			}
+		}
+		return failed, err
+	}
 	cap := rc.Limits.MaxParallelTools
 	if cap <= 0 {
 		cap = 4
@@ -142,7 +158,9 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 		return errors.New("工具未注册")
 	}
 	rc.Budget.AddToolBudget()
+	rc.mu.Lock()
 	rc.PerToolCalls[pc.Call.Name]++
+	rc.mu.Unlock()
 	args := []byte(pc.Call.Arguments)
 	if len(args) == 0 {
 		args = []byte("{}")
@@ -160,15 +178,9 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 		Effect: string(entry.Spec.Effect), Arguments: args, RawArguments: string(args),
 		ArgsHash: argsHash(pc.Call.Name, args), Status: "running", Attempts: 1,
 	}
-	tx, err := rc.Store.BeginTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := rc.Store.InsertToolResult(ctx, tx, row); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := rc.withToolTx(ctx, func(tx pgx.Tx) error {
+		return rc.Store.InsertToolResult(ctx, tx, row)
+	}); err != nil {
 		return err
 	}
 
@@ -181,6 +193,15 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 		prepared, prepErr := txTool.Prepare(toolCtx, call, env)
 		if prepErr != nil {
 			execErr = prepErr
+		} else if rc.Tx != nil {
+			env.Tx = rc.Tx
+			res, execErr = txTool.ExecuteTx(toolCtx, rc.Tx, call, env, prepared)
+			if execErr == nil {
+				rc.dbMu.Lock()
+				execErr = persistToolSuccess(ctx, rc, rc.Tx, &row, res, entry, resultRef)
+				rc.dbMu.Unlock()
+			}
+			env.Tx = nil
 		} else {
 			tx2, err := rc.Store.BeginTx(ctx)
 			if err != nil {
@@ -205,22 +226,20 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 			res, execErr = toolImpl.Execute(toolCtx, call, env)
 		}
 		if execErr == nil {
-			tx2, err := rc.Store.BeginTx(ctx)
-			if err != nil {
-				return err
-			}
-			execErr = persistToolSuccess(ctx, rc, tx2, &row, res, entry, resultRef)
-			if execErr != nil {
-				_ = tx2.Rollback(ctx)
+			if rc.Tx != nil {
+				rc.dbMu.Lock()
+				execErr = persistToolSuccess(ctx, rc, rc.Tx, &row, res, entry, resultRef)
+				rc.dbMu.Unlock()
 			} else {
-				_ = tx2.Commit(ctx)
+				execErr = rc.withToolTx(ctx, func(tx pgx.Tx) error {
+					return persistToolSuccess(ctx, rc, tx, &row, res, entry, resultRef)
+				})
 			}
 		}
 	}
 	if execErr != nil {
 		return persistToolFailure(ctx, rc, &row, execErr)
 	}
-	rc.Messages = append(rc.Messages, toolMessage(row.ToolName, row.CallID, row.ModelContent))
 	return appendToolMessage(ctx, rc, pc, row.ModelContent)
 }
 
@@ -266,32 +285,22 @@ func persistToolFailure(ctx context.Context, rc *RunContext, row *ToolResultRow,
 	row.Status = "failed"
 	row.ErrorCode = code
 	row.ModelContent = content
-	tx, err := rc.Store.BeginTx(ctx)
-	if err != nil {
+	if err := rc.withToolTx(ctx, func(tx pgx.Tx) error {
+		return rc.Store.UpdateToolResult(ctx, tx, *row)
+	}); err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := rc.Store.UpdateToolResult(ctx, tx, *row); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	rc.Messages = append(rc.Messages, toolMessage(row.ToolName, row.CallID, content))
-	return rc.Store.AppendRunMessage(ctx, nil, RunMessage{
+	rc.appendMessage(toolMessage(row.ToolName, row.CallID, content))
+	return rc.appendRunMessage(ctx, RunMessage{
 		RunID: rc.Run.ID, Step: rc.Step, Role: "tool", Content: content,
 		ToolCallID: row.CallID, ToolName: row.ToolName,
 	})
 }
 
 func appendToolMessage(ctx context.Context, rc *RunContext, pc PlannedCall, content string) error {
-	rc.Messages = append(rc.Messages, toolMessage(pc.Call.Name, pc.Call.ID, content))
-	ord, err := rc.Store.NextOrdinal(ctx, rc.Run.ID)
-	if err != nil {
-		return err
-	}
-	return rc.Store.AppendRunMessage(ctx, nil, RunMessage{
-		RunID: rc.Run.ID, Step: rc.Step, Ordinal: ord, Role: "tool", Content: content,
+	rc.appendMessage(toolMessage(pc.Call.Name, pc.Call.ID, content))
+	return rc.appendRunMessage(ctx, RunMessage{
+		RunID: rc.Run.ID, Step: rc.Step, Role: "tool", Content: content,
 		ToolCallID: pc.Call.ID, ToolName: pc.Call.Name,
 	})
 }

@@ -3,6 +3,8 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,9 +71,14 @@ FROM runs WHERE id=$1`, id).Scan(
 	return run, nil
 }
 
-func (s *PGStore) NextOrdinal(ctx context.Context, runID string) (int, error) {
+func (s *PGStore) NextOrdinal(ctx context.Context, tx pgx.Tx, runID string) (int, error) {
 	var n int
-	err := s.DB.QueryRow(ctx, `SELECT COALESCE(MAX(ordinal),0)+1 FROM run_messages WHERE run_id=$1`, runID).Scan(&n)
+	q := `SELECT COALESCE(MAX(ordinal),0)+1 FROM run_messages WHERE run_id=$1`
+	if tx != nil {
+		err := tx.QueryRow(ctx, q, runID).Scan(&n)
+		return n, err
+	}
+	err := s.DB.QueryRow(ctx, q, runID).Scan(&n)
 	return n, err
 }
 
@@ -80,19 +87,31 @@ func (s *PGStore) AppendRunMessage(ctx context.Context, tx pgx.Tx, msg RunMessag
 		msg.ID = "rm_" + uuid.NewString()
 	}
 	if msg.Ordinal == 0 {
-		n, err := s.NextOrdinal(ctx, msg.RunID)
+		n, err := s.NextOrdinal(ctx, tx, msg.RunID)
 		if err != nil {
 			return err
 		}
 		msg.Ordinal = n
 	}
-	toolCalls, _ := json.Marshal(msg.ToolCalls)
+	var toolCallsParam any
+	if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+		raw, _ := json.Marshal(msg.ToolCalls)
+		toolCallsParam = raw
+	}
+	var toolCallID, toolName any
+	if msg.Role == "tool" {
+		if strings.TrimSpace(msg.ToolCallID) == "" {
+			return fmt.Errorf("tool 消息缺少 tool_call_id")
+		}
+		toolCallID = msg.ToolCallID
+		toolName = nullable(msg.ToolName)
+	}
 	exec := func(ctx context.Context, q pgx.Tx) error {
 		_, err := q.Exec(ctx, `
 INSERT INTO run_messages(id,run_id,step,ordinal,role,content,tool_calls,tool_call_id,tool_name,finish_reason)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			msg.ID, msg.RunID, msg.Step, msg.Ordinal, msg.Role, msg.Content, toolCalls,
-			nullable(msg.ToolCallID), nullable(msg.ToolName), nullable(msg.FinishReason))
+			msg.ID, msg.RunID, msg.Step, msg.Ordinal, msg.Role, msg.Content, toolCallsParam,
+			toolCallID, toolName, nullable(msg.FinishReason))
 		return err
 	}
 	if tx != nil {

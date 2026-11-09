@@ -84,7 +84,7 @@ func (m *MemStore) GetRun(ctx context.Context, id string) (Run, error) {
 	return r, nil
 }
 
-func (m *MemStore) NextOrdinal(ctx context.Context, runID string) (int, error) {
+func (m *MemStore) NextOrdinal(ctx context.Context, _ pgx.Tx, runID string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ordinals[runID]++
