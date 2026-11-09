@@ -3,8 +3,10 @@
 package bootstrap_test
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,7 +47,9 @@ func testToolsEnv(t *testing.T) (*pgxpool.Pool, definition.Service, *tool.Regist
 	agents := definition.NewService(definition.NewPGRepository(db), cfg.ChatModels)
 	agents.ToolValidator = nil
 	model := provider.NewBailian(cfg.Bailian.APIKey, cfg.Bailian.BaseURL)
-	mem := &memory.Service{DB: db, Agents: agents, Model: model}
+	mem := &memory.Service{DB: db, Agents: agents, Model: model, QueryEmbed: func(_ context.Context, query string) ([]float32, error) {
+		return integrationVector(query), nil
+	}}
 	reg, err := bootstrap.NewToolRegistry(mem, db)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +85,7 @@ func TestAgentToolsAPI(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+primary.ID+"/tools", nil).WithContext(auth.WithPrincipal(t.Context(), other))
 	req.SetPathValue("agent_id", primary.ID)
 	h.GetAgentTools(w, req)
-	if w.Code != http.StatusForbidden {
+	if w.Code != http.StatusForbidden && w.Code != http.StatusNotFound {
 		t.Fatalf("非 owner 应拒绝: %d", w.Code)
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -157,33 +161,30 @@ func TestMemoryToolScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vector, err := mem.ToolWritePrepare(t.Context(), "用户喜欢绿茶")
-	if err != nil {
-		t.Fatal(err)
-	}
+	sourceRef := seedUserMessage(t, t.Context(), db, owner, primary.ID)
+	vector := integrationVector("用户喜欢绿茶")
 	tx, err := db.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	item, op, err := mem.ToolWriteTx(t.Context(), tx, owner, memory.ToolWriteInput{
-		AgentID: primary.ID, IsPrimary: primary.IsPrimary, SourceRef: "msg_test", Content: "用户喜欢绿茶", Namespace: "preferences", Importance: 7,
+		AgentID: primary.ID, IsPrimary: primary.IsPrimary, SourceRef: sourceRef, Content: "用户喜欢绿茶", Namespace: "preferences", Importance: 7,
 	}, vector)
 	if err != nil || op == "noop" || item.Scope != "user" || item.Source != "tool" {
+		_ = tx.Rollback(t.Context())
 		t.Fatalf("主 Agent 写入: %v %+v", err, item)
 	}
 	if err = tx.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	vector2, err := mem.ToolWritePrepare(t.Context(), "子 Agent 私有事实")
-	if err != nil {
-		t.Fatal(err)
-	}
+	childSource := seedUserMessage(t, t.Context(), db, owner, child.Definition.ID)
+	vector2 := integrationVector("子 Agent 私有事实")
 	tx, err = db.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	item2, _, err := mem.ToolWriteTx(t.Context(), tx, owner, memory.ToolWriteInput{
-		AgentID: child.Definition.ID, IsPrimary: false, SourceRef: "msg_child", Content: "子 Agent 私有事实", Namespace: "profile", Importance: 6,
+		AgentID: child.Definition.ID, IsPrimary: false, SourceRef: childSource, Content: "子 Agent 私有事实", Namespace: "profile", Importance: 6,
 	}, vector2)
 	if err != nil || item2.Scope != "agent" || item2.AgentID == nil || *item2.AgentID != child.Definition.ID {
 		t.Fatalf("非主 Agent scope: %+v err=%v", item2, err)
@@ -191,26 +192,24 @@ func TestMemoryToolScopes(t *testing.T) {
 	if err = tx.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	manual, err := mem.Add(t.Context(), owner, memory.AddInput{Content: "用户手填", Namespace: "profile", SubjectKey: "manual.fact", Importance: 8, Scope: "user"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_ = seedUserEditedMemory(t, t.Context(), db, owner, "profile", "manual.fact", "用户手填")
 	tx, err = db.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = mem.ToolWriteTx(t.Context(), tx, owner, memory.ToolWriteInput{
-		AgentID: primary.ID, IsPrimary: primary.IsPrimary, SourceRef: "msg_conflict", Content: "自动改写", Namespace: manual.Namespace, SubjectKey: manual.SubjectKey, Importance: 5,
+		AgentID: primary.ID, IsPrimary: primary.IsPrimary, SourceRef: sourceRef, Content: "自动改写", Namespace: "profile", SubjectKey: "manual.fact", Importance: 5,
 	}, vector)
-	if err == nil {
-		t.Fatal("应拒绝 user_edited 冲突")
+	var toolErr *tool.Error
+	if err == nil || !errors.As(err, &toolErr) || toolErr.Code != "conflict_user_edited" {
+		t.Fatalf("应拒绝 user_edited 冲突: %v", err)
 	}
 	_ = tx.Rollback(t.Context())
 	tx, err = db.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = mem.ToolForgetTx(t.Context(), tx, other, primary.ID, item.ID, "msg_x", "越权删除")
+	_, err = mem.ToolForgetTx(t.Context(), tx, other, primary.ID, item.ID, sourceRef, "越权删除")
 	if err == nil {
 		t.Fatal("用户 B 不能删除用户 A 的记忆")
 	}

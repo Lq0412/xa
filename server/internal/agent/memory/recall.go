@@ -43,7 +43,13 @@ func (s *Service) Recall(ctx context.Context, p auth.Principal, agentID, query s
 	if exclude == nil {
 		exclude = []string{}
 	}
-	vector, err := s.Model.Embed(ctx, runtime.TruncateTokens(query, 6000))
+	var vector []float32
+	var err error
+	if s.QueryEmbed != nil {
+		vector, err = s.QueryEmbed(ctx, query)
+	} else {
+		vector, err = s.Model.Embed(ctx, runtime.TruncateTokens(query, 6000))
+	}
 	if err != nil {
 		return nil, err
 	}
