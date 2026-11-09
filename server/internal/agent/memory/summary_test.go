@@ -18,11 +18,11 @@ func TestSelectHistory(t *testing.T) {
 		first           string
 	}{
 		{"empty", nil, 100, 0, false, ""},
-		{"fits", []HistoryMessage{{"u1", "user", "你好"}, {"a1", "assistant", "你好"}}, 100, 0, false, "u1"},
-		{"oldest_round", []HistoryMessage{{"u1", "user", strings.Repeat("旧", 70)}, {"a1", "assistant", "答"}, {"u2", "user", strings.Repeat("新", 60)}, {"a2", "assistant", "答"}}, 100, 1, false, "u2"},
-		{"single_message", []HistoryMessage{{"u1", "user", strings.Repeat("长", 300)}}, 100, 0, true, "u1"},
-		{"last_round", []HistoryMessage{{"u1", "user", "旧"}, {"a1", "assistant", "答"}, {"u2", "user", strings.Repeat("长", 300)}, {"a2", "assistant", "回复"}}, 100, 1, true, "u2"},
-		{"two_long_messages", []HistoryMessage{{"u1", "user", strings.Repeat("长", 300)}, {"a1", "assistant", strings.Repeat("答", 200)}}, 100, 0, true, "u1"},
+		{"fits", []HistoryMessage{{"u1", "user", "你好", ""}, {"a1", "assistant", "你好", ""}}, 100, 0, false, "u1"},
+		{"oldest_round", []HistoryMessage{{"u1", "user", strings.Repeat("旧", 70), ""}, {"a1", "assistant", "答", ""}, {"u2", "user", strings.Repeat("新", 60), ""}, {"a2", "assistant", "答", ""}}, 100, 1, false, "u2"},
+		{"single_message", []HistoryMessage{{"u1", "user", strings.Repeat("长", 300), ""}}, 100, 0, true, "u1"},
+		{"last_round", []HistoryMessage{{"u1", "user", "旧", ""}, {"a1", "assistant", "答", ""}, {"u2", "user", strings.Repeat("长", 300), ""}, {"a2", "assistant", "回复", ""}}, 100, 1, true, "u2"},
+		{"two_long_messages", []HistoryMessage{{"u1", "user", strings.Repeat("长", 300), ""}, {"a1", "assistant", strings.Repeat("答", 200), ""}}, 100, 0, true, "u1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before, err := json.Marshal(tc.messages)

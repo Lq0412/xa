@@ -30,11 +30,12 @@ type HistoryMessage struct {
 	ID      string
 	Role    string
 	Content string
+	RunID   string
 }
 
 // Window 读取原始历史，再按轮次降级；数据库中的消息始终保留原文。
 func (s *Service) Window(ctx context.Context, p auth.Principal, conversationID string, budget int) (HistoryWindow, error) {
-	rows, err := s.DB.Query(ctx, `SELECT m.id,m.role,m.content FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.id=$1 AND c.user_id=$2 AND c.workspace_id=$3 AND m.status='completed' ORDER BY m.created_at DESC,m.id DESC`, conversationID, p.UserID, p.WorkspaceID)
+	rows, err := s.DB.Query(ctx, `SELECT m.id,m.role,m.content,COALESCE(m.run_id,'') FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.id=$1 AND c.user_id=$2 AND c.workspace_id=$3 AND m.status='completed' ORDER BY m.created_at DESC,m.id DESC`, conversationID, p.UserID, p.WorkspaceID)
 	if err != nil {
 		return HistoryWindow{}, err
 	}
@@ -42,7 +43,7 @@ func (s *Service) Window(ctx context.Context, p auth.Principal, conversationID s
 	var reversed []HistoryMessage
 	for rows.Next() {
 		var m HistoryMessage
-		if err = rows.Scan(&m.ID, &m.Role, &m.Content); err != nil {
+		if err = rows.Scan(&m.ID, &m.Role, &m.Content, &m.RunID); err != nil {
 			return HistoryWindow{}, err
 		}
 		reversed = append(reversed, m)

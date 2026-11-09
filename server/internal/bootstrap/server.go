@@ -10,6 +10,7 @@ import (
 	"linq-bs/server/internal/agent/conversation"
 	agentdefinition "linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/agent/memory"
+	agentrun "linq-bs/server/internal/agent/run"
 	agenthttp "linq-bs/server/internal/agent/transport/http"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/config"
@@ -57,18 +58,24 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	})
 	agents := agentdefinition.NewService(agentdefinition.NewPGRepository(db), s.config.ChatModels)
 	model := provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL)
+	var chatProvider provider.ChatProvider = model
 	memories := &memory.Service{DB: db, Agents: agents, Model: model}
 	registry, err := NewToolRegistry(memories, db)
 	if err != nil {
 		return nil, err
 	}
 	agents.ToolValidator = registry.ValidateBindings
+	runStore := agentrun.NewPGStore(db)
+	runSvc := &agentrun.RunService{DB: db, Store: runStore, Registry: registry, Provider: chatProvider, Memory: memories, Engine: &agentrun.NativeEngine{}}
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
 	agentHandler := &agenthttp.ManagementHandler{Agents: agents, AllowedModels: s.config.ChatModels}
 	libraryHandler := &agenthttp.LibraryHandler{Library: &agentdefinition.Library{DB: db}}
 	toolsHandler := &agenthttp.ToolsHandler{Registry: registry, Agents: agents}
 	memoryHandler := &agenthttp.MemoryHandler{Memory: memories, Agents: agents}
-	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{DB: db, Agents: agents, Model: model, Memory: memories, AllowedModels: s.config.ChatModels}}
+	conversationHandler := &agenthttp.ConversationHandler{Conversations: &conversation.Service{
+		DB: db, Agents: agents, Model: model, Provider: chatProvider, Memory: memories,
+		AllowedModels: s.config.ChatModels, Runs: runSvc, Registry: registry,
+	}}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.List)))
