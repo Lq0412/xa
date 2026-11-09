@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"linq-bs/server/internal/agent/binding"
 	"linq-bs/server/internal/agent/prompt"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/config"
+	"linq-bs/server/internal/framework/redact"
 )
 
 // ServiceImpl 负责 Agent 配置校验、版本生成和归属判定。
@@ -21,6 +23,8 @@ type ServiceImpl struct {
 	repository    Repository
 	allowedModels map[string]struct{}
 	defaultModel  string
+	// ToolValidator 由启动层注入，避免 definition 反向依赖 tool。
+	ToolValidator func([]binding.ToolBinding) error
 }
 
 func NewService(repository Repository, allowed ...[]string) *ServiceImpl {
@@ -104,6 +108,11 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 }
 
 func (s *ServiceImpl) Validate(_ context.Context, actor auth.Principal, input SaveInput) error {
+	if s.ToolValidator != nil {
+		if err := s.ToolValidator(input.Configuration.Tools); err != nil {
+			return fmt.Errorf("工具配置无效: %s: %w", redact.String(err.Error()), ErrInvalid)
+		}
+	}
 	if _, err := ParseMemoryPolicy(input.Configuration.MemoryPolicy); err != nil {
 		return err
 	}

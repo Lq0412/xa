@@ -1,0 +1,50 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_xa_0",
+          "name": "current_time",
+          "arguments": "{}"
+        },
+        {
+          "id": "repeat",
+          "name": "current_time",
+          "arguments": "{} "
+        },
+        {
+          "id": "repeat_dup1",
+          "name": "",
+          "arguments": "{}"
+        },
+        {
+          "id": "call_xa_0_dup1",
+          "name": "current_time",
+          "arguments": "{}"
+        }
+      ]
+    },
+    "FinishReason": "tool_calls",
+    "RawFinishReason": "tool_calls",
+    "Usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "cached_tokens": 0,
+      "total_tokens": 0
+    },
+    "Model": "",
+    "ProviderRequestID": "",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": [
+      "tool_call_id_changed",
+      "tool_call_id_synthesized",
+      "tool_call_id_duplicated",
+      "tool_call_without_name"
+    ]
+  },
+  "Error": null,
+  "Emitted": true
+}

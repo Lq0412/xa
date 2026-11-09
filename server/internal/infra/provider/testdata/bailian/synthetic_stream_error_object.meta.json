@@ -1,0 +1,6 @@
+{
+  "source": "synthetic",
+  "model": "synthetic",
+  "request_body_without_auth": null,
+  "notes": "手写合成协议回归；不是百炼实测。场景：stream_error_object"
+}

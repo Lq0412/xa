@@ -1,0 +1,41 @@
+{
+  "model": "qwen3.7-plus",
+  "notes": "真实百炼原始响应；场景名描述请求意图，实际行为以响应正文和 golden 为准。",
+  "recorded_at": "2026-11-06T05:12:59Z",
+  "request_body_without_auth": {
+    "enable_thinking": false,
+    "max_tokens": 1024,
+    "messages": [
+      {
+        "content": "你是助手。需要外部信息时使用工具。",
+        "role": "system"
+      },
+      {
+        "content": "现在是什么时间？请调用 current_time。",
+        "role": "user"
+      }
+    ],
+    "model": "qwen3.7-plus",
+    "parallel_tool_calls": true,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "function": {
+          "description": "获取当前时间",
+          "name": "current_time",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "source": "recorded"
+}

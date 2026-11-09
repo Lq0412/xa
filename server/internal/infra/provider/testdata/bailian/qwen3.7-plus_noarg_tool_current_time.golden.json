@@ -1,0 +1,30 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_8e36636372df4738a560a950",
+          "name": "current_time",
+          "arguments": "{}"
+        }
+      ]
+    },
+    "FinishReason": "tool_calls",
+    "RawFinishReason": "tool_calls",
+    "Usage": {
+      "prompt_tokens": 276,
+      "completion_tokens": 13,
+      "cached_tokens": 0,
+      "total_tokens": 289
+    },
+    "Model": "qwen3.7-plus",
+    "ProviderRequestID": "chatcmpl-483443d6-3fb3-9c10-8088-4d19fd0f218d",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": null
+  },
+  "Error": null,
+  "Emitted": true
+}

@@ -1,0 +1,26 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "可见"
+    },
+    "FinishReason": "stop",
+    "RawFinishReason": "stop",
+    "Usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "cached_tokens": 0,
+      "total_tokens": 0
+    },
+    "Model": "",
+    "ProviderRequestID": "",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": [
+      "multi_choice",
+      "reasoning_present"
+    ]
+  },
+  "Error": null,
+  "Emitted": true
+}

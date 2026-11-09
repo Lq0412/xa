@@ -19,7 +19,7 @@ func (m *BailianModel) Embed(ctx context.Context, input string) ([]float32, erro
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+m.APIKey)
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := m.Client.Do(req)
 	if err != nil {

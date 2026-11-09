@@ -1,5 +1,7 @@
 package binding
 
+import "encoding/json"
+
 // ModelBinding 固定能力使用的模型版本，不保存密钥。
 type ModelBinding struct {
 	Capability     string `json:"capability"`
@@ -9,12 +11,14 @@ type ModelBinding struct {
 
 // ToolBinding 描述 Agent 版本绑定的工具及运行限制。
 type ToolBinding struct {
-	ToolVersionID string   `json:"tool_version_id"`
-	Enabled       bool     `json:"enabled"`
-	TimeoutMS     int64    `json:"timeout_ms"`
-	MaxCalls      int      `json:"max_calls"`
-	AllowedRoles  []string `json:"allowed_roles"`
-	Configuration []byte   `json:"configuration"`
+	Name          string          `json:"name"`
+	ToolVersionID string          `json:"tool_version_id,omitempty"`
+	Enabled       bool            `json:"enabled"`
+	Approval      string          `json:"approval,omitempty"`
+	TimeoutMS     int64           `json:"timeout_ms,omitempty"`
+	MaxCalls      int             `json:"max_calls,omitempty"`
+	AllowedRoles  []string        `json:"allowed_roles,omitempty"`
+	Configuration json.RawMessage `json:"configuration,omitempty"`
 }
 
 // KnowledgeBinding 描述 Agent 版本可访问的知识库。

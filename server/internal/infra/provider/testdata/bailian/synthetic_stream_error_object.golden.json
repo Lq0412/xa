@@ -1,0 +1,39 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_a",
+          "name": "memory_search",
+          "arguments": "{\"query\":"
+        }
+      ]
+    },
+    "FinishReason": "tool_calls",
+    "RawFinishReason": "",
+    "Usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "cached_tokens": 0,
+      "total_tokens": 0
+    },
+    "Model": "",
+    "ProviderRequestID": "",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": [
+      "finish_other_with_tool_calls"
+    ]
+  },
+  "Error": {
+    "Kind": "rate_limited",
+    "HTTPStatus": 0,
+    "Code": "Throttling",
+    "Message": "限流",
+    "RetryAfter": 0,
+    "Emitted": true
+  },
+  "Emitted": true
+}

@@ -1,0 +1,35 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "我将同时搜索您关于雅思的记忆，并查询当前时间。\n\n",
+      "tool_calls": [
+        {
+          "id": "call_761fa5f55c1942be97e7806a",
+          "name": "memory_search",
+          "arguments": "{\"query\": \"雅思\"}"
+        },
+        {
+          "id": "call_f42a39d7f1824c07aef6a48f",
+          "name": "current_time",
+          "arguments": "{}"
+        }
+      ]
+    },
+    "FinishReason": "tool_calls",
+    "RawFinishReason": "tool_calls",
+    "Usage": {
+      "prompt_tokens": 364,
+      "completion_tokens": 53,
+      "cached_tokens": 0,
+      "total_tokens": 417
+    },
+    "Model": "qwen3.7-plus",
+    "ProviderRequestID": "chatcmpl-f4d51338-bd1e-9780-ba3a-2360a05913f1",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": null
+  },
+  "Error": null,
+  "Emitted": true
+}

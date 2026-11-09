@@ -1,0 +1,6 @@
+: keepalive
+
+data: {"choices":[{"index":1,"delta":{"content":"不应下发"}},{"index":0,"delta":{"reasoning_content":"不应下发","content":"可见"},"finish_reason":"stop"}]}
+
+data: [DONE]
+

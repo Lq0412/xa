@@ -1,0 +1,30 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_a",
+          "name": "memory_search",
+          "arguments": "{\"query\":"
+        }
+      ]
+    },
+    "FinishReason": "length",
+    "RawFinishReason": "length",
+    "Usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "cached_tokens": 0,
+      "total_tokens": 0
+    },
+    "Model": "",
+    "ProviderRequestID": "",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": null
+  },
+  "Error": null,
+  "Emitted": true
+}

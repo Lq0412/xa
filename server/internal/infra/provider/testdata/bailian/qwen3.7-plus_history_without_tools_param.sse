@@ -1,0 +1,22 @@
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","created":1793941979,"object":"chat.completion.chunk","usage":null,"choices":[{"logprobs":null,"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":null}]}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":"现在是"},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":" **202"},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":"6年11"},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":"月6日**"},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":"，上午 **9"},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":":"},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":"00**。"},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","choices":[{"delta":{"content":""},"index":0,"finish_reason":"stop","logprobs":null}],"created":1793941979,"object":"chat.completion.chunk","usage":null}
+
+data: {"choices":[],"created":1793941979,"id":"chatcmpl-57063233-9664-9808-8082-de322b5a18ee","model":"qwen3.7-plus","object":"chat.completion.chunk","usage":{"completion_tokens":21,"prompt_tokens":75,"prompt_tokens_details":{"cached_tokens":0,"text_tokens":75},"total_tokens":96}}
+
+data: [DONE]
+

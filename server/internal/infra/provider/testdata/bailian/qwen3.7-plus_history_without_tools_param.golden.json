@@ -1,0 +1,23 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "现在是 **2026年11月6日**，上午 **9:00**。"
+    },
+    "FinishReason": "stop",
+    "RawFinishReason": "stop",
+    "Usage": {
+      "prompt_tokens": 75,
+      "completion_tokens": 21,
+      "cached_tokens": 0,
+      "total_tokens": 96
+    },
+    "Model": "qwen3.7-plus",
+    "ProviderRequestID": "chatcmpl-57063233-9664-9808-8082-de322b5a18ee",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": null
+  },
+  "Error": null,
+  "Emitted": true
+}

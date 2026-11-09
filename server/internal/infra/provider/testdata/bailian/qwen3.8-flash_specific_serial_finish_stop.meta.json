@@ -1,0 +1,65 @@
+{
+  "model": "qwen3.8-flash",
+  "notes": "真实百炼原始响应；场景名描述请求意图，实际行为以响应正文和 golden 为准。",
+  "recorded_at": "2026-11-06T05:13:05Z",
+  "request_body_without_auth": {
+    "enable_thinking": false,
+    "max_tokens": 1024,
+    "messages": [
+      {
+        "content": "你是助手。需要外部信息时使用工具。",
+        "role": "system"
+      },
+      {
+        "content": "请同时搜索我关于雅思的记忆，并查询现在时间。必须调用 memory_search 和 current_time。",
+        "role": "user"
+      }
+    ],
+    "model": "qwen3.8-flash",
+    "parallel_tool_calls": false,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tool_choice": {
+      "function": {
+        "name": "memory_search"
+      },
+      "type": "function"
+    },
+    "tools": [
+      {
+        "function": {
+          "description": "搜索用户记忆",
+          "name": "memory_search",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "获取当前时间",
+          "name": "current_time",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "source": "recorded"
+}

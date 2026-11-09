@@ -1,0 +1,18 @@
+data: {"model":"qwen3.7-plus","id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","created":1793941974,"object":"chat.completion.chunk","usage":null,"choices":[{"logprobs":null,"index":0,"delta":{"content":"","role":"assistant","tool_calls":[{"index":0,"id":"call_b7e2a1fdaaed43babf703295","type":"function","function":{"name":"memory_search","arguments":""}}]},"finish_reason":null}]}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","choices":[{"delta":{"content":"","tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":""}}]},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941974,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","choices":[{"delta":{"content":"","tool_calls":[{"type":"function","index":0,"function":{"arguments":"{\"query\": \"雅思"}}]},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941974,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","choices":[{"delta":{"content":"","tool_calls":[{"type":"function","index":0,"function":{"arguments":"\""}}]},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941974,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","choices":[{"delta":{"content":"","tool_calls":[{"type":"function","index":0,"function":{"arguments":"}"}}]},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941974,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","choices":[{"delta":{"content":"","tool_calls":[{"type":"function","index":0,"function":{"arguments":""}}]},"index":0,"finish_reason":null,"logprobs":null}],"created":1793941974,"object":"chat.completion.chunk","usage":null}
+
+data: {"model":"qwen3.7-plus","id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","choices":[{"delta":{"content":""},"index":0,"finish_reason":"stop","logprobs":null}],"created":1793941974,"object":"chat.completion.chunk","usage":null}
+
+data: {"choices":[],"created":1793941974,"id":"chatcmpl-84d7a59a-63eb-9dea-8394-276357b96d2e","model":"qwen3.7-plus","object":"chat.completion.chunk","usage":{"completion_tokens":32,"prompt_tokens":355,"prompt_tokens_details":{"cached_tokens":0,"text_tokens":355},"total_tokens":387}}
+
+data: [DONE]
+

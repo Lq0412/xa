@@ -1,0 +1,35 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_b028b4268efc4380bf12f89c",
+          "name": "memory_search",
+          "arguments": "{\"query\": \"雅思\"}"
+        },
+        {
+          "id": "call_755020f55faa4152933f6cc5",
+          "name": "current_time",
+          "arguments": "{}"
+        }
+      ]
+    },
+    "FinishReason": "tool_calls",
+    "RawFinishReason": "tool_calls",
+    "Usage": {
+      "prompt_tokens": 348,
+      "completion_tokens": 39,
+      "cached_tokens": 0,
+      "total_tokens": 387
+    },
+    "Model": "qwen3.7-plus",
+    "ProviderRequestID": "chatcmpl-890c764d-534c-992a-a40c-825afa6914f8",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": null
+  },
+  "Error": null,
+  "Emitted": true
+}

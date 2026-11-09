@@ -1,0 +1,35 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "好的,我将同时调用这两个工具。\n\n",
+      "tool_calls": [
+        {
+          "id": "call_92a2ec02830c49af9fc53411",
+          "name": "memory_search",
+          "arguments": "{\"query\": \"雅思\"}"
+        },
+        {
+          "id": "call_80cda6edfa354e2ebdcdca66",
+          "name": "current_time",
+          "arguments": "{}"
+        }
+      ]
+    },
+    "FinishReason": "tool_calls",
+    "RawFinishReason": "tool_calls",
+    "Usage": {
+      "prompt_tokens": 348,
+      "completion_tokens": 48,
+      "cached_tokens": 0,
+      "total_tokens": 396
+    },
+    "Model": "qwen3.8-flash",
+    "ProviderRequestID": "chatcmpl-9d113d40-fd2d-9164-8f39-e206f9196f1a",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": null
+  },
+  "Error": null,
+  "Emitted": true
+}

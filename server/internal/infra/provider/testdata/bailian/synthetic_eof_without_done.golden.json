@@ -1,0 +1,25 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "完成"
+    },
+    "FinishReason": "stop",
+    "RawFinishReason": "stop",
+    "Usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 2,
+      "cached_tokens": 8,
+      "total_tokens": 12
+    },
+    "Model": "",
+    "ProviderRequestID": "",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": [
+      "missing_done"
+    ]
+  },
+  "Error": null,
+  "Emitted": true
+}

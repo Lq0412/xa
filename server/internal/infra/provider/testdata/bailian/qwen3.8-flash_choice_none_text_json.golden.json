@@ -1,0 +1,25 @@
+{
+  "Response": {
+    "Message": {
+      "role": "assistant",
+      "content": "```json\n{\n  \"name\": \"memory_search\",\n  \"arguments\": {\n    \"query\": \"雅思\"\n  }\n}\n```"
+    },
+    "FinishReason": "stop",
+    "RawFinishReason": "stop",
+    "Usage": {
+      "prompt_tokens": 50,
+      "completion_tokens": 34,
+      "cached_tokens": 0,
+      "total_tokens": 84
+    },
+    "Model": "qwen3.8-flash",
+    "ProviderRequestID": "chatcmpl-de6d6897-00fd-9401-8862-484a5053b9e6",
+    "TTFT": 0,
+    "Duration": 0,
+    "Anomalies": [
+      "text_looks_like_tool_call"
+    ]
+  },
+  "Error": null,
+  "Emitted": true
+}
