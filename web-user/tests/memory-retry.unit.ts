@@ -71,7 +71,7 @@ describe('retryDeadBatch', () => {
     assert.equal(outcome.ignored, false);
     if (outcome.ignored) return;
     assert.deepEqual(calls, ['job_1']);
-    assert.equal(outcome.note, '已重新排队');
+    assert.equal(outcome.note, '已重新排队 1 个');
     assert.equal(outcome.stats?.dead, 0);
     assert.equal(outcome.alert, false);
   });
@@ -89,7 +89,7 @@ describe('retryDeadBatch', () => {
     assert.equal(outcome.ignored, false);
     if (outcome.ignored) return;
     assert.deepEqual(calls, ['job_1', 'job_2', 'job_3']);
-    assert.equal(outcome.note, '已重新排队');
+    assert.equal(outcome.note, '已重新排队 3 个');
   });
 
   it('重复 id 只请求一次', async () => {
@@ -285,6 +285,105 @@ describe('retryDeadBatch', () => {
     );
   });
 
+  it('全部是 404 且刷新后没有剩余时，不说已经重新排队', async () => {
+    const outcome = await runDeadRetry({
+      stats: snapshot(1, ['job_1']),
+      retry: async () => {
+        throw failed(404);
+      },
+      refreshStats: async () => snapshot(0, []),
+      refreshList: async () => ({ items: 0 }),
+    });
+    assert.equal(outcome.ignored, false);
+    if (outcome.ignored) return;
+    assert.equal(outcome.note, '没有剩余的失败任务');
+    assert.equal(outcome.note.includes('已重新排队'), false);
+    assert.equal(outcome.note.includes('状态已变化'), false);
+  });
+
+  it('dead 大于 0 但没有 id 时，先刷新再重试拿到的 id', async () => {
+    const calls: string[] = [];
+    let statsReads = 0;
+    const outcome = await runDeadRetry({
+      stats: snapshot(4, []),
+      retry: async (id) => {
+        calls.push(id);
+      },
+      refreshStats: async () => {
+        statsReads += 1;
+        return statsReads === 1 ? snapshot(4, ['job_9']) : snapshot(0, []);
+      },
+      refreshList: async () => ({ items: 0 }),
+    });
+    assert.equal(outcome.ignored, false);
+    if (outcome.ignored) return;
+    assert.deepEqual(calls, ['job_9']);
+    assert.equal(statsReads, 2);
+    assert.equal(outcome.note, '已重新排队 1 个');
+  });
+
+  it('刷新后仍然没有 id 时不请求重试', async () => {
+    let calls = 0;
+    let statsReads = 0;
+    const outcome = await runDeadRetry({
+      stats: snapshot(3, []),
+      retry: async () => {
+        calls += 1;
+      },
+      refreshStats: async () => {
+        statsReads += 1;
+        return snapshot(3, []);
+      },
+      refreshList: async () => {
+        throw new Error('列表不应在没有 id 时刷新');
+      },
+    });
+    assert.equal(outcome.ignored, false);
+    if (outcome.ignored) return;
+    assert.equal(calls, 0);
+    assert.equal(statsReads, 1);
+    assert.equal(outcome.note, '还有 3 个失败任务，这次没有返回可重试的任务');
+    assert.equal(outcome.stats?.dead, 3);
+    assert.equal(outcome.alert, true);
+  });
+
+  it('没有 id 且统计刷新失败时不重试', async () => {
+    let calls = 0;
+    const outcome = await runDeadRetry({
+      stats: snapshot(2, []),
+      retry: async () => {
+        calls += 1;
+      },
+      refreshStats: async () => {
+        throw new Error('无法连接服务，请检查网络后重试');
+      },
+      refreshList: async () => ({ items: 0 }),
+    });
+    assert.equal(outcome.ignored, false);
+    if (outcome.ignored) return;
+    assert.equal(calls, 0);
+    assert.equal(outcome.stats, null);
+    assert.equal(outcome.needsReload, true);
+    assert.equal(outcome.note, '统计刷新失败，不能确认可重试的任务');
+  });
+
+  it('没有 id 时刷新后 dead 为 0，不发重试', async () => {
+    let calls = 0;
+    const outcome = await runDeadRetry({
+      stats: snapshot(1, []),
+      retry: async () => {
+        calls += 1;
+      },
+      refreshStats: async () => snapshot(0, []),
+      refreshList: async () => ({ items: 0 }),
+    });
+    assert.equal(outcome.ignored, false);
+    if (outcome.ignored) return;
+    assert.equal(calls, 0);
+    assert.equal(outcome.note, '没有剩余的失败任务');
+    assert.equal(outcome.alert, false);
+  });
+
   it('没有失败任务时不发请求', async () => {
     let calls = 0;
     const outcome = await runDeadRetry({
@@ -335,7 +434,12 @@ describe('文案', () => {
       failed: [],
       handledIDs: ['job_1'],
     };
-    assert.equal(confirmedRetryNote(feedback, 0), '已重新排队');
+    assert.equal(confirmedRetryNote(feedback, 0), '已重新排队 1 个');
+    const five = {
+      ...feedback,
+      requeued: ['job_1', 'job_2', 'job_3', 'job_4', 'job_5'],
+    };
+    assert.equal(confirmedRetryNote(five, 0), '已重新排队 5 个');
     assert.equal(
       unconfirmedRetryNote(feedback),
       '已重新排队 1 个。统计刷新失败，不能确认剩余失败任务',
