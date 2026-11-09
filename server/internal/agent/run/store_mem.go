@@ -21,6 +21,8 @@ type MemStore struct {
 	contexts map[string]RunContextSnapshot
 	msgRunID map[string]string
 	ordinals map[string]int
+	events   map[string][]StoredEvent
+	lastSeq  map[string]int64
 }
 
 // NewMemStore 创建空内存存储。
@@ -29,6 +31,7 @@ func NewMemStore() *MemStore {
 		runs: map[string]Run{}, messages: map[string][]RunMessage{},
 		tools: map[string]ToolResultRow{}, contexts: map[string]RunContextSnapshot{},
 		msgRunID: map[string]string{}, ordinals: map[string]int{},
+		events: map[string][]StoredEvent{}, lastSeq: map[string]int64{},
 	}
 }
 
@@ -59,6 +62,10 @@ func (t *memTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 func (t *memTx) Conn() *pgx.Conn                                               { return nil }
 
 var _ pgx.Tx = (*memTx)(nil)
+
+func (m *MemStore) InsertRunExtended(ctx context.Context, tx pgx.Tx, run Run, idempotencyKey, requestHash, leaseOwner string) error {
+	return m.InsertRun(ctx, tx, run)
+}
 
 func (m *MemStore) InsertRun(ctx context.Context, tx pgx.Tx, run Run) error {
 	m.mu.Lock()
@@ -194,6 +201,39 @@ func (m *MemStore) GetMessageRunIDs(ctx context.Context, messageIDs []string) (m
 
 func (m *MemStore) PendingCallsOfLastStep(ctx context.Context, runID string) ([]PlannedCall, error) {
 	return nil, nil
+}
+
+func (m *MemStore) AppendRunEvent(ctx context.Context, runID string, seq int64, typ string, payload []byte, terminal bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.events[runID] {
+		if e.Seq == seq {
+			return nil
+		}
+	}
+	m.events[runID] = append(m.events[runID], StoredEvent{Seq: seq, Type: typ, Payload: payload})
+	return nil
+}
+
+func (m *MemStore) UpdateLastEventSeq(ctx context.Context, runID string, seq int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastSeq[runID] = seq
+	return nil
+}
+
+func (m *MemStore) ListRunEventsAfter(ctx context.Context, runID string, afterSeq int64) ([]StoredEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	all := m.events[runID]
+	out := make([]StoredEvent, 0)
+	for _, e := range all {
+		if e.Seq > afterSeq {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, nil
 }
 
 // LinkMessageRun 测试辅助：关联 assistant 消息与 run。

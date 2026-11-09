@@ -4,11 +4,12 @@ import { type Agent, getAgent } from '@/services/api';
 import {
   type ChatMessage,
   type Conversation,
+  cancelRun,
   chatURL,
   createConversation,
   listConversations,
   listMessages,
-  streamMessage,
+  streamRun,
 } from '@/services/chat';
 import { errorMessage } from '@/services/http';
 import type { MemoryCue } from './MemoryPanel';
@@ -63,6 +64,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     seq: 0,
   });
   const controllers = useRef(new Map<string, AbortController>());
+  const activeRun = useRef<{ runId: string } | null>(null);
   const mounted = useRef(true);
 
   const update = useCallback(
@@ -293,20 +295,22 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
           ...items.filter((conversation) => conversation.id !== id),
         ];
       });
-      const savedID = await streamMessage(
-        id,
-        text,
-        controller.signal,
-        (delta) => {
+      activeRun.current = null;
+      const result = await streamRun(id, text, controller.signal, {
+        onRunID: (runId) => {
+          activeRun.current = { runId };
+        },
+        onParts: (parts, content) => {
           update(targetKey, (state) => ({
             messages: state.messages.map((message) =>
               message.id === assistantID
-                ? { ...message, content: message.content + delta }
+                ? { ...message, content, parts }
                 : message,
             ),
           }));
         },
-      );
+      });
+      const savedID = result.messageId ?? assistantID;
       completed = true;
       // 抽取在回复落库后异步进行，详情栏稍后自己刷新一次。
       setMemoryCue((cue) => ({ agentId: turnAgentID, seq: cue.seq + 1 }));
@@ -317,9 +321,9 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
             : message,
         ),
       }));
-      const result = await listMessages(id, controller.signal);
+      const historyPage = await listMessages(id, controller.signal);
       update(targetKey, (state) => {
-        const latest = result.messages ?? [];
+        const latest = historyPage.messages ?? [];
         const ids = new Set(latest.map((item) => item.id));
         const older = state.messages.filter(
           (item) =>
@@ -329,8 +333,8 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         );
         return {
           messages: [...older, ...latest],
-          hasMore: older.length ? state.hasMore : result.has_more,
-          before: older.length ? state.before : result.before,
+          hasMore: older.length ? state.hasMore : historyPage.has_more,
+          before: older.length ? state.before : historyPage.before,
         };
       });
     } catch (cause) {
@@ -409,7 +413,11 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       }
     },
     send,
-    stop: () => controllers.current.get(`send:${key}`)?.abort(),
+    stop: () => {
+      const runId = activeRun.current?.runId;
+      if (runId) void cancelRun(runId);
+      controllers.current.get(`send:${key}`)?.abort();
+    },
     setDraft: (draft: string) => update(key, { draft }),
     retry: () => void load(),
     retryList: () => setRevision((value) => value + 1),

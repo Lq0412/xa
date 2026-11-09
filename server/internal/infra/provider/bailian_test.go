@@ -243,7 +243,7 @@ func TestBailianSyntheticStreamEdges(t *testing.T) {
 		}
 	}
 	for _, body := range []string{"data: invalid\n\n", "data: " + strings.Repeat("x", 4<<20) + "\n\n", ""} {
-		_, err := m.assemble(context.Background(), strings.NewReader(body), nil, time.Now())
+		_, err := m.assemble(context.Background(), strings.NewReader(body), nil, time.Now(), false)
 		var problem *ProviderError
 		if !errors.As(err, &problem) || problem.Kind != ProviderErrorStreamBroken || problem.Emitted {
 			t.Fatal("非法流应失败且未输出")
@@ -251,7 +251,7 @@ func TestBailianSyntheticStreamEdges(t *testing.T) {
 	}
 	// 合成乱序 index、缺省 index、null id 和交错参数，验证只按 index 聚合而非 ID。
 	body := `data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"second","arguments":"{"}},{"id":"a","function":{"name":"first","arguments":"{"}}]}}]}` + "\n\n" + `data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":null,"function":{"arguments":"}"}},{"function":{"arguments":"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\ndata: [DONE]\n\n"
-	r, err := m.assemble(context.Background(), strings.NewReader(body), nil, time.Now())
+	r, err := m.assemble(context.Background(), strings.NewReader(body), nil, time.Now(), false)
 	if err != nil || !reflect.DeepEqual(r.Message.ToolCalls, []ToolCall{{ID: "b", Name: "second", Arguments: "{}"}, {ID: "a", Name: "first", Arguments: "{}"}}) {
 		t.Fatal("交错工具聚合错误")
 	}

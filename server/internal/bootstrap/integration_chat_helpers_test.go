@@ -34,7 +34,7 @@ func newChatService(t *testing.T, db *pgxpool.Pool, agents definition.Service, m
 	}
 	runSvc := &run.RunService{
 		DB: db, Store: run.NewPGStore(db), Registry: reg, Provider: model,
-		Memory: mem, Engine: &run.NativeEngine{},
+		Memory: mem, Engine: &run.NativeEngine{}, Coord: run.NewCoordinator(), InstanceID: "integration",
 	}
 	return &conversation.Service{
 		DB: db, Agents: agents, Model: model, Provider: model, Memory: mem,

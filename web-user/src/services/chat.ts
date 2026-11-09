@@ -1,5 +1,7 @@
 import { ParseError } from 'eventsource-parser';
 import { EventSourceParserStream } from 'eventsource-parser/stream';
+import type { MessagePart } from './chat-parts';
+import { applyRunEvent, type RunStreamEvent } from './chat-run';
 import { ApiError, fetchApi, request } from './http';
 
 /** 服务端保存的会话摘要，ID 同时用于路由和请求归属。 */
@@ -18,6 +20,8 @@ export type ChatMessage = {
   content: string;
   status: 'pending' | 'completed' | 'failed' | 'stopped';
   error?: string;
+  run_id?: string;
+  parts?: MessagePart[];
   created_at?: string;
 };
 
@@ -142,6 +146,122 @@ export async function streamMessage(
     throw cause;
   } finally {
     cleanup.abort();
+    reader.releaseLock();
+  }
+}
+
+export type StreamRunHandlers = {
+  onParts: (parts: MessagePart[], content: string) => void;
+  onRunID?: (runId: string) => void;
+};
+
+/** SSE v2：X-XA-Stream: 2，支持取消与续传由调用方处理 run_id。 */
+export async function streamRun(
+  conversationId: string,
+  content: string,
+  signal: AbortSignal,
+  handlers: StreamRunHandlers,
+): Promise<{ messageId?: string; runId?: string }> {
+  const response = await fetchApi(
+    `/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: 'POST',
+      headers: { 'X-XA-Stream': '2' },
+      body: JSON.stringify({ content }),
+      signal,
+    },
+  );
+  if (
+    !response.body ||
+    !response.headers.get('content-type')?.includes('text/event-stream')
+  )
+    throw new ApiError(502, '服务未返回有效的消息流');
+  let parts: MessagePart[] = [];
+  let contentText = '';
+  let runId = '';
+  let messageId = '';
+  const reader = response.body
+    .pipeThrough(new TextDecoderStream())
+    .pipeThrough(new EventSourceParserStream({ onError: 'terminate' }))
+    .getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const ev = JSON.parse(value.data) as RunStreamEvent;
+      if (typeof ev.run_id === 'string') {
+        runId = ev.run_id;
+        handlers.onRunID?.(runId);
+      }
+      if (ev.type === 'message.delta') {
+        const d = String(ev.delta ?? '');
+        contentText += d;
+      }
+      parts = applyRunEvent(parts, { ...ev, type: value.event || ev.type });
+      handlers.onParts(parts, contentText);
+      if (
+        value.event === 'run.completed' ||
+        value.event === 'run.failed' ||
+        value.event === 'run.cancelled'
+      ) {
+        messageId = String(ev.message_id ?? '');
+        if (value.event !== 'run.completed')
+          throw new ApiError(502, String(ev.message ?? '生成失败'));
+        break;
+      }
+    }
+    return { messageId, runId };
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function cancelRun(runId: string, signal?: AbortSignal) {
+  await fetchApi(`/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+export async function resumeRun(
+  runId: string,
+  afterSeq: number,
+  signal: AbortSignal,
+  handlers: StreamRunHandlers,
+) {
+  const response = await fetchApi(
+    `/runs/${encodeURIComponent(runId)}/events?after=${afterSeq}`,
+    {
+      signal,
+      headers: afterSeq > 0 ? { 'Last-Event-ID': String(afterSeq) } : {},
+    },
+  );
+  if (!response.body) throw new ApiError(502, '续传失败');
+  let parts: MessagePart[] = [];
+  let contentText = '';
+  const reader = response.body
+    .pipeThrough(new TextDecoderStream())
+    .pipeThrough(new EventSourceParserStream({ onError: 'terminate' }))
+    .getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const ev = JSON.parse(value.data) as RunStreamEvent;
+      if (ev.type === 'message.delta') contentText += String(ev.delta ?? '');
+      parts = applyRunEvent(parts, { ...ev, type: value.event || ev.type });
+      handlers.onParts(parts, contentText);
+      if (
+        value.event === 'run.completed' ||
+        value.event === 'run.failed' ||
+        value.event === 'run.cancelled'
+      ) {
+        if (value.event !== 'run.completed')
+          throw new ApiError(502, String(ev.message ?? '生成失败'));
+        break;
+      }
+    }
+  } finally {
     reader.releaseLock();
   }
 }

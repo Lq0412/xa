@@ -25,14 +25,19 @@ func (s *PGStore) BeginTx(ctx context.Context) (pgx.Tx, error) {
 }
 
 func (s *PGStore) InsertRun(ctx context.Context, tx pgx.Tx, run Run) error {
+	return s.InsertRunExtended(ctx, tx, run, "", "", "")
+}
+
+// InsertRunExtended 写入 runs，可携带幂等键与租约 owner。
+func (s *PGStore) InsertRunExtended(ctx context.Context, tx pgx.Tx, run Run, idempotencyKey, requestHash, leaseOwner string) error {
 	limits, _ := json.Marshal(run.Limits)
 	toolset, _ := json.Marshal(run.Toolset)
 	_, err := tx.Exec(ctx, `
-INSERT INTO runs(id,workspace_id,owner_user_id,conversation_id,agent_id,agent_version_id,root_run_id,status,user_message_id,provider,model,stream_protocol,limits,toolset,toolset_hash,started_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+INSERT INTO runs(id,workspace_id,owner_user_id,conversation_id,agent_id,agent_version_id,root_run_id,status,user_message_id,provider,model,stream_protocol,limits,toolset,toolset_hash,started_at,idempotency_key,request_hash,lease_owner,lease_expires_at,heartbeat_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now()+interval '30 seconds',now())`,
 		run.ID, run.WorkspaceID, run.OwnerUserID, run.ConversationID, run.AgentID, run.AgentVersionID,
 		run.RootRunID, run.Status, run.UserMessageID, run.Provider, run.Model, run.StreamProtocol,
-		limits, toolset, run.Toolset.Hash, run.StartedAt)
+		limits, toolset, run.Toolset.Hash, run.StartedAt, nullable(idempotencyKey), nullable(requestHash), nullable(leaseOwner))
 	return err
 }
 

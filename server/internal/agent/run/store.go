@@ -11,6 +11,7 @@ type Store interface {
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 
 	InsertRun(ctx context.Context, tx pgx.Tx, run Run) error
+	InsertRunExtended(ctx context.Context, tx pgx.Tx, run Run, idempotencyKey, requestHash, leaseOwner string) error
 	UpdateRun(ctx context.Context, tx pgx.Tx, run Run) error
 	GetRun(ctx context.Context, id string) (Run, error)
 
@@ -32,4 +33,8 @@ type Store interface {
 
 	// PendingCallsOfLastStep P4 审批恢复用；P3 恒为空。
 	PendingCallsOfLastStep(ctx context.Context, runID string) ([]PlannedCall, error)
+
+	AppendRunEvent(ctx context.Context, runID string, seq int64, typ string, payload []byte, terminal bool) error
+	UpdateLastEventSeq(ctx context.Context, runID string, seq int64) error
+	ListRunEventsAfter(ctx context.Context, runID string, afterSeq int64) ([]StoredEvent, error)
 }

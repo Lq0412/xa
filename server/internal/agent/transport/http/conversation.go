@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"linq-bs/server/internal/agent/conversation"
 	"linq-bs/server/internal/agent/definition"
+	"linq-bs/server/internal/agent/run"
 	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/auth"
 	frameworkhttp "linq-bs/server/internal/framework/http"
@@ -98,6 +99,28 @@ func (h *ConversationHandler) Send(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		frameworkhttp.WriteError(w, r, 500, "stream_unsupported", fmt.Errorf("不支持流式响应"))
+		return
+	}
+	protocol := 1
+	if r.Header.Get("X-XA-Stream") == "2" || r.URL.Query().Get("stream") == "2" {
+		protocol = 2
+	}
+	if protocol >= 2 {
+		err := h.Conversations.SendStream(r.Context(), p, r.PathValue("conversation_id"), in.Content, conversation.StreamSendOptions{
+			Protocol: 2,
+			WriteV2: func(ev run.StoredEvent) error {
+				return run.WriteSSEEnvelope(w, flusher, ev)
+			},
+		})
+		if err != nil && !errors.Is(err, run.ErrSubscribeDone) {
+			if errors.Is(err, runtime.ErrMessageTooLong) {
+				conversationError(w, r, err)
+				return
+			}
+			b, _ := json.Marshal(map[string]string{"message": conversation.PublicError(err)})
+			fmt.Fprintf(w, "event: error\ndata: %s\n\n", b)
+			flusher.Flush()
+		}
 		return
 	}
 	emit := func(d string) error {

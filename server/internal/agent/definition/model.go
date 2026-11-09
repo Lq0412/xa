@@ -58,6 +58,8 @@ type Configuration struct {
 	Evaluations   []binding.EvaluationBinding `json:"evaluations"`
 	MemoryPolicy  json.RawMessage             `json:"memory_policy"`
 	RuntimeLimits json.RawMessage             `json:"runtime_limits"`
+	// EnableThinking 为 nil 时对话默认开启深度思考。
+	EnableThinking *bool `json:"enable_thinking,omitempty"`
 }
 
 // AgentVersion 表示一次不可变的可运行配置快照。

@@ -37,7 +37,7 @@ func testRC(t *testing.T, store Store, reg *tool.Registry, prov provider.ChatPro
 		Run: run, Toolset: ts, Messages: []provider.Message{{Role: "user", Content: "hi"}},
 		Budget: NewBudget(limits), Store: store, Provider: prov, Registry: reg,
 		Env:    tool.Env{Principal: auth.Principal{UserID: "u1"}, ConversationID: "conv_test", RunID: run.ID},
-		Limits: limits, Emitter: NewV1Emitter(func(string) error { return nil }),
+		Limits: limits, Emitter: &V1Sink{E: NewV1Emitter(func(string) error { return nil })},
 		CallHashes: map[string]int{}, PerToolCalls: map[string]int{}, WallStarted: time.Now(),
 	}
 }

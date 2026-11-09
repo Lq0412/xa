@@ -332,6 +332,7 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		Agent: a, Version: version, UserContent: content, UserMessageID: userID,
 		InitialMessages: contextResult.Messages, Segments: segments, Toolset: toolset, Limits: limits,
 		MemoryPolicy: policy, MemoryEnabled: policy.Enabled, AllowedModels: s.AllowedModels,
+		EnableThinking: definition.ChatEnableThinking(version.Configuration),
 	}, emit)
 	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelSave()

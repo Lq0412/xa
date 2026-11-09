@@ -187,6 +187,8 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 	}); err != nil {
 		return err
 	}
+	emitToolStarted(ctx, rc, pc.Call.ID, pc.Call.Name, entry.Spec.Title)
+	started := time.Now()
 
 	toolCtx, cancel := context.WithTimeout(ctx, minDuration(entry.Timeout, rc.RemainingWall()))
 	defer cancel()
@@ -242,8 +244,11 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 		}
 	}
 	if execErr != nil {
-		return persistToolFailure(ctx, rc, &row, execErr)
+		err := persistToolFailure(ctx, rc, &row, execErr)
+		emitToolCompleted(ctx, rc, row, entry, time.Since(started).Milliseconds())
+		return err
 	}
+	emitToolCompleted(ctx, rc, row, entry, time.Since(started).Milliseconds())
 	return appendToolMessage(ctx, rc, pc, row.ModelContent)
 }
 

@@ -6,6 +6,9 @@ import { Markdown } from '@/components/Markdown';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Agent } from '@/services/api';
 import type { ChatMessage } from '@/services/chat';
+import type { MessagePart } from '@/services/chat-parts';
+import { ReasoningFold } from './ReasoningFold';
+import { ToolCallChip } from './ToolCallChip';
 
 type Props = {
   agent?: Agent;
@@ -22,6 +25,13 @@ type Props = {
 };
 
 const suggestions = ['介绍一下你自己', '你能帮我做什么', '我们从哪里开始'];
+
+function partKey(part: MessagePart) {
+  if (part.type === 'reasoning') return `reasoning-${part.item_id}`;
+  if (part.type === 'tool')
+    return `tool-${part.call_id ?? part.name}-${part.index ?? 0}`;
+  return `text-${part.text.length}-${part.text.slice(0, 12)}`;
+}
 
 function pad(value: number) {
   return String(value).padStart(2, '0');
@@ -239,14 +249,35 @@ export function MessageList({
                         <div
                           className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-7 ${mine ? 'bg-[#fff4cc] text-zinc-900' : 'bg-zinc-100 text-zinc-900'}`}
                         >
-                          {message.content &&
-                            (mine ? (
+                          {!mine && message.parts?.length ? (
+                            <div className="space-y-1">
+                              {message.parts.map((part) => {
+                                const key = partKey(part);
+                                if (part.type === 'reasoning')
+                                  return (
+                                    <ReasoningFold
+                                      key={key}
+                                      itemId={part.item_id}
+                                      text={part.text}
+                                      status={part.status}
+                                    />
+                                  );
+                                if (part.type === 'tool')
+                                  return <ToolCallChip key={key} part={part} />;
+                                return (
+                                  <Markdown key={key}>{part.text}</Markdown>
+                                );
+                              })}
+                            </div>
+                          ) : message.content ? (
+                            mine ? (
                               <div className="whitespace-pre-wrap">
                                 {message.content}
                               </div>
                             ) : (
                               <Markdown>{message.content}</Markdown>
-                            ))}
+                            )
+                          ) : null}
                           {message.status === 'pending' && (
                             <>
                               {!message.content && (
