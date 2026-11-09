@@ -1,53 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
 import { Icon } from '@/components/Icon';
 import type { ToolPart } from '@/services/chat-parts';
 
-const MIN_RUNNING_MS = 450;
-
-function isRunning(status: ToolPart['status']) {
-  return status === 'preparing' || status === 'pending' || status === 'running';
-}
-
 export function ToolCallChip({ part }: { part: ToolPart }) {
-  const [shown, setShown] = useState<ToolPart['status']>(() =>
-    part.status === 'succeeded' ? 'running' : part.status,
-  );
-  const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (hold.current) {
-      clearTimeout(hold.current);
-      hold.current = null;
-    }
-    if (isRunning(part.status)) {
-      setShown(part.status);
-      return undefined;
-    }
-    if (part.status === 'succeeded') {
-      if (isRunning(shown)) {
-        hold.current = setTimeout(() => setShown('succeeded'), MIN_RUNNING_MS);
-        return () => {
-          if (hold.current) clearTimeout(hold.current);
-        };
-      }
-      if (shown !== 'succeeded') {
-        setShown('running');
-        hold.current = setTimeout(() => setShown('succeeded'), MIN_RUNNING_MS);
-        return () => {
-          if (hold.current) clearTimeout(hold.current);
-        };
-      }
-      return undefined;
-    }
-    setShown(part.status);
-    return undefined;
-  }, [part.status, shown]);
-
-  const running = isRunning(shown);
-  const ok = shown === 'succeeded';
-  const failed = shown === 'failed' || shown === 'unknown';
+  const running =
+    part.status === 'preparing' ||
+    part.status === 'pending' ||
+    part.status === 'running';
+  const ok = part.status === 'succeeded';
+  const failed = part.status === 'failed' || part.status === 'unknown';
   const chipStatus = running ? 'running' : ok ? 'done' : 'failed';
-
   return (
     <div
       className="my-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm"

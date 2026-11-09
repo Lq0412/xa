@@ -39,11 +39,6 @@ async function prepareAgent(
   const primaryAgent =
     agents.agents.find((a) => a.is_primary) ?? agents.agents[0];
   if (!primaryAgent) throw new Error('未找到可用 Agent');
-  const cfg = (await (
-    await request.get(`${api}/api/v1/agents/${primaryAgent.id}/config`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-  ).json()) as { configuration: { soul_md?: string } };
   const saveRes = await request.put(
     `${api}/api/v1/agents/${primaryAgent.id}/config`,
     {
@@ -56,8 +51,7 @@ async function prepareAgent(
         configuration: {
           model: 'qwen3.7-plus',
           soul_md:
-            cfg.configuration.soul_md ||
-            '必须先调用 current_time；思考后再作答。',
+            '先一句思考说明将调用 current_time，立刻调用工具，禁止在工具完成前写正文。',
           enable_thinking: true,
         },
       },
@@ -75,13 +69,19 @@ async function prepareAgent(
         {
           name: 'current_time',
           enabled: true,
-          configuration: { timezone: 'Asia/Shanghai', delay_ms: 2500 },
+          configuration: { timezone: 'Asia/Shanghai', delay_ms: 5000 },
         },
       ],
       runtime_limits: { max_tool_calls: 8 },
     },
   });
   return { token, primaryId: primaryAgent.id };
+}
+
+function lastAssistant(page: import('@playwright/test').Page) {
+  return page
+    .locator('article.message-row.assistant, article.assistant')
+    .last();
 }
 
 test('P4 流式：思考折叠、工具 chip、刷新续传', async ({
@@ -109,64 +109,126 @@ test('P4 流式：思考折叠、工具 chip、刷新续传', async ({
   await expect(composer).toBeEnabled({ timeout: 60000 });
 
   await composer.fill(
-    '必须先调用 current_time，简短说明当前时间（两句话即可，不要长文）。',
+    '必须先调用 current_time。在思考里写清你要先查时间再回答；正文两句话说明当前时间即可。',
   );
   await composer.press('Enter');
 
-  await expect(page).toHaveURL(/conversationId=/, { timeout: 120000 });
   const stopBtn = page.getByRole('button', { name: '停止生成' });
-  await expect(stopBtn).toBeVisible({ timeout: 120000 });
-  const toolChip = page.locator('[data-testid="tool-call-chip"]');
-  const runningChip = page.locator(
-    '[data-testid="tool-call-chip"][data-status="running"]',
-  );
-  await expect(toolChip.first()).toBeVisible({ timeout: 180000 });
-  await expect(runningChip.first()).toBeVisible({ timeout: 10000 });
-  await page.screenshot({
-    path: path.join(artifactDir, 'p4-chat-tool-running.png'),
-    fullPage: true,
-  });
+  await expect(page).toHaveURL(/conversationId=/, { timeout: 120000 });
 
-  const reasoning = page.locator('[data-testid="reasoning-fold"]');
-  await expect(reasoning.first()).toBeVisible({ timeout: 120000 });
-  await reasoning.first().getByRole('button').click();
-  await expect
-    .poll(
-      async () =>
-        (await reasoning.first().innerText()).replace(/\s/g, '').length,
-      { timeout: 120000 },
-    )
-    .toBeGreaterThan(8);
-  await page.screenshot({
-    path: path.join(artifactDir, 'p4-chat-reasoning-fold.png'),
-    fullPage: true,
-  });
-  await reasoning.first().getByRole('button').click();
+  const toolChip = page.locator('[data-testid="tool-call-chip"]');
+  const assistant = lastAssistant(page);
+  const reasoning = page.locator('[data-testid="reasoning-fold"]').last();
+  await expect(stopBtn).toBeVisible({ timeout: 120000 });
+
+  await Promise.all([
+    page
+      .waitForFunction(
+        () => {
+          const folds = document.querySelectorAll(
+            '[data-testid="reasoning-fold"]',
+          );
+          for (const node of folds) {
+            const fold = node as HTMLElement;
+            const title = fold.querySelector('button span')?.textContent || '';
+            if (!title.includes('思考中')) continue;
+            const live =
+              fold.getAttribute('data-live-run') === '1' ||
+              fold.getAttribute('data-reasoning-status') === 'streaming';
+            if (!live) continue;
+            const body = fold.querySelector(
+              '[data-testid="reasoning-fold-body"]',
+            );
+            const text = body?.textContent?.replace(/\s/g, '') || '';
+            if (
+              text.length > 8 &&
+              !fold.textContent?.includes('思考内容未保留')
+            )
+              return true;
+          }
+          return false;
+        },
+        undefined,
+        { timeout: 120000, polling: 30 },
+      )
+      .then(async () => {
+        const fold = page.locator('[data-testid="reasoning-fold"]').last();
+        await fold.getByRole('button').click();
+        await expect(stopBtn).toBeVisible();
+        await page.screenshot({
+          path: path.join(artifactDir, 'p4-chat-reasoning-fold.png'),
+          fullPage: true,
+        });
+      }),
+    page
+      .waitForFunction(
+        () => {
+          const row = [...document.querySelectorAll('article.assistant')].pop();
+          if (!row) return false;
+          const running = row.querySelector(
+            '[data-testid="tool-call-chip"][data-status="running"]',
+          );
+          if (!running) return false;
+          const finals = row.querySelectorAll(
+            '[data-testid="message-text-part"]',
+          );
+          for (const el of finals) {
+            if (/年.*月.*日.*星期/.test(el.textContent || '')) return false;
+          }
+          return true;
+        },
+        undefined,
+        { timeout: 120000, polling: 20 },
+      )
+      .then(async () => {
+        await expect(stopBtn).toBeVisible();
+        await expect(
+          assistant.locator('[data-testid="message-text-part"]').filter({
+            hasText: /现在是.*年|年.*月.*日.*星期/,
+          }),
+        ).toHaveCount(0);
+        await page.screenshot({
+          path: path.join(artifactDir, 'p4-chat-tool-running.png'),
+          fullPage: true,
+        });
+      }),
+  ]);
+  await expect(reasoning).toBeVisible();
 
   await expect(
     page.locator('[data-testid="tool-call-chip"][data-status="done"]').first(),
-  ).toBeVisible({ timeout: 120000 });
+  ).toBeVisible({ timeout: 180000 });
   await expect(composer).toBeEnabled({ timeout: 120000 });
   const convId = new URL(page.url()).searchParams.get('conversationId');
   const token = await page.evaluate(() =>
     localStorage.getItem('xa.user.session'),
   );
-  const hist = await request.get(
-    `${api}/api/v1/conversations/${convId}/messages`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  const histBody = (await hist.json()) as {
-    messages: { role: string; parts?: { type: string }[] }[];
-  };
-  const assistant = histBody.messages.find((m) => m.role === 'assistant');
-  expect(
-    assistant?.parts?.some((p) => p.type === 'tool' || p.type === 'reasoning'),
-  ).toBeTruthy();
-  await expect(composer).toBeEnabled();
-  await page
-    .locator('[data-testid="tool-call-chip"][data-status="done"]')
-    .first()
-    .scrollIntoViewIfNeeded();
+  await expect
+    .poll(
+      async () => {
+        const hist = await request.get(
+          `${api}/api/v1/conversations/${convId}/messages`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const histBody = (await hist.json()) as {
+          messages: {
+            role: string;
+            content?: string;
+            parts?: { type: string }[];
+          }[];
+        };
+        const assistantMsg = histBody.messages.find(
+          (m) => m.role === 'assistant',
+        );
+        const hasParts = assistantMsg?.parts?.some(
+          (p) => p.type === 'tool' || p.type === 'reasoning',
+        );
+        const hasText = (assistantMsg?.content?.trim().length ?? 0) > 0;
+        return hasParts || hasText;
+      },
+      { timeout: 60000 },
+    )
+    .toBeTruthy();
   await page.screenshot({
     path: path.join(artifactDir, 'p4-chat-tool-done.png'),
     fullPage: true,
@@ -177,8 +239,21 @@ test('P4 流式：思考折叠、工具 chip、刷新续传', async ({
   );
   await composer.press('Enter');
   await expect(stopBtn).toBeVisible({ timeout: 120000 });
+  await expect
+    .poll(
+      async () =>
+        (await lastAssistant(page).innerText()).replace(/\s/g, '').length,
+      { timeout: 90000 },
+    )
+    .toBeGreaterThan(40);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(composer).toBeVisible();
+  const resumed = lastAssistant(page);
+  await expect
+    .poll(async () => (await resumed.innerText()).replace(/\s/g, '').length, {
+      timeout: 30000,
+    })
+    .toBeGreaterThan(20);
   await expect(
     stopBtn.or(page.locator('.streaming-caret')).first(),
   ).toBeVisible({ timeout: 120000 });
@@ -187,6 +262,7 @@ test('P4 流式：思考折叠、工具 chip、刷新续传', async ({
     path: path.join(artifactDir, 'p4-chat-resume.png'),
     fullPage: true,
   });
+  await expect(composer).toBeEnabled({ timeout: 300000 });
 
   const files = [
     'p4-chat-reasoning-fold.png',

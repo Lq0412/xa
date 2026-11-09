@@ -25,6 +25,29 @@ export type ChatMessage = {
   created_at?: string;
 };
 
+/** 历史 API 会剥离思考正文，流式态合并时保留本地已收到的 reasoning 文本。 */
+export function mergeMessagePartsFromLocal(
+  server: ChatMessage,
+  local?: ChatMessage,
+): ChatMessage {
+  if (!server.parts?.length || !local?.parts?.length) return server;
+  const parts = server.parts.map((sp) => {
+    if (sp.type !== 'reasoning') return sp;
+    const lp = local.parts?.find(
+      (p) => p.type === 'reasoning' && p.item_id === sp.item_id,
+    );
+    if (
+      lp?.type === 'reasoning' &&
+      lp.text.trim().length > 0 &&
+      !String(sp.text || '').trim()
+    ) {
+      return { ...sp, text: lp.text };
+    }
+    return sp;
+  });
+  return { ...server, parts };
+}
+
 /** URL 只保存稳定 ID，旧链接由会话状态层读取后转换为统一格式。 */
 export function chatURL(agentId: string, conversationId?: string) {
   const query = new URLSearchParams({ agentId });
@@ -274,6 +297,7 @@ export async function resumeRun(
   afterSeq: number,
   signal: AbortSignal,
   handlers: StreamRunHandlers,
+  initial?: { parts?: MessagePart[]; content?: string },
 ) {
   const response = await fetchApi(
     `/runs/${encodeURIComponent(runId)}/events?after=${afterSeq}`,
@@ -283,8 +307,10 @@ export async function resumeRun(
     },
   );
   if (!response.body) throw new ApiError(502, '续传失败');
-  let parts: MessagePart[] = [];
-  let contentText = '';
+  let parts: MessagePart[] = initial?.parts?.length
+    ? (initial.parts.map((p) => ({ ...p })) as MessagePart[])
+    : [];
+  let contentText = initial?.content ?? '';
   for await (const frame of readSseFrames(response.body)) {
     const ev = JSON.parse(frame.data) as RunStreamEvent;
     const typ = String(frame.event || ev.type || '');

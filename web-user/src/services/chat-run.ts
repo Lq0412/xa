@@ -48,12 +48,22 @@ export function applyRunEvent(
     }
     case 'reasoning.completed': {
       const itemId = String(ev.item_id ?? '');
-      const part = next.find(
+      let part = next.find(
         (p): p is Extract<MessagePart, { type: 'reasoning' }> =>
-          p.type === 'reasoning' && p.item_id === itemId,
+          p.type === 'reasoning' && (itemId === '' || p.item_id === itemId),
       );
+      if (!part) {
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].type === 'reasoning') {
+            part = next[i] as Extract<MessagePart, { type: 'reasoning' }>;
+            break;
+          }
+        }
+      }
       if (part) {
-        part.status = 'completed';
+        if (part.text.trim().length > 0) {
+          part.status = 'completed';
+        }
         part.truncated = Boolean(ev.truncated);
       }
       break;

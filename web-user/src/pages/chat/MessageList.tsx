@@ -22,6 +22,8 @@ type Props = {
   hasMore: boolean;
   loadingOlder: boolean;
   olderError: string;
+  /** 会话仍在接收 SSE（含续传）时为 true。 */
+  streamingRun?: boolean;
 };
 
 const suggestions = ['介绍一下你自己', '你能帮我做什么', '我们从哪里开始'];
@@ -71,6 +73,7 @@ export function MessageList({
   hasMore,
   loadingOlder,
   olderError,
+  streamingRun,
 }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -228,6 +231,9 @@ export function MessageList({
                 aria-relevant="additions"
               >
                 {messages.map((message, index) => {
+                  const lastAssistantId = [...messages]
+                    .reverse()
+                    .find((item) => item.role === 'assistant')?.id;
                   const label = timeLabel(stamp(message));
                   const previous =
                     index > 0 ? timeLabel(stamp(messages[index - 1])) : '';
@@ -241,6 +247,7 @@ export function MessageList({
                       )}
                       <article
                         data-message-id={message.id}
+                        data-message-status={message.status}
                         data-parts-count={message.parts?.length ?? 0}
                         className={`message-row flex w-full min-w-0 ${mine ? 'user justify-end' : 'assistant justify-start'}`}
                         aria-label={
@@ -261,13 +268,23 @@ export function MessageList({
                                       itemId={part.item_id}
                                       text={part.text}
                                       status={part.status}
+                                      liveRun={
+                                        Boolean(streamingRun) &&
+                                        !mine &&
+                                        message.id === lastAssistantId
+                                      }
                                     />
                                   );
                                 if (part.type === 'tool')
                                   return <ToolCallChip key={key} part={part} />;
                                 if (part.type === 'text' && part.text)
                                   return (
-                                    <Markdown key={key}>{part.text}</Markdown>
+                                    <div
+                                      key={key}
+                                      data-testid="message-text-part"
+                                    >
+                                      <Markdown>{part.text}</Markdown>
+                                    </div>
                                   );
                                 return null;
                               })}
@@ -275,7 +292,9 @@ export function MessageList({
                               !message.parts?.some(
                                 (p) => p.type === 'text' && p.text,
                               ) ? (
-                                <Markdown>{message.content}</Markdown>
+                                <div data-testid="message-text-part">
+                                  <Markdown>{message.content}</Markdown>
+                                </div>
                               ) : null}
                             </div>
                           ) : message.content ? (

@@ -10,6 +10,7 @@ import {
   createConversation,
   listConversations,
   listMessages,
+  mergeMessagePartsFromLocal,
   resumeRun,
   streamRun,
 } from '@/services/chat';
@@ -95,42 +96,73 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       const controller = new AbortController();
       controllers.current.set(`resume:${targetKey}`, controller);
       update(targetKey, (state) => {
-        const exists = state.messages.some((m) => m.run_id === active.id);
-        const base = exists
-          ? state.messages
-          : [
-              ...state.messages,
-              {
-                id: assistantId,
-                conversation_id: convId,
-                role: 'assistant' as const,
-                content: '',
-                status: 'pending' as const,
-                run_id: active.id,
-              },
-            ];
-        return { messages: base, sending: true };
+        if (state.messages.some((m) => m.run_id === active.id)) {
+          return { messages: state.messages, sending: true };
+        }
+        const lastIdx = state.messages.length - 1;
+        const last = state.messages[lastIdx];
+        if (
+          last?.role === 'assistant' &&
+          last.status === 'pending' &&
+          !last.run_id
+        ) {
+          return {
+            messages: state.messages.map((m, i) =>
+              i === lastIdx ? { ...m, run_id: active.id } : m,
+            ),
+            sending: true,
+          };
+        }
+        return {
+          messages: [
+            ...state.messages,
+            {
+              id: assistantId,
+              conversation_id: convId,
+              role: 'assistant' as const,
+              content: '',
+              status: 'pending' as const,
+              run_id: active.id,
+            },
+          ],
+          sending: true,
+        };
       });
       activeRun.current = { runId: active.id };
       try {
-        await resumeRun(active.id, 0, controller.signal, {
-          onParts: (parts, content) => {
-            update(targetKey, (state) => ({
-              messages: state.messages.map((message) =>
-                message.run_id === active.id || message.id === assistantId
-                  ? { ...message, content, parts, run_id: active.id }
-                  : message,
-              ),
-            }));
+        const cached = cache.current.get(targetKey)?.messages ?? [];
+        const seed =
+          cached.find((m) => m.run_id === active.id) ??
+          [...cached].reverse().find((m) => m.role === 'assistant');
+        const after = active.last_event_seq > 0 ? active.last_event_seq : 0;
+        await resumeRun(
+          active.id,
+          after,
+          controller.signal,
+          {
+            onParts: (parts, content) => {
+              update(targetKey, (state) => ({
+                messages: state.messages.map((message) =>
+                  message.run_id === active.id || message.id === assistantId
+                    ? { ...message, content, parts, run_id: active.id }
+                    : message,
+                ),
+              }));
+            },
           },
-        });
+          {
+            parts: seed?.parts,
+            content: seed?.content,
+          },
+        );
         const historyPage = await listMessages(convId, controller.signal);
         update(targetKey, (state) => {
           const latest = (historyPage.messages ?? []).map((message) => {
             const local = state.messages.find(
               (item) => item.id === message.id || item.run_id === active.id,
             );
-            if (message.parts?.length) return message;
+            if (message.parts?.length)
+              return mergeMessagePartsFromLocal(message, local);
             if (local?.parts?.length)
               return {
                 ...message,
@@ -415,7 +447,8 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
               item.id === assistantID ||
               item.id === savedID,
           );
-          if (message.parts?.length) return message;
+          if (message.parts?.length)
+            return mergeMessagePartsFromLocal(message, local);
           if (local?.parts?.length)
             return {
               ...message,

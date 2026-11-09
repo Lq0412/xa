@@ -194,11 +194,8 @@ func (b *EventBus) ReasoningDelta(ctx context.Context, itemID, delta string) err
 	}
 	b.reasoningOpen = true
 	b.reasonBuf.WriteString(delta)
-	if b.reasonBuf.Len() >= b.deltaCoalesceLen {
-		b.flushDeltasLocked()
-	} else {
-		b.scheduleDeltaFlushLocked()
-	}
+	b.flushDeltasLocked()
+	b.flushBatchLocked(false)
 	_ = ctx
 	return nil
 }
@@ -227,6 +224,7 @@ func (b *EventBus) ReasoningCompleted(ctx context.Context, truncated bool) error
 	}
 	b.seq = seq
 	b.batch = append(b.batch, pendingEvent{seq: seq, typ: EventReasoningCompleted, payload: raw, at: time.Now().UTC(), step: b.currentStep()})
+	b.flushBatchLocked(false)
 	_ = ctx
 	return nil
 }
