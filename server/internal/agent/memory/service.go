@@ -65,6 +65,8 @@ type Service struct {
 	Agents definition.Service
 	Model  *provider.BailianModel
 	Clock  Clock
+	// QueryEmbed 仅供集成测试注入确定性向量；生产保持 nil。
+	QueryEmbed func(context.Context, string) ([]float32, error)
 }
 
 // Filter 默认只返回 active；AgentID 是精确过滤，不包含共享层。

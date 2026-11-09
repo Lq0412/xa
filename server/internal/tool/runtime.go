@@ -48,8 +48,6 @@ type Spec struct {
 	Available       bool
 }
 
-type Requirement string
-
 type Call struct {
 	ID        string
 	Name      string

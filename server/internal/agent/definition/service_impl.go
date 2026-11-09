@@ -116,6 +116,11 @@ func (s *ServiceImpl) Validate(_ context.Context, actor auth.Principal, input Sa
 	if _, err := ParseMemoryPolicy(input.Configuration.MemoryPolicy); err != nil {
 		return err
 	}
+	if len(input.Configuration.RuntimeLimits) > 0 {
+		if _, err := ParseRuntimeLimits(input.Configuration.RuntimeLimits); err != nil {
+			return err
+		}
+	}
 	if actor.UserID == "" || actor.WorkspaceID == "" {
 		return auth.ErrUnauthenticated
 	}
