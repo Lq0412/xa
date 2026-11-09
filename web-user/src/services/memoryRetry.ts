@@ -129,6 +129,8 @@ export async function retryDeadBatch(
       feedback.handledIDs.push(id);
     } catch (cause) {
       const status = errorStatus(cause);
+      // 任务不存在或已不是 dead 时，服务端返回 404，不能写成重新入队。
+      // 409 不是这条接口的约定；若真返回冲突，只说明状态对不上。
       if (status === 404) {
         feedback.gone.push(id);
         feedback.handledIDs.push(id);
@@ -161,7 +163,9 @@ export function confirmedRetryNote(feedback: RetryFeedback, dead: number) {
   if (feedback.conflict.length > 0 || feedback.failed.length > 0) {
     return `${parts.join('，')}。统计显示没有剩余失败任务`;
   }
-  if (feedback.requeued.length > 0) return '已重新排队';
+  if (feedback.requeued.length > 0) {
+    return `已重新排队 ${feedback.requeued.length} 个`;
+  }
   return '没有剩余的失败任务';
 }
 
@@ -201,21 +205,21 @@ export function composeRetryNote(
   return listFailed ? `${base}。记忆列表刷新失败` : base;
 }
 
-/**
- * 一次点击只重试调用时拿到的 id，然后刷新统计和列表。
- * 不根据刷新结果自动请求下一批，避免失败任务一直占住前 20 条时循环请求。
- */
-export async function runDeadRetry<
+function emptyFeedback(): RetryFeedback {
+  return { requeued: [], gone: [], conflict: [], failed: [], handledIDs: [] };
+}
+
+async function finishDeadRetry<
   TStats extends { dead: number; deadJobs: readonly { id: string }[] },
   TList,
->(input: {
-  stats: { dead: number; deadJobs: readonly { id: string }[] } | null;
-  retry: (id: string) => Promise<void>;
-  refreshStats: () => Promise<TStats>;
-  refreshList: () => Promise<TList>;
-}): Promise<DeadRetryResult<TStats, TList> | { ignored: true }> {
-  const ids = input.stats ? deadJobIDs(input.stats.deadJobs) : [];
-  if (ids.length === 0) return { ignored: true };
+>(
+  ids: readonly string[],
+  input: {
+    retry: (id: string) => Promise<void>;
+    refreshStats: () => Promise<TStats>;
+    refreshList: () => Promise<TList>;
+  },
+): Promise<DeadRetryResult<TStats, TList>> {
   const feedback = await retryDeadBatch(ids, input.retry);
   const [statsResult, listResult] = await Promise.allSettled([
     input.refreshStats(),
@@ -237,6 +241,53 @@ export async function runDeadRetry<
       listFailed,
     needsReload: stats == null || listFailed,
   };
+}
+
+/**
+ * 一次点击只重试一批 id，然后刷新统计和列表。
+ * 当前没有 id 但 dead 大于 0 时，先刷新一次统计再取 id；刷新后仍没有 id 就停，不循环请求。
+ */
+export async function runDeadRetry<
+  TStats extends { dead: number; deadJobs: readonly { id: string }[] },
+  TList,
+>(input: {
+  stats: { dead: number; deadJobs: readonly { id: string }[] } | null;
+  retry: (id: string) => Promise<void>;
+  refreshStats: () => Promise<TStats>;
+  refreshList: () => Promise<TList>;
+}): Promise<DeadRetryResult<TStats, TList> | { ignored: true }> {
+  const ids = input.stats ? deadJobIDs(input.stats.deadJobs) : [];
+  if (ids.length > 0) return finishDeadRetry(ids, input);
+  if (!input.stats || input.stats.dead <= 0) return { ignored: true };
+  const [statsResult] = await Promise.allSettled([input.refreshStats()]);
+  if (statsResult.status === 'rejected') {
+    return {
+      ignored: false,
+      feedback: emptyFeedback(),
+      stats: null,
+      list: null,
+      note: '统计刷新失败，不能确认可重试的任务',
+      alert: true,
+      needsReload: true,
+    };
+  }
+  const refreshed = statsResult.value;
+  const nextIDs = deadJobIDs(refreshed.deadJobs);
+  if (nextIDs.length === 0) {
+    return {
+      ignored: false,
+      feedback: emptyFeedback(),
+      stats: refreshed,
+      list: null,
+      note:
+        refreshed.dead > 0
+          ? `还有 ${refreshed.dead} 个失败任务，这次没有返回可重试的任务`
+          : '没有剩余的失败任务',
+      alert: refreshed.dead > 0,
+      needsReload: false,
+    };
+  }
+  return finishDeadRetry(nextIDs, input);
 }
 
 /**

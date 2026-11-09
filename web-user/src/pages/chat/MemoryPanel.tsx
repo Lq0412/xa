@@ -582,7 +582,12 @@ export function useAgentMemory({
     // 进入闸门后才改界面。重复点击在这里返回，不会把进行中的按钮重新放开。
     void withRetryGate(retryGate.current, async () => {
       const current = statsRef.current;
-      if (!current || deadJobIDs(current.deadJobs).length === 0) return;
+      if (
+        !current ||
+        (current.dead <= 0 && deadJobIDs(current.deadJobs).length === 0)
+      ) {
+        return;
+      }
       // 丢掉点击前还在飞的统计和列表，避免过期响应把刚重试过的 id 写回来。
       generation.current += 1;
       statsEpoch.current += 1;
@@ -1553,17 +1558,15 @@ export function MemoryDetail({
                   {' · '}
                   {memory.stats.dead} 个整理任务失败
                   {memory.statsStale ? '（统计未更新）' : ''}
-                  {(memory.retrying || memory.stats.deadJobs.length > 0) && (
-                    <button
-                      type="button"
-                      className="ml-1 underline underline-offset-2 disabled:opacity-40"
-                      disabled={memory.retrying}
-                      aria-busy={memory.retrying}
-                      onClick={memory.retryDead}
-                    >
-                      {memory.retrying ? '重试中…' : '重试'}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="ml-1 underline underline-offset-2 disabled:opacity-40"
+                    disabled={memory.retrying}
+                    aria-busy={memory.retrying}
+                    onClick={memory.retryDead}
+                  >
+                    {memory.retrying ? '重试中…' : '重试'}
+                  </button>
                 </>
               )}
             </>
