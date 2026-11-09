@@ -1,3 +1,8 @@
+> **已过时（2026-11-09）**：本文仍包含实时语音（Realtime）、文本/语音双通道切换、Flutter 移动端等已被现行蓝图裁掉的内容，不能再作为开发顺序或范围依据。
+> 当前产品范围以 [ROADMAP.md](ROADMAP.md)、[blueprint.md](blueprint.md) 为准。
+> Agent 工具循环的设计、分期和验收以 [agent-loop-design.md](agent-loop-design.md) 为准。
+> 下文仅作历史记录保留。
+
 # 顶层业务流程
 
 ## 1. 产品结构
