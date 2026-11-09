@@ -48,27 +48,57 @@ func TestValidateRejectionCodes(t *testing.T) {
 	limits := definition.RuntimeLimits{MaxCallsPerStep: 1, MaxToolCalls: 1, MaxModelTurns: 4}
 	ts := testToolset(t, reg, "fake_echo", "fake_error")
 	rc := testRC(t, NewMemStore(), reg, &FakeProvider{}, limits, ts)
+	assertCode := func(t *testing.T, plan CallPlan, idx int, want string) {
+		t.Helper()
+		if plan.Items[idx].ErrorCode != want {
+			t.Fatalf("索引 %d：期望 %s，得 %s", idx, want, plan.Items[idx].ErrorCode)
+		}
+	}
 	plan := Validate([]provider.ToolCall{
 		{ID: "c1", Name: "fake_echo", Arguments: `{}`},
 		{ID: "c2", Name: "fake_echo", Arguments: `{}`},
 	}, rc)
-	if plan.Items[1].ErrorCode != RejectTooManyCallsInStep {
-		t.Fatalf("期望 too_many_calls_in_step, 得 %s", plan.Items[1].ErrorCode)
-	}
+	assertCode(t, plan, 1, RejectTooManyCallsInStep)
 	rc2 := testRC(t, NewMemStore(), reg, &FakeProvider{}, limits, ts)
 	rc2.Budget.ToolCalls = 1
 	plan = Validate([]provider.ToolCall{{ID: "c3", Name: "fake_echo", Arguments: `{}`}}, rc2)
-	if plan.Items[0].ErrorCode != RejectToolBudgetExhausted {
-		t.Fatal(plan.Items[0].ErrorCode)
-	}
+	assertCode(t, plan, 0, RejectToolBudgetExhausted)
 	plan = Validate([]provider.ToolCall{{ID: "c4", Name: "nope", Arguments: `{}`}}, rc)
-	if plan.Items[0].ErrorCode != RejectUnknownTool {
-		t.Fatal(plan.Items[0].ErrorCode)
-	}
+	assertCode(t, plan, 0, RejectUnknownTool)
 	plan = Validate([]provider.ToolCall{{ID: "c5", Name: "fake_echo", Arguments: `{`}}, rc)
-	if plan.Items[0].ErrorCode != RejectInvalidArguments {
-		t.Fatal(plan.Items[0].ErrorCode)
+	assertCode(t, plan, 0, RejectInvalidArguments)
+	tsHuge := testToolset(t, reg, "fake_huge")
+	rcHuge := testRC(t, NewMemStore(), reg, &FakeProvider{}, definition.RuntimeLimits{MaxToolCalls: 4}, tsHuge)
+	plan = Validate([]provider.ToolCall{{ID: "c6", Name: "fake_huge", Arguments: `{"size":0}`}}, rcHuge)
+	assertCode(t, plan, 0, RejectSchemaViolation)
+	tsAppr, err := reg.Resolve(tool.ResolveInput{
+		Bindings:   []binding.ToolBinding{{Name: "fake_approval", Enabled: true}},
+		CanApprove: false,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	rcAppr := testRC(t, NewMemStore(), reg, &FakeProvider{}, definition.RuntimeLimits{MaxToolCalls: 4}, tsAppr)
+	plan = Validate([]provider.ToolCall{{ID: "c7", Name: "fake_approval", Arguments: `{}`}}, rcAppr)
+	assertCode(t, plan, 0, RejectToolUnavailable)
+	tsCap, err := reg.Resolve(tool.ResolveInput{
+		Bindings:   []binding.ToolBinding{{Name: "fake_echo", Enabled: true, MaxCalls: 1}},
+		CanApprove: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rcCap := testRC(t, NewMemStore(), reg, &FakeProvider{}, definition.RuntimeLimits{MaxToolCalls: 4}, tsCap)
+	rcCap.PerToolCalls["fake_echo"] = 1
+	plan = Validate([]provider.ToolCall{{ID: "c8", Name: "fake_echo", Arguments: `{}`}}, rcCap)
+	assertCode(t, plan, 0, RejectToolCallLimit)
+	rcRep := testRC(t, NewMemStore(), reg, &FakeProvider{}, definition.RuntimeLimits{MaxCallsPerStep: 8, MaxToolCalls: 8}, ts)
+	plan = Validate([]provider.ToolCall{
+		{ID: "r1", Name: "fake_echo", Arguments: `{"message":"same"}`},
+		{ID: "r2", Name: "fake_echo", Arguments: `{"message":"same"}`},
+		{ID: "r3", Name: "fake_echo", Arguments: `{"message":"same"}`},
+	}, rcRep)
+	assertCode(t, plan, 2, RejectRepeatedCall)
 }
 
 func TestSchedulerWriteBarrier(t *testing.T) {

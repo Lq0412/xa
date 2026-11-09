@@ -29,6 +29,7 @@ type RunContext struct {
 	Toolset          tool.Toolset
 	Messages         []provider.Message
 	Step             int
+	stepCallIndex    int // 本 step 内已调度工具序号，写入 tool_results.call_index
 	Budget           *Budget
 	VisibleText      strings.Builder
 	Store            Store

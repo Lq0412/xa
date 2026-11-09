@@ -60,6 +60,9 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 			req.ParallelToolCalls = &par
 		}
 		rc.Step++
+		rc.mu.Lock()
+		rc.stepCallIndex = 0
+		rc.mu.Unlock()
 		if rc.VisibleText.Len() > 0 && rc.Emitter != nil {
 			rc.Emitter.PendingSeparator("\n\n")
 		}

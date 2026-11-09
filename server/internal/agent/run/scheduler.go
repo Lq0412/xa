@@ -172,9 +172,13 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 	env.Config = entry.Config
 	env.Deadline = time.Now().Add(entry.Timeout)
 	resultRef := NewResultRef()
+	rc.mu.Lock()
+	rc.stepCallIndex++
+	callIndex := rc.stepCallIndex
+	rc.mu.Unlock()
 	row := ToolResultRow{
 		ID: resultRef, RunID: rc.Run.ID, ConversationID: env.ConversationID, OwnerUserID: env.Principal.UserID,
-		Step: rc.Step, CallID: pc.Call.ID, ToolName: pc.Call.Name, ToolVersion: entry.Spec.Version,
+		Step: rc.Step, CallIndex: callIndex, CallID: pc.Call.ID, ToolName: pc.Call.Name, ToolVersion: entry.Spec.Version,
 		Effect: string(entry.Spec.Effect), Arguments: args, RawArguments: string(args),
 		ArgsHash: argsHash(pc.Call.Name, args), Status: "running", Attempts: 1,
 	}

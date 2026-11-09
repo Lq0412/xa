@@ -183,11 +183,29 @@ SELECT COUNT(*) FROM tool_results WHERE run_id=$1 AND step=$2 AND status='succee
 			}
 			rows.Close()
 			if len(order) >= 2 {
+				// P3：conversation.Send 在单条 pgx.Tx 内执行引擎时，调度层对同批只读工具串行 executeOne，
+				// call_index 仍按模型调用顺序写入；见 docs/agent-loop-design.md §7 P3 取舍。
+				var indices []int
+				rows2, err := db.Query(ctx, `SELECT call_index FROM tool_results WHERE run_id=$1 AND step=$2 ORDER BY call_index`, runID, *parallelStep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for rows2.Next() {
+					var ix int
+					_ = rows2.Scan(&ix)
+					indices = append(indices, ix)
+				}
+				rows2.Close()
+				for i, ix := range indices {
+					if ix != i+1 {
+						t.Fatalf("call_index 应从 1 连续递增，得 %v", indices)
+					}
+				}
 				return
 			}
 		}
 	}
-	t.Fatal("八次尝试均未满足并行只读调用不变量")
+	t.Fatal("五次尝试均未满足并行只读调用不变量")
 }
 
 func TestMultiTurnToolHistoryProjection(t *testing.T) {
