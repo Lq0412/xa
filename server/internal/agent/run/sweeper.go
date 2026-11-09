@@ -34,6 +34,11 @@ func (sw *Sweeper) Run(ctx context.Context) {
 	}
 }
 
+// TickOnce 执行一轮回收，供集成测试调用。
+func (sw *Sweeper) TickOnce(ctx context.Context) {
+	sw.tick(ctx)
+}
+
 func (sw *Sweeper) tick(ctx context.Context) {
 	var locked bool
 	if err := sw.DB.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext('xa_run_sweeper'))`).Scan(&locked); err != nil || !locked {

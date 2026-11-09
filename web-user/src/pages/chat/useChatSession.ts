@@ -2,6 +2,7 @@ import { history } from '@umijs/max';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type Agent, getAgent } from '@/services/api';
 import {
+  type ActiveRun,
   type ChatMessage,
   type Conversation,
   cancelRun,
@@ -9,6 +10,7 @@ import {
   createConversation,
   listConversations,
   listMessages,
+  resumeRun,
   streamRun,
 } from '@/services/chat';
 import { errorMessage } from '@/services/http';
@@ -83,6 +85,62 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       setSessions(next);
     },
     [],
+  );
+
+  const resumeActiveRun = useCallback(
+    async (convId: string, targetKey: string, active: ActiveRun) => {
+      if (active.status !== 'running' && active.status !== 'waiting_approval')
+        return;
+      const assistantId = `resume-${active.id}`;
+      const controller = new AbortController();
+      controllers.current.set(`resume:${targetKey}`, controller);
+      update(targetKey, (state) => {
+        const exists = state.messages.some((m) => m.run_id === active.id);
+        const base = exists
+          ? state.messages
+          : [
+              ...state.messages,
+              {
+                id: assistantId,
+                conversation_id: convId,
+                role: 'assistant' as const,
+                content: '',
+                status: 'pending' as const,
+                run_id: active.id,
+              },
+            ];
+        return { messages: base, sending: true };
+      });
+      activeRun.current = { runId: active.id };
+      try {
+        await resumeRun(active.id, 0, controller.signal, {
+          onParts: (parts, content) => {
+            update(targetKey, (state) => ({
+              messages: state.messages.map((message) =>
+                message.run_id === active.id || message.id === assistantId
+                  ? { ...message, content, parts, run_id: active.id }
+                  : message,
+              ),
+            }));
+          },
+        });
+        const historyPage = await listMessages(convId, controller.signal);
+        update(targetKey, (state) => ({
+          messages: historyPage.messages ?? state.messages,
+          hasMore: historyPage.has_more,
+          before: historyPage.before,
+        }));
+      } catch (cause) {
+        if (!controller.signal.aborted) {
+          update(targetKey, { sendError: errorMessage(cause) });
+        }
+      } finally {
+        update(targetKey, { sending: false });
+        controllers.current.delete(`resume:${targetKey}`);
+        activeRun.current = null;
+      }
+    },
+    [update],
   );
 
   useEffect(() => {
@@ -168,6 +226,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
               messages: [],
               has_more: false,
               before: undefined,
+              active_run: undefined,
             }),
       ]);
       update(key, {
@@ -179,6 +238,9 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         loaded: true,
         sendError: '',
       });
+      if (conversationID && result.active_run) {
+        void resumeActiveRun(conversationID, key, result.active_run);
+      }
       if (
         selectedKey.current === key &&
         search !== chatURL(targetAgent, conversationID || undefined).slice(5)
@@ -200,6 +262,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     listLoading,
     search,
     update,
+    resumeActiveRun,
   ]);
 
   useEffect(() => {
@@ -296,20 +359,27 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         ];
       });
       activeRun.current = null;
-      const result = await streamRun(id, text, controller.signal, {
-        onRunID: (runId) => {
-          activeRun.current = { runId };
+      const idempotencyKey = crypto.randomUUID();
+      const result = await streamRun(
+        id,
+        text,
+        controller.signal,
+        {
+          onRunID: (runId) => {
+            activeRun.current = { runId };
+          },
+          onParts: (parts, content) => {
+            update(targetKey, (state) => ({
+              messages: state.messages.map((message) =>
+                message.id === assistantID
+                  ? { ...message, content, parts }
+                  : message,
+              ),
+            }));
+          },
         },
-        onParts: (parts, content) => {
-          update(targetKey, (state) => ({
-            messages: state.messages.map((message) =>
-              message.id === assistantID
-                ? { ...message, content, parts }
-                : message,
-            ),
-          }));
-        },
-      });
+        { idempotencyKey },
+      );
       const savedID = result.messageId ?? assistantID;
       completed = true;
       // 抽取在回复落库后异步进行，详情栏稍后自己刷新一次。

@@ -37,4 +37,7 @@ type Store interface {
 	AppendRunEvent(ctx context.Context, runID string, seq int64, typ string, payload []byte, terminal bool) error
 	UpdateLastEventSeq(ctx context.Context, runID string, seq int64) error
 	ListRunEventsAfter(ctx context.Context, runID string, afterSeq int64) ([]StoredEvent, error)
+
+	LookupIdempotency(ctx context.Context, conversationID, key string) (IdempotencyRef, error)
+	ActiveRunForConversation(ctx context.Context, conversationID, ownerUserID string) (*ActiveRunInfo, error)
 }

@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,6 +72,14 @@ func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *
 
 	began := time.Now()
 	outcome, execErr := engine.Execute(runCtx, rc)
+	if runCtx.Err() != nil {
+		cause := context.Cause(runCtx)
+		if errors.Is(runCtx.Err(), context.Canceled) || errors.Is(cause, context.Canceled) ||
+			(cause != nil && (strings.Contains(cause.Error(), "user_cancel") || strings.Contains(cause.Error(), "client_disconnected"))) {
+			outcome = Outcome{Kind: OutcomeCancelled, Code: "user_cancel", Message: "已停止生成"}
+			execErr = nil
+		}
+	}
 	latency := time.Since(began).Milliseconds()
 	return s.finalizeStreamingRun(runCtx, rc, outcome, execErr, latency, in)
 }

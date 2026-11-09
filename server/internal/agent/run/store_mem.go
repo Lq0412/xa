@@ -222,6 +222,22 @@ func (m *MemStore) UpdateLastEventSeq(ctx context.Context, runID string, seq int
 	return nil
 }
 
+func (m *MemStore) LookupIdempotency(ctx context.Context, conversationID, key string) (IdempotencyRef, error) {
+	return IdempotencyRef{}, pgx.ErrNoRows
+}
+
+func (m *MemStore) ActiveRunForConversation(ctx context.Context, conversationID, ownerUserID string) (*ActiveRunInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.runs {
+		if r.ConversationID == conversationID && r.OwnerUserID == ownerUserID && (r.Status == "running" || r.Status == "waiting_approval") {
+			seq := m.lastSeq[r.ID]
+			return &ActiveRunInfo{ID: r.ID, Status: r.Status, LastEventSeq: seq}, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MemStore) ListRunEventsAfter(ctx context.Context, runID string, afterSeq int64) ([]StoredEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

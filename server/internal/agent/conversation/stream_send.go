@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/agent/run"
 	"linq-bs/server/internal/framework/auth"
@@ -19,13 +19,47 @@ import (
 
 // StreamSendOptions 控制流式响应。
 type StreamSendOptions struct {
-	Protocol     int
-	AfterSeq     int64
-	WriteV2      func(run.StoredEvent) error
-	WriteV1Delta func(string) error
-	WriteV1Done  func(messageID string, prompt, completion int) error
-	WriteV1Error func(msg string) error
-	OnPresence   func()
+	Protocol       int
+	IdempotencyKey string
+	AfterSeq       int64
+	WriteV2        func(run.StoredEvent) error
+	WriteV1Delta   func(string) error
+	WriteV1Done    func(messageID string, prompt, completion int) error
+	WriteV1Error   func(msg string) error
+	OnPresence     func()
+}
+
+// EnsureNoActiveRun 在开启 SSE 前拒绝并发写者。
+func (s *Service) EnsureNoActiveRun(ctx context.Context, p auth.Principal, conversationID string) error {
+	active, err := run.NewPGStore(s.DB).ActiveRunForConversation(ctx, conversationID, p.UserID)
+	if err != nil {
+		return err
+	}
+	if active != nil {
+		return fmt.Errorf("对话正在生成回复: %w", definition.ErrConflict)
+	}
+	return nil
+}
+
+// CheckIdempotencyKey 在写 SSE 前校验幂等键是否与正文一致。
+func (s *Service) CheckIdempotencyKey(ctx context.Context, conversationID, content, key string, protocol int) error {
+	if strings.TrimSpace(key) == "" {
+		return nil
+	}
+	if len(key) > 128 {
+		return fmt.Errorf("幂等键过长: %w", definition.ErrInvalid)
+	}
+	ref, err := run.NewPGStore(s.DB).LookupIdempotency(ctx, conversationID, key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if ref.RequestHash != hashRequest(content, protocol) {
+		return fmt.Errorf("幂等键已被用于不同内容: %w", definition.ErrInvalid)
+	}
+	return nil
 }
 
 // SendStream 启动异步 run 并订阅 SSE 事件。
@@ -33,6 +67,41 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 	if s.Runs == nil {
 		return fmt.Errorf("RunService 未配置")
 	}
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("消息不能为空")
+	}
+	protocol := opts.Protocol
+	if protocol <= 0 {
+		protocol = 2
+	}
+	reqHash := hashRequest(content, protocol)
+
+	if opts.IdempotencyKey == "" {
+		if active, err := run.NewPGStore(s.DB).ActiveRunForConversation(ctx, conversationID, p.UserID); err != nil {
+			return err
+		} else if active != nil {
+			return fmt.Errorf("对话正在生成回复: %w", definition.ErrConflict)
+		}
+	}
+
+	// 幂等：已有 run 则只订阅重放，不新建用户消息或 run。
+	if opts.IdempotencyKey != "" {
+		if len(opts.IdempotencyKey) > 128 {
+			return fmt.Errorf("幂等键过长: %w", definition.ErrInvalid)
+		}
+		pgStore := run.NewPGStore(s.DB)
+		ref, err := pgStore.LookupIdempotency(ctx, conversationID, opts.IdempotencyKey)
+		if err == nil {
+			if ref.RequestHash != reqHash {
+				return fmt.Errorf("幂等键已被用于不同内容: %w", definition.ErrInvalid)
+			}
+			return s.subscribeRunEvents(ctx, ref.RunID, opts)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+	}
+
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return err
@@ -49,10 +118,6 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 	if err != nil {
 		return err
 	}
-	protocol := opts.Protocol
-	if protocol <= 0 {
-		protocol = 2
-	}
 	runID := "run_" + uuid.NewString()
 	userID := "msg_" + uuid.NewString()
 	now := time.Now().UTC()
@@ -60,7 +125,6 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 		return err
 	}
 	prep.Start.UserMessageID = userID
-	reqHash := hashRequest(content, protocol)
 	runRow := run.Run{
 		ID: runID, WorkspaceID: p.WorkspaceID, OwnerUserID: p.UserID, ConversationID: conversationID,
 		AgentID: prep.Agent.ID, AgentVersionID: prep.Version.ID, RootRunID: runID,
@@ -69,8 +133,16 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 	}
 	if err := run.InsertRunRow(ctx, tx, s.Runs.Store, runRow, run.RunContextSnapshot{
 		RunID: runID, Messages: prep.Start.InitialMessages, Segments: prep.Segments,
-	}, "", reqHash, s.Runs.InstanceID); err != nil {
-		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
+	}, opts.IdempotencyKey, reqHash, s.Runs.InstanceID); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			// 并发幂等或活跃 run 冲突：尝试附着幂等键。
+			if opts.IdempotencyKey != "" {
+				ref, lerr := run.NewPGStore(s.DB).LookupIdempotency(ctx, conversationID, opts.IdempotencyKey)
+				if lerr == nil && ref.RequestHash == reqHash {
+					_ = tx.Rollback(ctx)
+					return s.subscribeRunEvents(ctx, ref.RunID, opts)
+				}
+			}
 			return fmt.Errorf("对话正在生成回复: %w", definition.ErrConflict)
 		}
 		return err
@@ -103,7 +175,8 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 	}
 	streamIn := run.StreamStartInput{
 		ChatStartInput: prep.Start, RunID: runID, StreamProtocol: protocol,
-		RequestHash: reqHash, EnableThinking: definition.ChatEnableThinking(prep.Version.Configuration),
+		IdempotencyKey: opts.IdempotencyKey, RequestHash: reqHash,
+		EnableThinking: definition.ChatEnableThinking(prep.Version.Configuration),
 	}
 	driveCtx := context.WithoutCancel(ctx)
 	if protocol < 2 {
@@ -111,56 +184,7 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 	}
 	s.Runs.StartDrive(driveCtx, streamIn, bus, v1)
 
-	presence := time.NewTicker(5 * time.Second)
-	defer presence.Stop()
-	return run.Subscribe(ctx, s.Runs.Store, s.Runs.Redis, s.Runs.RedisOK, runID, run.StreamOptions{AfterSeq: opts.AfterSeq, HeartbeatEvery: 15 * time.Second}, func(ev run.StoredEvent) error {
-		select {
-		case <-presence.C:
-			run.TouchPresence(ctx, s.Runs.Redis, runID, "main")
-			if opts.OnPresence != nil {
-				opts.OnPresence()
-			}
-		default:
-		}
-		if protocol >= 2 && opts.WriteV2 != nil {
-			if err := opts.WriteV2(ev); err != nil {
-				return err
-			}
-		} else {
-			term, err := run.V1Project(ev, opts.WriteV1Delta, func(m map[string]any) error {
-				mid, _ := m["message_id"].(string)
-				u, _ := m["usage"].(map[string]any)
-				if opts.WriteV1Done != nil {
-					return opts.WriteV1Done(mid, intFromJSON(u["prompt"]), intFromJSON(u["completion"]))
-				}
-				return nil
-			}, func(msg string) error {
-				if opts.WriteV1Error != nil {
-					return opts.WriteV1Error(msg)
-				}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-			if term {
-				return run.ErrSubscribeDone
-			}
-		}
-		var env map[string]any
-		_ = json.Unmarshal(ev.Payload, &env)
-		typ, _ := env["type"].(string)
-		if run.IsTerminalEvent(typ) {
-			if protocol >= 2 && (typ == run.EventRunFailed || typ == run.EventRunCancelled) {
-				msg, _ := env["message"].(string)
-				if msg != "" {
-					return fmt.Errorf("%s", msg)
-				}
-			}
-			return run.ErrSubscribeDone
-		}
-		return nil
-	})
+	return s.subscribeRunEvents(ctx, runID, opts)
 }
 
 func hashRequest(content string, protocol int) string {
@@ -181,8 +205,8 @@ func intFromJSON(v any) int {
 
 // SubscribeRun 只订阅已有 run（重连）。
 func (s *Service) SubscribeRun(ctx context.Context, p auth.Principal, runID string, opts StreamSendOptions) error {
-	var owner, conv string
-	if err := s.DB.QueryRow(ctx, `SELECT owner_user_id,conversation_id FROM runs WHERE id=$1`, runID).Scan(&owner, &conv); err != nil {
+	var owner string
+	if err := s.DB.QueryRow(ctx, `SELECT owner_user_id FROM runs WHERE id=$1`, runID).Scan(&owner); err != nil {
 		return definition.ErrNotFound
 	}
 	if owner != p.UserID {
@@ -191,24 +215,7 @@ func (s *Service) SubscribeRun(ctx context.Context, p auth.Principal, runID stri
 	if s.Runs == nil {
 		return fmt.Errorf("RunService 未配置")
 	}
-	presence := time.NewTicker(5 * time.Second)
-	defer presence.Stop()
-	err := run.Subscribe(ctx, s.Runs.Store, s.Runs.Redis, s.Runs.RedisOK, runID, run.StreamOptions{AfterSeq: opts.AfterSeq, HeartbeatEvery: 15 * time.Second}, func(ev run.StoredEvent) error {
-		select {
-		case <-presence.C:
-			run.TouchPresence(ctx, s.Runs.Redis, runID, "resume")
-		default:
-		}
-		if opts.WriteV2 != nil {
-			return opts.WriteV2(ev)
-		}
-		var env map[string]any
-		_ = json.Unmarshal(ev.Payload, &env)
-		if run.IsTerminalEvent(env["type"].(string)) {
-			return run.ErrSubscribeDone
-		}
-		return nil
-	})
+	err := s.subscribeRunEvents(ctx, runID, opts)
 	if err != nil && !errors.Is(err, run.ErrSubscribeDone) {
 		return err
 	}

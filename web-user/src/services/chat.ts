@@ -86,13 +86,24 @@ export async function getConversationSummary(id: string, signal?: AbortSignal) {
 }
 
 /** 历史读取失败必须由页面显示，不能伪装为空会话。 */
+export type ActiveRun = {
+  id: string;
+  status: string;
+  last_event_seq: number;
+};
+
 export const listMessages = (
   id: string,
   signal?: AbortSignal,
   before?: string,
   limit = 20,
 ) =>
-  request<{ messages: ChatMessage[]; has_more: boolean; before?: string }>(
+  request<{
+    messages: ChatMessage[];
+    has_more: boolean;
+    before?: string;
+    active_run?: ActiveRun | null;
+  }>(
     `/conversations/${encodeURIComponent(id)}/messages?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
     { signal },
   );
@@ -161,12 +172,17 @@ export async function streamRun(
   content: string,
   signal: AbortSignal,
   handlers: StreamRunHandlers,
+  opts?: { idempotencyKey?: string; afterSeq?: number },
 ): Promise<{ messageId?: string; runId?: string }> {
+  const headers: Record<string, string> = { 'X-XA-Stream': '2' };
+  if (opts?.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
+  if (opts?.afterSeq != null && opts.afterSeq > 0)
+    headers['Last-Event-ID'] = String(opts.afterSeq);
   const response = await fetchApi(
     `/conversations/${encodeURIComponent(conversationId)}/messages`,
     {
       method: 'POST',
-      headers: { 'X-XA-Stream': '2' },
+      headers,
       body: JSON.stringify({ content }),
       signal,
     },

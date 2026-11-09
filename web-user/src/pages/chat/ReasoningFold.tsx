@@ -10,7 +10,10 @@ export function ReasoningFold({ text, status }: Props) {
   const [open, setOpen] = useState(false);
   const title = status === 'streaming' ? '思考中…' : '已思考';
   return (
-    <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 text-sm text-zinc-600">
+    <div
+      className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 text-sm text-zinc-600"
+      data-testid="reasoning-fold"
+    >
       <button
         type="button"
         className="flex w-full items-center justify-between px-3 py-2 text-left"
