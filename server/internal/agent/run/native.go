@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"linq-bs/server/internal/infra/provider"
+	"linq-bs/server/internal/tool"
 )
 
 // NativeEngine 实现显式工具循环。
@@ -144,10 +145,22 @@ func insertRejectedResults(ctx context.Context, rc *RunContext, plan CallPlan) e
 			return err
 		}
 		ref := NewResultRef()
+		args := []byte(pc.Call.Arguments)
+		if len(args) == 0 {
+			args = []byte("{}")
+		}
+		effect := string(tool.EffectRead)
+		toolVersion := ""
+		if entry, ok := rc.Toolset.EntryByName(pc.Call.Name); ok {
+			effect = string(entry.Spec.Effect)
+			toolVersion = entry.Spec.Version
+		}
 		row := ToolResultRow{
 			ID: ref, RunID: rc.Run.ID, ConversationID: rc.Env.ConversationID,
 			OwnerUserID: rc.Env.Principal.UserID, Step: rc.Step, CallID: pc.Call.ID,
-			ToolName: pc.Call.Name, Status: "rejected", ErrorCode: pc.ErrorCode,
+			ToolName: pc.Call.Name, ToolVersion: toolVersion, Effect: effect,
+			Arguments: args, RawArguments: string(args), ArgsHash: argsHash(pc.Call.Name, args),
+			Status: "rejected", ErrorCode: pc.ErrorCode,
 			ErrorMessage: pc.ErrorMessage, ModelContent: content,
 		}
 		if err := rc.withToolTx(ctx, func(tx pgx.Tx) error {

@@ -146,11 +146,6 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 	if err := s.Store.UpdateRun(ctx, tx, run); err != nil {
 		return "", usage, outcome, err
 	}
-	if s.Memory != nil && in.MemoryEnabled && execErr == nil {
-		if err := s.Memory.EnqueueTx(ctx, tx, in.UserMessageID); err != nil {
-			return "", usage, outcome, err
-		}
-	}
 	if execErr != nil && outcome.Kind == OutcomeFailed {
 		return assistantID, usage, outcome, execErr
 	}
@@ -181,28 +176,4 @@ func ToolSchemaSegment(toolset tool.Toolset) (runtime.Segment, error) {
 	return runtime.Segment{
 		Name: "tool_schemas", Role: "system", EstimatedTokens: runtime.EstimateTokens(string(raw)), ItemIDs: names,
 	}, nil
-}
-
-// PublicUserMessage 将内部错误映射为用户可见中文（供 HTTP 层调用）。
-func PublicUserMessage(err error) string {
-	if err == nil {
-		return ""
-	}
-	var pe *provider.ProviderError
-	if strings.Contains(err.Error(), "对话正在生成") {
-		return "对话正在生成回复，请稍后再试"
-	}
-	if strings.Contains(err.Error(), "消息不能为空") {
-		return "消息不能为空"
-	}
-	if strings.Contains(err.Error(), "已停止") {
-		return "已停止生成"
-	}
-	if pe != nil || pe == nil {
-		if pe2 := pe; pe2 == nil {
-			_ = pe2
-		}
-	}
-	_ = pe
-	return "暂时无法完成回复，请稍后重试"
 }

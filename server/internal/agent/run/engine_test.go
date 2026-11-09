@@ -321,6 +321,7 @@ func TestHugeResultTruncationAndToolResultRead(t *testing.T) {
 func TestV1RejectsApprovalToolCall(t *testing.T) {
 	reg := tool.NewRegistry()
 	_ = toolfake.Register(reg)
+	toolfake.ResetCounters()
 	ts, err := reg.Resolve(tool.ResolveInput{
 		Bindings: []binding.ToolBinding{{Name: "fake_approval", Enabled: true}}, CanApprove: false,
 	})
@@ -336,10 +337,47 @@ func TestV1RejectsApprovalToolCall(t *testing.T) {
 	if !found {
 		t.Fatal("审批工具应在 v1 排除")
 	}
+	for _, mt := range ts.ModelTools() {
+		if mt.Name == "fake_approval" {
+			t.Fatal("ModelTools 不得含 fake_approval")
+		}
+	}
 	plan := Validate([]provider.ToolCall{{ID: "a1", Name: "fake_approval", Arguments: `{}`}},
 		testRC(t, NewMemStore(), reg, &FakeProvider{}, definition.RuntimeLimits{MaxToolCalls: 4}, ts))
 	if plan.Items[0].ErrorCode != RejectToolUnavailable {
 		t.Fatal(plan.Items[0].ErrorCode)
+	}
+	store := NewMemStore()
+	limits := definition.RuntimeLimits{MaxModelTurns: 4, MaxToolCalls: 4}
+	rc := testRC(t, store, reg, &FakeProvider{Script: []FakeScriptEntry{
+		ScriptToolCalls("", provider.ToolCall{ID: "a1", Name: "fake_approval", Arguments: `{}`}),
+		ScriptResponse("已拒绝审批工具"),
+	}}, limits, ts)
+	out, err := (&NativeEngine{}).Execute(context.Background(), rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Kind == OutcomeWaitingApproval {
+		t.Fatal("P3 不得进入 waiting_approval")
+	}
+	if out.Kind != OutcomeCompleted {
+		t.Fatal(out.Kind)
+	}
+	if toolfake.ApprovalCount() != 0 {
+		t.Fatal("审批工具 Execute 不得被调用")
+	}
+	msgs, _ := store.ListRunMessages(context.Background(), rc.Run.ID)
+	var sawTool bool
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID == "a1" {
+			sawTool = true
+			if !strings.Contains(m.Content, "client_cannot_approve") && !strings.Contains(m.Content, "不可用") {
+				t.Fatal(m.Content)
+			}
+		}
+	}
+	if !sawTool {
+		t.Fatal("应写入拒绝 tool 消息")
 	}
 }
 

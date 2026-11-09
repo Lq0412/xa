@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"linq-bs/server/internal/agent/binding"
 	"linq-bs/server/internal/agent/conversation"
 	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/agent/memory"
@@ -86,6 +87,14 @@ func TestMemoryS1(t *testing.T) {
 	save.Configuration.Model = "qwen3.8-flash"
 	save.Configuration.SoulMD = "简短回答，不超过一句话。回答用户个人情况时使用记忆中的事实。"
 	save.Configuration.MemoryPolicy = json.RawMessage(`{"enabled":true,"history_budget_tokens":6000,"core_budget_tokens":800,"summary_trigger_tokens":3000}`)
+	// 记忆验收不依赖工具循环，关闭默认工具以免干扰真实抽取。
+	save.Configuration.Tools = []binding.ToolBinding{
+		{Name: "current_time", Enabled: false},
+		{Name: "memory_search", Enabled: false},
+		{Name: "memory_write", Enabled: false},
+		{Name: "memory_forget", Enabled: false},
+		{Name: "tool_result_read", Enabled: false},
+	}
 	saved, err := agents.Save(ctx, p, save)
 	if err != nil {
 		t.Fatal(err)
