@@ -32,6 +32,7 @@ import {
   setAgentStatus,
 } from '@/services/xa/api';
 import { ApiError } from '@/services/xa/request';
+import { BEFORE_SIGN_OUT, TOKEN_KEY } from '@/services/xa/session';
 
 type EditorData = {
   agent?: XA.Agent;
@@ -48,6 +49,14 @@ export default function AgentEditorPage() {
       id ? getAgentConfig(id) : undefined,
       listTools(),
     ]);
+    // 元数据和配置必须来自同一版本，避免提交时覆盖并发更新。
+    if (agent && version && agent.current_version_id !== version.id) {
+      throw new ApiError(
+        409,
+        'agent_conflict',
+        '配置在读取时发生更新，请重试。',
+      );
+    }
     return { agent, version, tools: catalog.tools };
   }, [id]);
   const { data, loading, error, reload } = useResource(load);
@@ -95,19 +104,28 @@ function AgentEditor({
   const [deleting, setDeleting] = useState(false);
   const [saved, setSaved] = useState(false);
   const releaseNavigation = useRef<(() => void) | undefined>(undefined);
+  const tagsChanged = tags !== initial.tags.join(', ');
   const dirty =
     !saved &&
-    (JSON.stringify(draft) !== JSON.stringify(initial) ||
-      tags !== initial.tags.join(', '));
-  // 浏览器刷新和应用内离开都保护未保存内容。
+    (JSON.stringify(draft) !== JSON.stringify(initial) || tagsChanged);
+  // 退出登录先确认草稿，会话失效时直接返回登录页。
   useEffect(() => {
     if (!dirty) return;
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
+      if (localStorage.getItem(TOKEN_KEY)) event.preventDefault();
+    };
+    const beforeSignOut = (event: Event) => {
+      if (!window.confirm('放弃未保存的更改并退出登录？')) {
+        event.preventDefault();
+      }
     };
     window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener(BEFORE_SIGN_OUT, beforeSignOut);
     const unblock = history.block((transition) => {
-      if (window.confirm('放弃未保存的更改？')) {
+      if (
+        !localStorage.getItem(TOKEN_KEY) ||
+        window.confirm('放弃未保存的更改？')
+      ) {
         unblock();
         transition.retry();
       }
@@ -115,6 +133,7 @@ function AgentEditor({
     releaseNavigation.current = unblock;
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
+      window.removeEventListener(BEFORE_SIGN_OUT, beforeSignOut);
       unblock();
       releaseNavigation.current = undefined;
     };
@@ -149,10 +168,12 @@ function AgentEditor({
     const input = {
       ...draft,
       name: draft.name.trim(),
-      tags: tags
-        .split(/[,，]/)
-        .map((tag) => tag.trim())
-        .filter(Boolean),
+      tags: tagsChanged
+        ? tags
+            .split(/[,，]/)
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+        : initial.tags,
       configuration: { ...draft.configuration, prompts: undefined },
     };
     if (!input.name) {

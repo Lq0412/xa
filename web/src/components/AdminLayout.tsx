@@ -23,7 +23,12 @@ import {
 import Loading from '@/loading';
 import { getCurrentUser, logout } from '@/services/xa/api';
 import { ApiError } from '@/services/xa/request';
-import { LOGIN_PATH, redirectToLogin, TOKEN_KEY } from '@/services/xa/session';
+import {
+  BEFORE_SIGN_OUT,
+  LOGIN_PATH,
+  redirectToLogin,
+  TOKEN_KEY,
+} from '@/services/xa/session';
 import { ErrorNotice, ResultPage } from './Page';
 
 const userWeb = process.env.XA_USER_WEB_URL;
@@ -79,6 +84,9 @@ function AdminShell({ user }: { user: XA.User }) {
   const { canAdmin } = access({ currentUser: user });
   const name = user.display_name || user.email;
   async function signOut() {
+    // 配置页先确认是否放弃草稿，取消时保留原会话。
+    if (!window.dispatchEvent(new Event(BEFORE_SIGN_OUT, { cancelable: true })))
+      return;
     setSigningOut(true);
     setError('');
     try {

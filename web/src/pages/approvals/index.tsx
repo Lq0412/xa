@@ -61,8 +61,9 @@ export default function ApprovalsPage() {
   );
   const { data, loading, error, reload } = useResource(load);
   const catalog = useResource(loadTools);
-  const selected =
-    data?.approvals.find((row) => row.id === selectedId) ?? data?.approvals[0];
+  const selected = selectedId
+    ? data?.approvals.find((row) => row.id === selectedId)
+    : data?.approvals[0];
   function change(values: Record<string, string>) {
     const next = new URLSearchParams(values);
     setParams(next);
@@ -136,7 +137,7 @@ export default function ApprovalsPage() {
           aria-busy={loading}
         >
           {error ? (
-            <ErrorNotice>{error}</ErrorNotice>
+            !selectedId && <ErrorNotice>{error}</ErrorNotice>
           ) : loading ? (
             <div className="space-y-4 p-3">
               {[1, 2, 3].map((i) => (
@@ -245,7 +246,14 @@ export default function ApprovalsPage() {
             <ArrowLeft size={14} />
             确认记录
           </button>
-          {loading ? (
+          {error && selectedId ? (
+            <div className="space-y-2">
+              <ErrorNotice>{error}</ErrorNotice>
+              <Button variant="ghost" onClick={reload}>
+                重试
+              </Button>
+            </div>
+          ) : loading ? (
             <Skeleton className="h-40" />
           ) : selected ? (
             <>
@@ -310,7 +318,9 @@ export default function ApprovalsPage() {
               </button>
             </>
           ) : (
-            <p className="empty-state">选择一条记录</p>
+            <p className="empty-state">
+              {selectedId ? '未找到这条确认记录' : '选择一条记录'}
+            </p>
           )}
         </article>
       </div>
