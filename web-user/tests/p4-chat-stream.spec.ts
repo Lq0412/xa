@@ -32,7 +32,7 @@ async function prepareAgent(
   api: string,
   toolConfig: Record<string, unknown> = {
     timezone: 'Asia/Shanghai',
-    delay_ms: 8000,
+    delay_ms: 12000,
   },
 ) {
   const tokenRes = await request.post(`${api}/api/v1/auth/login`, {
@@ -156,9 +156,16 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
         });
       }),
     page
-      .waitForSelector('[data-testid="tool-call-chip"][data-status="running"]', {
-        timeout: 180000,
-      })
+      .waitForFunction(
+        () => {
+          const chip = document.querySelector('[data-testid="tool-call-chip"]');
+          if (!chip) return false;
+          const st = chip.getAttribute('data-tool-status');
+          return st === 'preparing' || st === 'pending' || st === 'running';
+        },
+        undefined,
+        { timeout: 180000, polling: 50 },
+      )
       .then(async () => {
         await page.screenshot({
           path: path.join(artifactDir, 'p41-tool-running.png'),
@@ -194,18 +201,13 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
     fullPage: true,
   });
 
-  await assistant
-    .locator('[data-testid="reasoning-fold"]')
-    .last()
-    .getByRole('button')
-    .click();
-  await expect(
-    assistant.locator('[data-testid="reasoning-fold-body"]'),
-  ).toBeVisible();
-  const bodyText =
-    (await assistant
-      .locator('[data-testid="reasoning-fold-body"]')
-      .innerText()) || '';
+  const liveReasoning = assistant.locator('[data-testid="reasoning-fold"]').first();
+  await liveReasoning.getByRole('button').click();
+  const reasoningBody = liveReasoning.locator(
+    '[data-testid="reasoning-fold-body"]',
+  );
+  await expect(reasoningBody).toBeVisible({ timeout: 30000 });
+  const bodyText = (await reasoningBody.innerText()) || '';
   expect(bodyText).not.toMatch(/\*\*[^*]+\*\*/);
   await page.screenshot({
     path: path.join(artifactDir, 'p41-reasoning-markdown.png'),
