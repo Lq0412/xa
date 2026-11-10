@@ -292,13 +292,14 @@ test('P4.1 流式：一行过程、时间线、历史用时、失败', async ({
   const histBody = (await hist.json()) as {
     messages: {
       role: string;
+      run_id?: string;
       parts?: { type: string; duration_ms?: number; text?: string }[];
     }[];
   };
-  const assistantMsg = [...histBody.messages]
-    .reverse()
-    .find((m) => m.role === 'assistant');
-  const reasoning = assistantMsg?.parts?.find((p) => p.type === 'reasoning');
+  // 接口按时间从早到晚返回。失败轮也在这条会话里，取最后一条会读到那一轮较短的思考。
+  const firstAssistant = histBody.messages.find((m) => m.role === 'assistant');
+  expect(firstAssistant?.run_id).toBeTruthy();
+  const reasoning = firstAssistant?.parts?.find((p) => p.type === 'reasoning');
   expect(reasoning?.text ?? '').toBe('');
   expect(reasoning?.duration_ms ?? 0).toBeGreaterThan(1000);
 
