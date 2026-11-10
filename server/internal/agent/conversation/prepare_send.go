@@ -25,7 +25,7 @@ type preparedSend struct {
 	Segments     []byte
 }
 
-func (s *Service) prepareSend(ctx context.Context, tx pgx.Tx, p auth.Principal, id, content string) (preparedSend, error) {
+func (s *Service) prepareSend(ctx context.Context, tx pgx.Tx, p auth.Principal, id, content string, protocol int) (preparedSend, error) {
 	if strings.TrimSpace(content) == "" {
 		return preparedSend{}, fmt.Errorf("消息不能为空")
 	}
@@ -85,7 +85,7 @@ func (s *Service) prepareSend(ctx context.Context, tx pgx.Tx, p auth.Principal, 
 		return preparedSend{}, fmt.Errorf("工具注册表未配置")
 	}
 	toolset, err := s.Registry.Resolve(tool.ResolveInput{
-		Bindings: version.Configuration.Tools, MemoryPolicy: policy, Principal: p, CanApprove: false,
+		Bindings: version.Configuration.Tools, MemoryPolicy: policy, Principal: p, CanApprove: protocol >= 2,
 	})
 	if err != nil {
 		return preparedSend{}, err

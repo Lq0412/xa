@@ -25,6 +25,7 @@ import {
   getConversationSummary,
 } from '@/services/chat';
 import type { MemoryPolicyResult } from '@/services/memory';
+import { AgentTools } from './AgentTools';
 import {
   MemoryCard,
   type MemoryCue,
@@ -492,6 +493,7 @@ export function AgentDetails({
                 </div>
                 <MemoryCard memory={memory} date={date} />
               </div>
+              {editable && <AgentTools agent={agent} onSaved={onSaved} />}
             </TabsContent>
             <TabsContent
               value="about"

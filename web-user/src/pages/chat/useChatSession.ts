@@ -14,6 +14,7 @@ import {
   resumeRun,
   streamRun,
 } from '@/services/chat';
+import { applyRunEvent } from '@/services/chat-run';
 import { errorMessage } from '@/services/http';
 import type { MemoryCue } from './MemoryPanel';
 
@@ -67,7 +68,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     seq: 0,
   });
   const controllers = useRef(new Map<string, AbortController>());
-  const activeRun = useRef<{ runId: string } | null>(null);
+  const activeRuns = useRef(new Map<string, string>());
   const mounted = useRef(true);
 
   const update = useCallback(
@@ -89,10 +90,24 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
   );
 
   const resumeActiveRun = useCallback(
-    async (convId: string, targetKey: string, active: ActiveRun) => {
+    async (
+      convId: string,
+      targetKey: string,
+      active: ActiveRun,
+      agentId: string,
+    ) => {
       if (active.status !== 'running' && active.status !== 'waiting_approval')
         return;
       const assistantId = `resume-${active.id}`;
+      const fallbackParts = (active.pending_approvals ?? []).reduce(
+        (parts, approval) =>
+          applyRunEvent(parts, {
+            ...approval,
+            type: 'approval.required',
+            seq: 0,
+          }),
+        [] as NonNullable<ChatMessage['parts']>,
+      );
       const controller = new AbortController();
       controllers.current.set(`resume:${targetKey}`, controller);
       update(targetKey, (state) => {
@@ -123,43 +138,56 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
               content: '',
               status: 'pending' as const,
               run_id: active.id,
+              parts: fallbackParts,
             },
           ],
           sending: true,
         };
       });
-      activeRun.current = { runId: active.id };
+      activeRuns.current.set(targetKey, active.id);
       try {
-        const cached = cache.current.get(targetKey)?.messages ?? [];
-        const seed =
-          cached.find((m) => m.run_id === active.id) ??
-          [...cached].reverse().find((m) => m.role === 'assistant');
-        const after = active.last_event_seq > 0 ? active.last_event_seq : 0;
-        await resumeRun(
-          active.id,
-          after,
-          controller.signal,
-          {
-            onParts: (parts, content) => {
-              update(targetKey, (state) => ({
-                messages: state.messages.map((message) =>
-                  message.run_id === active.id || message.id === assistantId
-                    ? { ...message, content, parts, run_id: active.id }
-                    : message,
-                ),
-              }));
-            },
+        await resumeRun(active.id, 0, controller.signal, {
+          onParts: (parts, content) => {
+            // 服务端快照可先显示按钮，重放事件仍按原始顺序构建时间线。
+            const restored = (active.pending_approvals ?? []).reduce(
+              (current, approval) => {
+                const existing = current.find(
+                  (part) =>
+                    part.type === 'tool' && part.call_id === approval.call_id,
+                );
+                if (
+                  existing?.type === 'tool' &&
+                  (existing.approval || existing.status !== 'pending')
+                )
+                  return current;
+                return applyRunEvent(current, {
+                  ...approval,
+                  type: 'approval.required',
+                  seq: 0,
+                });
+              },
+              parts,
+            );
+            update(targetKey, (state) => ({
+              messages: state.messages.map((message) =>
+                message.id === assistantId ||
+                (message.role === 'assistant' && message.run_id === active.id)
+                  ? { ...message, content, parts: restored, run_id: active.id }
+                  : message,
+              ),
+            }));
           },
-          {
-            parts: seed?.parts,
-            content: seed?.content,
-          },
-        );
+        });
+        setMemoryCue((cue) => ({ agentId, seq: cue.seq + 1 }));
         const historyPage = await listMessages(convId, controller.signal);
         update(targetKey, (state) => {
           const latest = (historyPage.messages ?? []).map((message) => {
             const local = state.messages.find(
-              (item) => item.id === message.id || item.run_id === active.id,
+              (item) =>
+                item.id === message.id ||
+                (message.role === 'assistant' &&
+                  message.run_id === active.id &&
+                  item.id === assistantId),
             );
             if (message.parts?.length)
               return mergeMessagePartsFromLocal(message, local);
@@ -184,7 +212,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       } finally {
         update(targetKey, { sending: false });
         controllers.current.delete(`resume:${targetKey}`);
-        activeRun.current = null;
+        activeRuns.current.delete(targetKey);
       }
     },
     [update],
@@ -286,7 +314,12 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         sendError: '',
       });
       if (conversationID && result.active_run) {
-        void resumeActiveRun(conversationID, key, result.active_run);
+        void resumeActiveRun(
+          conversationID,
+          key,
+          result.active_run,
+          targetAgent,
+        );
       }
       if (
         selectedKey.current === key &&
@@ -405,7 +438,6 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
           ...items.filter((conversation) => conversation.id !== id),
         ];
       });
-      activeRun.current = null;
       const idempotencyKey = crypto.randomUUID();
       const result = await streamRun(
         id,
@@ -413,7 +445,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         controller.signal,
         {
           onRunID: (runId) => {
-            activeRun.current = { runId };
+            activeRuns.current.set(targetKey, runId);
           },
           onParts: (parts, content) => {
             update(targetKey, (state) => ({
@@ -444,8 +476,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
           const local = state.messages.find(
             (item) =>
               item.id === message.id ||
-              item.id === assistantID ||
-              item.id === savedID,
+              (message.id === savedID && item.id === assistantID),
           );
           if (message.parts?.length)
             return mergeMessagePartsFromLocal(message, local);
@@ -490,10 +521,18 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     } finally {
       update(targetKey, { sending: false, creating: false });
       controllers.current.delete(`send:${targetKey}`);
+      activeRuns.current.delete(targetKey);
     }
   };
 
   const current = sessions.get(key) || emptySession;
+  const waitingApproval = current.messages.some(
+    (message) =>
+      message.status === 'pending' &&
+      message.parts?.some(
+        (part) => part.type === 'tool' && part.status === 'awaiting_approval',
+      ),
+  );
   const loadOlder = async () => {
     const state = cache.current.get(key) || emptySession;
     if (
@@ -528,6 +567,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
 
   return {
     ...current,
+    waitingApproval,
     key,
     agentID,
     conversationID,
@@ -547,10 +587,40 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       }
     },
     send,
-    stop: () => {
-      const runId = activeRun.current?.runId;
-      if (runId) void cancelRun(runId);
+    stop: async () => {
+      const runId = activeRuns.current.get(key);
+      try {
+        if (runId) await cancelRun(runId);
+      } catch (cause) {
+        update(key, { sendError: errorMessage(cause) });
+        return;
+      }
       controllers.current.get(`send:${key}`)?.abort();
+      controllers.current.get(`resume:${key}`)?.abort();
+      update(key, (state) => ({
+        sending: false,
+        messages: state.messages.map((message) =>
+          message.status === 'pending'
+            ? {
+                ...message,
+                status: 'stopped',
+                parts: message.parts?.map((part) =>
+                  part.type === 'tool' &&
+                  (part.status === 'awaiting_approval' ||
+                    part.status === 'pending')
+                    ? {
+                        ...part,
+                        status: 'cancelled',
+                        approval: part.approval
+                          ? { ...part.approval, decision: 'cancelled' }
+                          : undefined,
+                      }
+                    : part,
+                ),
+              }
+            : message,
+        ),
+      }));
     },
     setDraft: (draft: string) => update(key, { draft }),
     retry: () => void load(),

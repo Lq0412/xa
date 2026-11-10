@@ -21,8 +21,9 @@ test('管理端仅展示可用模块，已删除页面返回 404', async ({ page
   );
   try {
     const menu = page.getByRole('menu');
-    await expect(menu.getByRole('link')).toHaveCount(2);
+    await expect(menu.getByRole('link')).toHaveCount(3);
     await expect(menu.getByRole('link', { name: /平台概览/ })).toBeVisible();
+    await expect(menu.getByRole('link', { name: /审批记录/ })).toBeVisible();
     await page.getByRole('link', { name: '进入 Agent 管理' }).click();
     await expect(page).toHaveURL(/\/agents$/);
     await page.reload();

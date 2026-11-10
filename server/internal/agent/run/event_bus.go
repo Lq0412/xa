@@ -169,6 +169,7 @@ func (b *EventBus) MessageDelta(ctx context.Context, delta string) error {
 	b.msgBuf.WriteString(delta)
 	if b.msgBuf.Len() >= b.deltaCoalesceLen {
 		b.flushDeltasLocked()
+		b.flushBatchLocked(false)
 	} else {
 		b.scheduleDeltaFlushLocked()
 	}
@@ -265,6 +266,7 @@ func (b *EventBus) scheduleDeltaFlushLocked() {
 			return
 		}
 		b.flushDeltasLocked()
+		b.flushBatchLocked(false)
 	})
 }
 
@@ -336,6 +338,12 @@ func (b *EventBus) persistOne(ctx context.Context, pe pendingEvent) error {
 			return err
 		}
 	}
+	b.publishRedis(ctx, pe)
+	return nil
+}
+
+// publishRedis 推送已落盘的事件，订阅者可以从 PostgreSQL 补齐未送达的事件。
+func (b *EventBus) publishRedis(ctx context.Context, pe pendingEvent) {
 	if b.RedisOK() && b.Redis != nil {
 		key := "xa:run:" + b.RunID + ":events"
 		_ = b.Redis.XAdd(ctx, &redisclient.XAddArgs{
@@ -347,7 +355,6 @@ func (b *EventBus) persistOne(ctx context.Context, pe pendingEvent) error {
 			_ = b.Redis.Expire(ctx, key, 24*time.Hour).Err()
 		}
 	}
-	return nil
 }
 
 func (b *EventBus) notifySubscribers(pe pendingEvent) {

@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,6 +13,7 @@ type Sweeper struct {
 	DB       *pgxpool.Pool
 	Interval time.Duration
 	Stale    time.Duration
+	Runs     *RunService
 }
 
 // Run 阻塞运行 sweeper，直到 ctx 取消。
@@ -40,6 +42,11 @@ func (sw *Sweeper) TickOnce(ctx context.Context) {
 }
 
 func (sw *Sweeper) tick(ctx context.Context) {
+	if sw.Runs != nil {
+		if err := sw.Runs.ExpireApprovals(ctx); err != nil {
+			slog.Error("审批超时处理失败", "error", err)
+		}
+	}
 	var locked bool
 	if err := sw.DB.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext('xa_run_sweeper'))`).Scan(&locked); err != nil || !locked {
 		return
@@ -76,5 +83,6 @@ RETURNING 1`, runID).Scan(&updated); err != nil || updated == 0 {
 	}
 	_, _ = tx.Exec(ctx, `UPDATE tool_results SET status='unknown' WHERE run_id=$1 AND status='running' AND effect!='read'`, runID)
 	_, _ = tx.Exec(ctx, `UPDATE tool_results SET status='cancelled' WHERE run_id=$1 AND status='running' AND effect='read'`, runID)
+	_, _ = tx.Exec(ctx, `UPDATE run_approvals SET status='cancelled',decided_at=now() WHERE run_id=$1 AND status='pending'`, runID)
 	_ = tx.Commit(ctx)
 }

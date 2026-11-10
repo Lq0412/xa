@@ -27,6 +27,7 @@ import (
 type Server struct {
 	config config.Config
 	logger *slog.Logger
+	runs   *agentrun.RunService
 }
 
 // NewServer 创建 server 进程的依赖装配入口。
@@ -41,10 +42,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if err != nil {
 			return nil, err
 		}
-		go (&agentrun.Sweeper{
-			DB: db, Interval: time.Duration(s.config.Run.SweepIntervalSec) * time.Second,
-			Stale: time.Duration(s.config.Run.StaleAfterSec) * time.Second,
-		}).Run(ctx)
+		go (&agentrun.Sweeper{DB: db, Runs: s.runs, Interval: time.Duration(s.config.Run.SweepIntervalSec) * time.Second, Stale: time.Duration(s.config.Run.StaleAfterSec) * time.Second}).Run(ctx)
 		return h, nil
 	})
 }
@@ -79,10 +77,11 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	agents.ToolValidator = registry.ValidateBindings
 	runStore := agentrun.NewPGStore(db)
 	runSvc := &agentrun.RunService{
-		DB: db, Store: runStore, Registry: registry, Provider: chatProvider, Memory: memories,
+		DB: db, Store: runStore, Registry: registry, Provider: chatProvider, Memory: memories, Agents: agents,
 		Engine: &agentrun.NativeEngine{}, Redis: cache, RedisOK: func() bool { return cache != nil },
 		Config: s.config.Run, Coord: agentrun.NewCoordinator(), InstanceID: "server",
 	}
+	s.runs = runSvc
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
 	agentHandler := &agenthttp.ManagementHandler{Agents: agents, AllowedModels: s.config.ChatModels}
 	libraryHandler := &agenthttp.LibraryHandler{Library: &agentdefinition.Library{DB: db}}
@@ -133,6 +132,8 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("POST /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Send)))
 	mux.Handle("GET /api/v1/runs/{run_id}/events", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Events)))
 	mux.Handle("POST /api/v1/runs/{run_id}/cancel", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Cancel)))
+	mux.Handle("POST /api/v1/approvals/{approval_id}/decision", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Decision)))
+	mux.Handle("GET /api/v1/admin/approvals", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ApprovalRecords)))
 	handler := http.Handler(mux)
 	if raw := strings.TrimSpace(os.Getenv("XA_HTTP_CORS_ORIGINS")); raw != "" {
 		handler = frameworkhttp.WithAllowOrigins(strings.Split(raw, ","), mux)

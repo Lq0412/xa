@@ -29,6 +29,13 @@ export default [
     component: './agents',
   },
   {
+    path: '/approvals',
+    name: '审批记录',
+    icon: 'checkCircle',
+    access: 'canAdmin',
+    component: './approvals',
+  },
+  {
     path: '/',
     redirect: '/overview',
   },

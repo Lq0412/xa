@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,16 +21,24 @@ type StreamStartInput struct {
 	IdempotencyKey string
 	RequestHash    string
 	EnableThinking bool
+	resume         *RunContext
+	writerToken    string
 }
 
-// DriveRun 在独立上下文中执行引擎并发出终止事件。
+// DriveRun 推进到等待审批或终态，退出时释放本次执行的写锁。
 func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *EventBus, v1 *Emitter) error {
 	if s.Coord == nil {
 		s.Coord = NewCoordinator()
 	}
 	runCtx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
 	s.Coord.Register(in.RunID, cancel, bus)
 	defer s.Coord.Finish(in.RunID)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
+		defer cancel()
+		releaseConvLock(ctx, s.Redis, in.Conversation.ID, in.writerToken)
+	}()
 
 	sink := NewCombinedSink(v1, bus)
 	if v1 == nil {
@@ -57,21 +66,37 @@ func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *
 		},
 		Limits: in.Limits, Emitter: sink, Bus: bus, EnableThinking: in.EnableThinking,
 		WallStarted: time.Now().UTC(), CallHashes: map[string]int{}, PerToolCalls: map[string]int{},
+		ApprovalTTL: time.Duration(s.Config.ApprovalTTLSec) * time.Second, LeaseOwner: s.InstanceID, Segments: in.Segments,
+		CanManageAgent: in.Agent.OwnerUserID == in.Principal.UserID,
+	}
+	if in.resume != nil {
+		rc = in.resume
+		rc.Emitter, rc.Bus = sink, bus
+		rc.WallStarted = time.Now().Add(-time.Duration(rc.Run.ActiveMS) * time.Millisecond)
 	}
 	bus.SetStepProvider(func() int { return rc.Step })
 
-	if s.Redis != nil {
-		_ = acquireConvLock(runCtx, s.Redis, in.Conversation.ID, runID, s.leaseTTL())
+	if in.resume == nil {
+		in.writerToken, _ = acquireConvLock(runCtx, s.Redis, in.Conversation.ID, runID, s.leaseTTL())
 	}
 	stopLease := s.heartbeatLease(runCtx, runID)
 	defer stopLease()
 
-	emitRunStarted(runCtx, rc, in)
-	stopWatch := s.startRunWatchers(runCtx, runID, in.StreamProtocol, cancel)
+	if in.resume == nil {
+		emitRunStarted(runCtx, rc, in)
+	} else if cancelRequested(runCtx, s.Redis, runID) {
+		cancel(errors.New("user_cancel"))
+	}
+	stopWatch := s.startRunWatchers(runCtx, runID, in.StreamProtocol >= 2 && in.resume == nil, cancel)
 	defer stopWatch()
 
-	began := time.Now()
 	outcome, execErr := engine.Execute(runCtx, rc)
+	if outcome.Kind == OutcomeWaitingApproval {
+		return execErr
+	}
+	if execErr != nil && outcome.Kind == "" {
+		outcome = Outcome{Kind: OutcomeFailed, Code: "internal_error", Message: "生成失败"}
+	}
 	if runCtx.Err() != nil {
 		cause := context.Cause(runCtx)
 		if errors.Is(runCtx.Err(), context.Canceled) || errors.Is(cause, context.Canceled) ||
@@ -80,7 +105,7 @@ func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *
 			execErr = nil
 		}
 	}
-	latency := time.Since(began).Milliseconds()
+	latency := ActiveMS(rc.WallStarted)
 	return s.finalizeStreamingRun(runCtx, rc, outcome, execErr, latency, in)
 }
 
@@ -108,11 +133,14 @@ func emitRunStarted(ctx context.Context, rc *RunContext, in StreamStartInput) {
 }
 
 func (s *RunService) finalizeStreamingRun(ctx context.Context, rc *RunContext, outcome Outcome, execErr error, latency int64, in StreamStartInput) error {
+	if outcome.Kind == OutcomeWaitingApproval {
+		return nil
+	}
 	ctx = context.WithoutCancel(ctx)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	usage := provider.Usage{PromptTokens: rc.Run.PromptTokens, CompletionTokens: rc.Run.CompletionTokens}
+	usage := provider.Usage{PromptTokens: rc.Run.PromptTokens, CompletionTokens: rc.Run.CompletionTokens, CachedTokens: rc.Run.CachedTokens, TotalTokens: rc.Budget.TotalTokens}
 	visible := rc.VisibleText.String()
 	if visible == "" && outcome.Kind == OutcomeCompleted {
 		visible = "（无回复内容）"
@@ -164,6 +192,13 @@ func (s *RunService) finalizeStreamingRun(ctx context.Context, rc *RunContext, o
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var unexecuted []ToolResultRow
+	if in.StreamProtocol >= 2 && outcome.Kind != OutcomeCompleted {
+		unexecuted, err = s.closePendingCalls(ctx, rc, tx)
+		if err != nil {
+			return err
+		}
+	}
 
 	assistantID := "msg_" + uuid.NewString()
 	segments := in.Segments
@@ -199,12 +234,15 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		typ = EventRunFailed
 	}
 	if rc.Emitter != nil {
+		for _, row := range unexecuted {
+			entry, _ := rc.Toolset.EntryByName(row.ToolName)
+			emitToolCompleted(ctx, rc, row, entry, 0)
+		}
 		_ = rc.Emitter.Emit(ctx, typ, termPayload)
 	}
 	if rc.Bus != nil {
 		rc.Bus.Close()
 	}
-	releaseConvLock(ctx, s.Redis, in.Conversation.ID, in.RunID)
 	if execErr != nil && outcome.Kind == OutcomeFailed {
 		return execErr
 	}
@@ -234,13 +272,16 @@ func terminalPayload(assistantID string, run Run, outcome Outcome, errText strin
 	}
 }
 
-func (s *RunService) startRunWatchers(ctx context.Context, runID string, streamProtocol int, cancel context.CancelCauseFunc) func() {
+func (s *RunService) startRunWatchers(ctx context.Context, runID string, watchPresence bool, cancel context.CancelCauseFunc) func() {
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	grace := time.Duration(s.Config.ReconnectGraceSec) * time.Second
-	if streamProtocol < 2 {
+	// 批准、拒绝或到期后要留下完整答复，续跑只监听显式取消。
+	if !watchPresence {
 		grace = 0
 	}
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		var missingSince time.Time
@@ -276,7 +317,7 @@ func (s *RunService) startRunWatchers(ctx context.Context, runID string, streamP
 			}
 		}
 	}()
-	return func() { close(stop) }
+	return sync.OnceFunc(func() { close(stop); <-done })
 }
 
 func cancelRequested(ctx context.Context, r redisclient.Cmdable, runID string) bool {
@@ -297,12 +338,14 @@ func (s *RunService) heartbeatLease(ctx context.Context, runID string) func() {
 	}
 	ttl := s.leaseTTL()
 	renew := func() {
-		_, _ = s.DB.Exec(ctx, `UPDATE runs SET lease_owner=$2,lease_expires_at=now()+($3::text||' milliseconds')::interval,heartbeat_at=now() WHERE id=$1`,
+		_, _ = s.DB.Exec(ctx, `UPDATE runs SET lease_owner=$2,lease_expires_at=now()+($3::text||' milliseconds')::interval,heartbeat_at=now() WHERE id=$1 AND status='running'`,
 			runID, owner, int(ttl.Milliseconds()))
 	}
 	renew()
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(ttl / 3)
 		defer ticker.Stop()
 		for {
@@ -316,5 +359,5 @@ func (s *RunService) heartbeatLease(ctx context.Context, runID string) func() {
 			}
 		}
 	}()
-	return func() { close(stop) }
+	return sync.OnceFunc(func() { close(stop); <-done })
 }

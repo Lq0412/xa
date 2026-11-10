@@ -100,7 +100,7 @@ func (r *Registry) Resolve(in ResolveInput) (Toolset, error) {
 				}
 			}
 		}
-		if entry.Approval == ApprovalAlways && !in.CanApprove {
+		if !in.CanApprove && (entry.Approval == ApprovalAlways || spec.Approval.Default == ApprovalAlways) {
 			entry.Enabled = false
 			entry.Reason = "client_cannot_approve"
 		}

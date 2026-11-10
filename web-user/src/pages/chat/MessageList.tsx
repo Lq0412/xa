@@ -257,6 +257,9 @@ export function MessageList({
                         </p>
                       )}
                       <article
+                        id={
+                          message.run_id ? `run-${message.run_id}` : undefined
+                        }
                         data-message-id={message.id}
                         data-message-status={message.status}
                         data-parts-count={message.parts?.length ?? 0}

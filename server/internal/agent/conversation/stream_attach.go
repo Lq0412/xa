@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"linq-bs/server/internal/agent/run"
 )
 
@@ -14,19 +15,30 @@ func (s *Service) subscribeRunEvents(ctx context.Context, runID string, opts Str
 	if s.Runs == nil {
 		return fmt.Errorf("RunService 未配置")
 	}
-	presence := time.NewTicker(5 * time.Second)
-	defer presence.Stop()
-	return run.Subscribe(ctx, s.Runs.Store, s.Runs.Redis, s.Runs.RedisOK, runID, run.StreamOptions{
-		AfterSeq: opts.AfterSeq, HeartbeatEvery: 15 * time.Second,
-	}, func(ev run.StoredEvent) error {
-		select {
-		case <-presence.C:
-			run.TouchPresence(ctx, s.Runs.Redis, runID, "attach")
-			if opts.OnPresence != nil {
-				opts.OnPresence()
+	// 思考和等待审批时可能没有事件，连接存活标记由独立时钟刷新。
+	if opts.Protocol >= 2 && s.Runs.Redis != nil {
+		presenceCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		subID := uuid.NewString()
+		run.TouchPresence(presenceCtx, s.Runs.Redis, runID, subID)
+		go func() {
+			defer close(done)
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-presenceCtx.Done():
+					return
+				case <-ticker.C:
+					run.TouchPresence(presenceCtx, s.Runs.Redis, runID, subID)
+				}
 			}
-		default:
-		}
+		}()
+		defer func() { cancel(); <-done }()
+	}
+	return run.Subscribe(ctx, s.Runs.Store, s.Runs.Redis, s.Runs.RedisOK, runID, run.StreamOptions{
+		AfterSeq: opts.AfterSeq, HeartbeatEvery: 5 * time.Second,
+	}, func(ev run.StoredEvent) error {
 		protocol := opts.Protocol
 		if protocol <= 0 {
 			protocol = 2

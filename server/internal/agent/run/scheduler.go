@@ -15,16 +15,25 @@ import (
 type SchedulerOutput struct {
 	Cancelled bool
 	AllFailed bool
+	Suspended bool
 }
 
-// Scheduler 按批次执行工具调用；P3 不处理审批挂起。
+// Scheduler 按写屏障分批，在审批调用前持久化全部待执行调用。
 type Scheduler struct{}
 
 // Run 执行本步被接受的调用。
-func (Scheduler) Run(ctx context.Context, rc *RunContext, accepted []PlannedCall) (SchedulerOutput, error) {
+func (s Scheduler) Run(ctx context.Context, rc *RunContext, accepted []PlannedCall) (SchedulerOutput, error) {
 	if len(accepted) == 0 {
 		return SchedulerOutput{}, nil
 	}
+	if err := persistPendingCalls(ctx, rc, accepted); err != nil {
+		return SchedulerOutput{}, err
+	}
+	return s.runPending(ctx, rc, accepted)
+}
+
+// runPending 执行已落盘的调用，续跑时不重复写入之前的结果。
+func (Scheduler) runPending(ctx context.Context, rc *RunContext, accepted []PlannedCall) (SchedulerOutput, error) {
 	batches := planBatches(accepted, rc)
 	out := SchedulerOutput{}
 	for _, batch := range batches {
@@ -44,19 +53,50 @@ func (Scheduler) Run(ctx context.Context, rc *RunContext, accepted []PlannedCall
 				out.AllFailed = true
 			}
 		} else {
-			failed, err := runSerialBatch(ctx, rc, batch.calls[0])
+			pc := batch.calls[0]
+			suspended, err := approvalGate(ctx, rc, pc)
 			if err != nil {
-				if ctx.Err() != nil {
-					out.Cancelled = true
-				}
 				return out, err
 			}
-			if failed {
+			if suspended {
+				out.Suspended = true
+				return out, nil
+			}
+			row, err := rc.toolResult(ctx, pc.Call.ID)
+			if err != nil {
+				return out, err
+			}
+			if row.Status == "rejected" {
 				out.AllFailed = true
+				continue
+			}
+			if err := executeOne(ctx, rc, pc); err != nil {
+				out.Cancelled = ctx.Err() != nil
+				return out, err
 			}
 		}
 	}
 	return out, nil
+}
+
+func persistPendingCalls(ctx context.Context, rc *RunContext, calls []PlannedCall) error {
+	return rc.withToolTx(ctx, func(tx pgx.Tx) error {
+		for _, pc := range calls {
+			entry, _ := rc.Toolset.EntryByName(pc.Call.Name)
+			args := []byte(pc.Call.Arguments)
+			if len(args) == 0 {
+				args = []byte("{}")
+			}
+			row := ToolResultRow{ID: NewResultRef(), RunID: rc.Run.ID, ConversationID: rc.Env.ConversationID,
+				OwnerUserID: rc.Env.Principal.UserID, Step: rc.Step, CallIndex: pc.Index + 1, CallID: pc.Call.ID,
+				ToolName: pc.Call.Name, ToolVersion: entry.Spec.Version, Effect: string(entry.Spec.Effect),
+				Arguments: args, RawArguments: string(args), ArgsHash: argsHash(pc.Call.Name, args), Status: "pending"}
+			if err := rc.Store.InsertToolResult(ctx, tx, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 type batchPlan struct {
@@ -138,16 +178,6 @@ func runParallelBatch(ctx context.Context, rc *RunContext, calls []PlannedCall) 
 	return failed, err
 }
 
-func runSerialBatch(ctx context.Context, rc *RunContext, call PlannedCall) (failed bool, err error) {
-	if err := executeOne(ctx, rc, call); err != nil {
-		if ctx.Err() != nil {
-			return true, err
-		}
-		return true, nil
-	}
-	return false, nil
-}
-
 func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 	entry, ok := rc.Toolset.EntryByName(pc.Call.Name)
 	if !ok {
@@ -171,19 +201,14 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 	env := rc.Env
 	env.Config = entry.Config
 	env.Deadline = time.Now().Add(entry.Timeout)
-	resultRef := NewResultRef()
-	rc.mu.Lock()
-	rc.stepCallIndex++
-	callIndex := rc.stepCallIndex
-	rc.mu.Unlock()
-	row := ToolResultRow{
-		ID: resultRef, RunID: rc.Run.ID, ConversationID: env.ConversationID, OwnerUserID: env.Principal.UserID,
-		Step: rc.Step, CallIndex: callIndex, CallID: pc.Call.ID, ToolName: pc.Call.Name, ToolVersion: entry.Spec.Version,
-		Effect: string(entry.Spec.Effect), Arguments: args, RawArguments: string(args),
-		ArgsHash: argsHash(pc.Call.Name, args), Status: "running", Attempts: 1,
+	row, err := rc.toolResult(ctx, pc.Call.ID)
+	if err != nil {
+		return err
 	}
+	resultRef := row.ID
+	row.Status, row.Attempts = "running", 1
 	if err := rc.withToolTx(ctx, func(tx pgx.Tx) error {
-		return rc.Store.InsertToolResult(ctx, tx, row)
+		return rc.Store.UpdateToolResult(ctx, tx, row)
 	}); err != nil {
 		return err
 	}
@@ -221,7 +246,7 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 			if execErr != nil {
 				_ = tx2.Rollback(ctx)
 			} else {
-				_ = tx2.Commit(ctx)
+				execErr = tx2.Commit(ctx)
 			}
 			env.Tx = nil
 		}
@@ -249,6 +274,15 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 		return err
 	}
 	emitToolCompleted(ctx, rc, row, entry, time.Since(started).Milliseconds())
+	if rc.Emitter != nil {
+		for _, effect := range res.Effects {
+			if effect.Kind == "memory.delete" || effect.Kind == "memory.write" || effect.Kind == "memory.add" || effect.Kind == "memory.update" {
+				if err := rc.Emitter.Emit(ctx, EventMemoryUpdated, map[string]any{"kind": effect.Kind, "memory_id": effect.TargetID}); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return appendToolMessage(ctx, rc, pc, row.ModelContent)
 }
 

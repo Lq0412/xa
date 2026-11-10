@@ -10,19 +10,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"linq-bs/server/internal/infra/provider"
 )
 
 // MemStore 是 Store 的内存实现，仅供单元测试。
 type MemStore struct {
-	mu       sync.Mutex
-	runs     map[string]Run
-	messages map[string][]RunMessage
-	tools    map[string]ToolResultRow
-	contexts map[string]RunContextSnapshot
-	msgRunID map[string]string
-	ordinals map[string]int
-	events   map[string][]StoredEvent
-	lastSeq  map[string]int64
+	mu        sync.Mutex
+	runs      map[string]Run
+	messages  map[string][]RunMessage
+	tools     map[string]ToolResultRow
+	contexts  map[string]RunContextSnapshot
+	msgRunID  map[string]string
+	ordinals  map[string]int
+	events    map[string][]StoredEvent
+	lastSeq   map[string]int64
+	approvals map[string]Approval
+	grants    map[string]bool
 }
 
 // NewMemStore 创建空内存存储。
@@ -32,6 +35,7 @@ func NewMemStore() *MemStore {
 		tools: map[string]ToolResultRow{}, contexts: map[string]RunContextSnapshot{},
 		msgRunID: map[string]string{}, ordinals: map[string]int{},
 		events: map[string][]StoredEvent{}, lastSeq: map[string]int64{},
+		approvals: map[string]Approval{}, grants: map[string]bool{},
 	}
 }
 
@@ -155,7 +159,7 @@ func (m *MemStore) GetToolResultByCallID(ctx context.Context, runID, callID stri
 			return r, nil
 		}
 	}
-	return ToolResultRow{}, fmt.Errorf("未找到")
+	return ToolResultRow{}, pgx.ErrNoRows
 }
 
 func (m *MemStore) SaveRunContext(ctx context.Context, tx pgx.Tx, snap RunContextSnapshot) error {
@@ -200,7 +204,59 @@ func (m *MemStore) GetMessageRunIDs(ctx context.Context, messageIDs []string) (m
 }
 
 func (m *MemStore) PendingCallsOfLastStep(ctx context.Context, runID string) ([]PlannedCall, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	step := 0
+	for _, msg := range m.messages[runID] {
+		if msg.Role == "assistant" && msg.Step > step {
+			step = msg.Step
+		}
+	}
+	var calls []PlannedCall
+	for _, r := range m.tools {
+		if r.RunID == runID && r.Step == step && (r.Status == "pending" || r.Status == "awaiting_approval") {
+			calls = append(calls, PlannedCall{Call: toolCallFromRow(r), Index: r.CallIndex, Accepted: true})
+		}
+	}
+	sort.Slice(calls, func(i, j int) bool { return calls[i].Index < calls[j].Index })
+	return calls, nil
+}
+
+func toolCallFromRow(r ToolResultRow) provider.ToolCall {
+	return provider.ToolCall{ID: r.CallID, Name: r.ToolName, Arguments: string(r.Arguments)}
+}
+
+func (m *MemStore) ApprovalForCall(ctx context.Context, runID, callID string) (*Approval, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.approvals {
+		if a.RunID == runID && a.CallID == callID {
+			return &a, nil
+		}
+	}
 	return nil, nil
+}
+
+func (m *MemStore) ConversationAllows(ctx context.Context, conversationID, ownerID, toolName string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.grants[conversationID+"/"+ownerID+"/"+toolName], nil
+}
+
+func (m *MemStore) SuspendApproval(ctx context.Context, rc *RunContext, row ToolResultRow, a Approval) error {
+	return approvalBoundary(ctx, rc, a, func(events []StoredEvent) error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.approvals[a.ID] = a
+		row.Status = "awaiting_approval"
+		m.tools[row.ID] = row
+		m.contexts[rc.Run.ID] = rc.checkpoint()
+		r := rc.Run
+		r.Status = "waiting_approval"
+		m.runs[r.ID] = r
+		m.events[r.ID] = append(m.events[r.ID], events...)
+		return nil
+	})
 }
 
 func (m *MemStore) AppendRunEvent(ctx context.Context, runID string, seq int64, typ string, payload []byte, terminal bool) error {

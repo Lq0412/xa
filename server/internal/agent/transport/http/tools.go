@@ -139,6 +139,7 @@ func (h *ToolsHandler) agentToolsView(r *http.Request, p auth.Principal, agentID
 			"name": e.Spec.Name, "title": e.Spec.Title, "enabled": e.Enabled, "approval": string(e.Approval),
 			"timeout_ms": e.Timeout.Milliseconds(), "max_calls": e.MaxCalls, "configuration": jsonOrEmpty(e.Config),
 			"available": e.Spec.Available, "reason": e.Reason,
+			"approval_overridable": e.Spec.Approval.Overridable,
 		})
 	}
 	limitsRaw, err := json.Marshal(limits)

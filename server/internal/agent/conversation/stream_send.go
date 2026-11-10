@@ -26,7 +26,6 @@ type StreamSendOptions struct {
 	WriteV1Delta   func(string) error
 	WriteV1Done    func(messageID string, prompt, completion int) error
 	WriteV1Error   func(msg string) error
-	OnPresence     func()
 }
 
 // EnsureNoActiveRun 在开启 SSE 前拒绝并发写者。
@@ -36,9 +35,19 @@ func (s *Service) EnsureNoActiveRun(ctx context.Context, p auth.Principal, conve
 		return err
 	}
 	if active != nil {
+		if active.Status == "waiting_approval" {
+			return &WaitingApprovalError{RunID: active.ID}
+		}
 		return fmt.Errorf("对话正在生成回复: %w", definition.ErrConflict)
 	}
 	return nil
+}
+
+// WaitingApprovalError 允许 HTTP 在 SSE 开始前给出等待状态与原 run id。
+type WaitingApprovalError struct{ RunID string }
+
+func (*WaitingApprovalError) Error() string {
+	return "请先确认上方的操作，或停止本轮后再发送。"
 }
 
 // CheckIdempotencyKey 在写 SSE 前校验幂等键是否与正文一致。
@@ -80,6 +89,9 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 		if active, err := run.NewPGStore(s.DB).ActiveRunForConversation(ctx, conversationID, p.UserID); err != nil {
 			return err
 		} else if active != nil {
+			if active.Status == "waiting_approval" {
+				return &WaitingApprovalError{RunID: active.ID}
+			}
 			return fmt.Errorf("对话正在生成回复: %w", definition.ErrConflict)
 		}
 	}
@@ -114,7 +126,7 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 	if !locked {
 		return fmt.Errorf("对话正在生成回复: %w", definition.ErrConflict)
 	}
-	prep, err := s.prepareSend(ctx, tx, p, conversationID, content)
+	prep, err := s.prepareSend(ctx, tx, p, conversationID, content, protocol)
 	if err != nil {
 		return err
 	}

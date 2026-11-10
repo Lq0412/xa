@@ -1,6 +1,6 @@
 import { ParseError } from 'eventsource-parser';
 import { EventSourceParserStream } from 'eventsource-parser/stream';
-import type { MessagePart } from './chat-parts';
+import type { ApprovalInfo, MessagePart } from './chat-parts';
 import { applyRunEvent, type RunStreamEvent } from './chat-run';
 import { ApiError, fetchApi, request } from './http';
 
@@ -113,6 +113,11 @@ export type ActiveRun = {
   id: string;
   status: string;
   last_event_seq: number;
+  pending_approvals?: (ApprovalInfo & {
+    call_id: string;
+    name: string;
+    title: string;
+  })[];
 };
 
 export const listMessages = (
@@ -250,39 +255,71 @@ export async function streamRun(
       signal,
     },
   );
-  if (
-    !response.body ||
-    !response.headers.get('content-type')?.includes('text/event-stream')
-  )
-    throw new ApiError(502, '服务未返回有效的消息流');
+  return followRun(response, signal, handlers);
+}
+
+/** 收到 run ID 后只续订事件，断线时保留已渲染的状态与事件序号。 */
+async function followRun(
+  firstResponse: Response,
+  signal: AbortSignal,
+  handlers: StreamRunHandlers,
+  runId = '',
+  afterSeq = 0,
+): Promise<{ messageId?: string; runId?: string }> {
+  let response = firstResponse;
   let parts: MessagePart[] = [];
   let contentText = '';
-  let runId = '';
-  let messageId = '';
-  for await (const frame of readSseFrames(response.body)) {
-    const ev = JSON.parse(frame.data) as RunStreamEvent;
-    const typ = String(frame.event || ev.type || '');
-    if (typeof ev.run_id === 'string') {
-      runId = ev.run_id;
-      handlers.onRunID?.(runId);
-    }
-    if (typ === 'message.delta') {
-      contentText += String(ev.delta ?? '');
-    }
-    parts = applyRunEvent(parts, { ...ev, type: typ });
-    handlers.onParts(parts, contentText);
+  let reconnectUntil = 0;
+  for (;;) {
     if (
-      typ === 'run.completed' ||
-      typ === 'run.failed' ||
-      typ === 'run.cancelled'
-    ) {
-      messageId = String(ev.message_id ?? '');
-      if (typ !== 'run.completed')
-        throw new ApiError(502, String(ev.message ?? '生成失败'));
-      break;
+      !response.body ||
+      !response.headers.get('content-type')?.includes('text/event-stream')
+    )
+      throw new ApiError(502, '服务未返回有效的消息流');
+    try {
+      for await (const frame of readSseFrames(response.body)) {
+        const ev = JSON.parse(frame.data) as RunStreamEvent;
+        if (frame.event === 'error')
+          throw new ApiError(502, String(ev.message ?? '生成失败'));
+        if (ev.seq <= afterSeq) continue;
+        afterSeq = ev.seq;
+        reconnectUntil = 0;
+        const typ = String(frame.event || ev.type || '');
+        if (!runId && typeof ev.run_id === 'string') {
+          runId = ev.run_id;
+          handlers.onRunID?.(runId);
+        }
+        if (typ === 'message.delta') contentText += String(ev.delta ?? '');
+        parts = applyRunEvent(parts, { ...ev, type: typ });
+        handlers.onParts(parts, contentText);
+        if (typ === 'run.completed')
+          return { messageId: String(ev.message_id ?? ''), runId };
+        if (typ === 'run.failed' || typ === 'run.cancelled')
+          throw new ApiError(502, String(ev.message ?? '生成失败'));
+      }
+    } catch (cause) {
+      if (!(cause instanceof TypeError) || signal.aborted || !runId)
+        throw cause;
+    }
+    if (!runId) throw new ApiError(502, '消息流提前结束，请重新加载会话');
+    reconnectUntil ||= Date.now() + 30000;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      signal.throwIfAborted();
+      if (Date.now() >= reconnectUntil)
+        throw new ApiError(502, '无法恢复连接，请重新加载会话');
+      try {
+        response = await fetchRunEvents(runId, afterSeq, signal);
+        break;
+      } catch (cause) {
+        if (
+          !(cause instanceof TypeError) &&
+          !(cause instanceof ApiError && cause.status >= 500)
+        )
+          throw cause;
+      }
     }
   }
-  return { messageId, runId };
 }
 
 export async function cancelRun(runId: string, signal?: AbortSignal) {
@@ -297,34 +334,17 @@ export async function resumeRun(
   afterSeq: number,
   signal: AbortSignal,
   handlers: StreamRunHandlers,
-  initial?: { parts?: MessagePart[]; content?: string },
 ) {
-  const response = await fetchApi(
+  const response = await fetchRunEvents(runId, afterSeq, signal);
+  return followRun(response, signal, handlers, runId, afterSeq);
+}
+
+function fetchRunEvents(runId: string, afterSeq: number, signal: AbortSignal) {
+  return fetchApi(
     `/runs/${encodeURIComponent(runId)}/events?after=${afterSeq}`,
     {
       signal,
       headers: afterSeq > 0 ? { 'Last-Event-ID': String(afterSeq) } : {},
     },
   );
-  if (!response.body) throw new ApiError(502, '续传失败');
-  let parts: MessagePart[] = initial?.parts?.length
-    ? (initial.parts.map((p) => ({ ...p })) as MessagePart[])
-    : [];
-  let contentText = initial?.content ?? '';
-  for await (const frame of readSseFrames(response.body)) {
-    const ev = JSON.parse(frame.data) as RunStreamEvent;
-    const typ = String(frame.event || ev.type || '');
-    if (typ === 'message.delta') contentText += String(ev.delta ?? '');
-    parts = applyRunEvent(parts, { ...ev, type: typ });
-    handlers.onParts(parts, contentText);
-    if (
-      typ === 'run.completed' ||
-      typ === 'run.failed' ||
-      typ === 'run.cancelled'
-    ) {
-      if (typ !== 'run.completed')
-        throw new ApiError(502, String(ev.message ?? '生成失败'));
-      break;
-    }
-  }
 }

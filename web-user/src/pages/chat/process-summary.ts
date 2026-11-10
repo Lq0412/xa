@@ -21,6 +21,7 @@ export function formatDurationMs(ms?: number): string {
 }
 
 export type ProcessPhase =
+  | 'approval'
   | 'thinking'
   | 'tool'
   | 'settled'
@@ -91,6 +92,8 @@ export function toolStatusText(status: ToolPart['status']): string {
       return '准备中';
     case 'pending':
       return '待执行';
+    case 'awaiting_approval':
+      return '待确认';
     case 'running':
       return '执行中';
     case 'succeeded':
@@ -117,12 +120,13 @@ export type FoldInput = {
   userToggled: boolean;
   userOpen: boolean;
   failed: boolean;
+  approval?: boolean;
 };
 
 /** 手动开合之后不再自动覆盖。未手动操作时，失败展开，其余默认收起。 */
 export function resolveTimelineOpen(input: FoldInput): boolean {
   if (input.userToggled) return input.userOpen;
-  return input.failed;
+  return input.failed || Boolean(input.approval);
 }
 
 export function showStreamingPreview(input: {
@@ -200,6 +204,17 @@ export function processSummary(input: {
     };
   }
   const active = messageStatus === 'pending' ? activePart(parts) : undefined;
+  const awaiting = tools.filter((part) => part.status === 'awaiting_approval');
+  if (messageStatus === 'pending' && awaiting.length) {
+    return {
+      title:
+        awaiting.length === 1
+          ? `需要确认：${awaiting[0].title || awaiting[0].name}`
+          : `需要确认 ${awaiting.length} 个操作`,
+      phase: 'approval',
+      live: false,
+    };
+  }
   if (active?.type === 'reasoning') {
     const ms = reasoningMs[active.item_id];
     const sec = ms != null && ms > 0 ? formatThinkingSeconds(ms / 1000) : '';

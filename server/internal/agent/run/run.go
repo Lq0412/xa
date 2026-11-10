@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"linq-bs/server/internal/tool"
 )
 
-// OutcomeKind 表示 run 终态；P3 不使用 waiting_approval。
+// OutcomeKind 表示 run 终态或等待审批。
 type OutcomeKind string
 
 // Engine 从当前 RunContext 推进到终态；Resume 时可重入。
@@ -29,7 +30,6 @@ type RunContext struct {
 	Toolset          tool.Toolset
 	Messages         []provider.Message
 	Step             int
-	stepCallIndex    int // 本 step 内已调度工具序号，写入 tool_results.call_index
 	Budget           *Budget
 	VisibleText      strings.Builder
 	Store            Store
@@ -46,6 +46,10 @@ type RunContext struct {
 	CallHashes       map[string]int
 	PerToolCalls     map[string]int
 	FailedSteps      int
+	ApprovalTTL      time.Duration
+	LeaseOwner       string
+	CanManageAgent   bool
+	Segments         json.RawMessage
 }
 
 // Outcome 是 Execute 的返回值，Kind 为终态或挂起类别。
@@ -61,6 +65,13 @@ func (rc *RunContext) appendMessage(m provider.Message) {
 	rc.mu.Lock()
 	rc.Messages = append(rc.Messages, m)
 	rc.mu.Unlock()
+}
+
+func (rc *RunContext) toolResult(ctx context.Context, callID string) (ToolResultRow, error) {
+	if _, ok := rc.Store.(*PGStore); ok && rc.Tx != nil {
+		return scanToolResult(rc.Tx.QueryRow(ctx, toolResultByCallSQL, rc.Run.ID, callID))
+	}
+	return rc.Store.GetToolResultByCallID(ctx, rc.Run.ID, callID)
 }
 
 // ModelMessages 在收尾轮追加 system 提示并返回当前消息列表。
@@ -87,6 +98,8 @@ func (rc *RunContext) nextOrdinal(ctx context.Context) (int, error) {
 }
 
 func (rc *RunContext) appendRunMessage(ctx context.Context, msg RunMessage) error {
+	rc.dbMu.Lock()
+	defer rc.dbMu.Unlock()
 	if msg.Ordinal == 0 {
 		ord, err := rc.nextOrdinal(ctx)
 		if err != nil {
@@ -94,8 +107,6 @@ func (rc *RunContext) appendRunMessage(ctx context.Context, msg RunMessage) erro
 		}
 		msg.Ordinal = ord
 	}
-	rc.dbMu.Lock()
-	defer rc.dbMu.Unlock()
 	return rc.Store.AppendRunMessage(ctx, rc.Tx, msg)
 }
 

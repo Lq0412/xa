@@ -6,6 +6,7 @@ import type {
   ReasoningPart,
   ToolPart,
 } from '@/services/chat-parts';
+import { ApprovalActions } from './ApprovalActions';
 import {
   formatDurationMs,
   hasFailedTool,
@@ -86,12 +87,14 @@ function ToolTrace({ part }: { part: ToolPart }) {
   const status = toolStatusText(part.status);
   const title = part.title || part.name;
   const errorText = failed ? part.summary || part.error_code || '调用失败' : '';
-  const hasDetails = Boolean(
-    errorText ||
-      part.summary ||
-      part.args_preview ||
-      (part.items && part.items.length > 0),
-  );
+  const hasDetails =
+    part.status !== 'awaiting_approval' &&
+    Boolean(
+      errorText ||
+        part.summary ||
+        part.args_preview ||
+        (part.items && part.items.length > 0),
+    );
   const label = [title, status, duration].filter(Boolean).join('，');
   const body = (
     <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -140,6 +143,13 @@ function ToolTrace({ part }: { part: ToolPart }) {
           {body}
         </div>
       )}
+      {part.approval ? <ApprovalActions part={part} /> : null}
+      {part.approval?.decision === 'approved' ||
+      part.approval?.decision === 'expired' ? (
+        <p className="pl-6 text-xs text-zinc-400">
+          {part.approval.decision === 'approved' ? '已允许' : '未确认'}
+        </p>
+      ) : null}
       {open && hasDetails ? (
         <div id={detailsId} className="space-y-1.5 pb-1 pl-6 text-xs">
           {errorText ? (
@@ -252,7 +262,10 @@ export function ProcessRail({ parts, messageStatus }: Props) {
   const failed = hasFailedTool(parts) || messageStatus === 'failed';
   const [userToggled, setUserToggled] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
-  const open = resolveTimelineOpen({ userToggled, userOpen, failed });
+  const approval = parts.some(
+    (part) => part.type === 'tool' && part.status === 'awaiting_approval',
+  );
+  const open = resolveTimelineOpen({ userToggled, userOpen, failed, approval });
   const streamingPart = [...parts]
     .reverse()
     .find(

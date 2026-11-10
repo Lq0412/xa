@@ -23,25 +23,28 @@ func Subscribe(ctx context.Context, store Store, redis redisclient.Cmdable, redi
 	}
 	after := opts.AfterSeq
 	seen := map[int64]bool{}
-	replay, err := store.ListRunEventsAfter(ctx, runID, after)
-	if err != nil {
-		return err
-	}
-	for _, ev := range replay {
-		if seen[ev.Seq] {
-			continue
-		}
-		seen[ev.Seq] = true
-		after = ev.Seq
-		if err := deliver(ev); err != nil {
-			if errors.Is(err, ErrSubscribeDone) {
-				return nil
-			}
+	replay := func() error {
+		events, err := store.ListRunEventsAfter(ctx, runID, after)
+		if err != nil {
 			return err
 		}
-		if IsTerminalEvent(ev.Type) {
+		for _, ev := range events {
+			seen[ev.Seq] = true
+			after = ev.Seq
+			if err := deliver(ev); err != nil {
+				return err
+			}
+			if IsTerminalEvent(ev.Type) {
+				return ErrSubscribeDone
+			}
+		}
+		return nil
+	}
+	if err := replay(); err != nil {
+		if errors.Is(err, ErrSubscribeDone) {
 			return nil
 		}
+		return err
 	}
 	ok := redisOK
 	if ok == nil {
@@ -63,10 +66,16 @@ func Subscribe(ctx context.Context, store Store, redis redisclient.Cmdable, redi
 		res, err := redis.XRead(ctx, &redisclient.XReadArgs{
 			Streams: []string{key, fmt.Sprintf("0-%d", after)},
 			Count:   64,
-			Block:   15 * time.Second,
+			Block:   opts.HeartbeatEvery,
 		}).Result()
 		if err != nil {
 			if err == redisclient.Nil {
+				if err := replay(); err != nil {
+					if errors.Is(err, ErrSubscribeDone) {
+						return nil
+					}
+					return err
+				}
 				continue
 			}
 			// Redis 故障时降级 PG 轮询。
@@ -75,8 +84,20 @@ func Subscribe(ctx context.Context, store Store, redis redisclient.Cmdable, redi
 		for _, stream := range res {
 			for _, msg := range stream.Messages {
 				seq, ev, err := decodeStreamMessage(msg)
-				if err != nil || seen[seq] {
+				if err != nil || seq <= after {
 					continue
+				}
+				// 审批事务已提交时，即使 Redis 漏掉边界事件，也先按数据库序号补齐。
+				if seq > after+1 {
+					if err := replay(); err != nil {
+						if errors.Is(err, ErrSubscribeDone) {
+							return nil
+						}
+						return err
+					}
+					if seq <= after {
+						continue
+					}
 				}
 				seen[seq] = true
 				if seq > after {

@@ -94,6 +94,7 @@ type RunContextSnapshot struct {
 	RunID    string
 	Messages []provider.Message
 	Segments json.RawMessage
+	Resume   ResumeState
 }
 
 // VisibleMessage 供 HistoryProjector 输入。

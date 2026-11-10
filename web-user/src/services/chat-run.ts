@@ -70,7 +70,9 @@ export function applyRunEvent(
     case 'tool.preparing':
     case 'tool.called':
     case 'tool.started':
-    case 'tool.completed': {
+    case 'tool.completed':
+    case 'approval.required':
+    case 'approval.resolved': {
       const callId = ev.call_id as string | undefined;
       const index = ev.index as number | undefined;
       const name = String(ev.name ?? '');
@@ -79,7 +81,7 @@ export function applyRunEvent(
         const tool = p as Extract<MessagePart, { type: 'tool' }>;
         if (callId && tool.call_id === callId) return true;
         if (!callId && index != null && tool.index === index) return true;
-        if (name && tool.name === name) return true;
+        if (name && tool.name === name && !tool.call_id) return true;
         return false;
       });
       let part: Extract<MessagePart, { type: 'tool' }>;
@@ -105,11 +107,40 @@ export function applyRunEvent(
         if (ev.args_preview) part.args_preview = String(ev.args_preview);
       }
       if (ev.type === 'tool.started') part.status = 'running';
+      if (ev.type === 'approval.required') {
+        part.status = 'awaiting_approval';
+        part.call_id = callId;
+        part.approval = {
+          approval_id: String(ev.approval_id),
+          expires_at: String(ev.expires_at),
+          summary: String(ev.summary ?? ''),
+          items: ev.items as ToolPart['items'],
+          can_remember_agent: Boolean(ev.can_remember_agent),
+        };
+        if (ev.args_preview) part.args_preview = String(ev.args_preview);
+      }
+      if (ev.type === 'approval.resolved') {
+        part.approval = {
+          approval_id: String(ev.approval_id),
+          expires_at: part.approval?.expires_at ?? '',
+          ...part.approval,
+          decision: ev.decision as NonNullable<
+            ToolPart['approval']
+          >['decision'],
+        };
+        part.status =
+          ev.decision === 'approved'
+            ? 'pending'
+            : ev.decision === 'cancelled'
+              ? 'cancelled'
+              : 'rejected';
+      }
       if (ev.type === 'tool.completed') {
         part.status = String(ev.status ?? 'succeeded') as ToolPartStatus;
         if (ev.summary) part.summary = String(ev.summary);
         if (Array.isArray(ev.items)) part.items = ev.items as ToolPart['items'];
         if (ev.duration_ms) part.duration_ms = Number(ev.duration_ms);
+        if (ev.error_code) part.error_code = String(ev.error_code);
       }
       next[partIdx] = part;
       break;

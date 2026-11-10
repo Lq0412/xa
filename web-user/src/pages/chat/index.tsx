@@ -217,9 +217,10 @@ export default function ChatPage() {
             }
             sending={session.sending}
             creating={session.creating}
+            waitingApproval={session.waitingApproval}
             onChange={session.setDraft}
             onSend={() => void session.send()}
-            onStop={session.stop}
+            onStop={() => void session.stop()}
           />
         </div>
       </section>

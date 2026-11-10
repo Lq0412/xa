@@ -6,6 +6,7 @@ type Props = {
   disabled: boolean;
   sending: boolean;
   creating: boolean;
+  waitingApproval?: boolean;
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
@@ -17,6 +18,7 @@ export function MessageComposer({
   disabled,
   sending,
   creating,
+  waitingApproval,
   onChange,
   onSend,
   onStop,
@@ -40,7 +42,13 @@ export function MessageComposer({
           value={value}
           disabled={disabled}
           readOnly={creating}
-          placeholder={disabled ? '暂不可发送' : '发消息'}
+          placeholder={
+            waitingApproval
+              ? '请先确认上方的操作'
+              : disabled
+                ? '暂不可发送'
+                : '发消息'
+          }
           rows={1}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
