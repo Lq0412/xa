@@ -8,12 +8,10 @@ import type { Agent } from '@/services/api';
 import type { ChatMessage } from '@/services/chat';
 import type { MessagePart } from '@/services/chat-parts';
 import {
-  reasoningHasLaterActivity,
   reorderReasoningBeforeText,
   splitAssistantParts,
 } from './assistant-parts';
-import { ReasoningFold } from './ReasoningFold';
-import { ToolCallChip } from './ToolCallChip';
+import { ProcessRail } from './ProcessRail';
 
 type Props = {
   agent?: Agent;
@@ -249,7 +247,6 @@ export function MessageList({
                     mine ||
                     hasTextPart ||
                     showContentFallback ||
-                    message.status === 'pending' ||
                     message.status === 'stopped' ||
                     message.status === 'failed';
                   return (
@@ -269,7 +266,7 @@ export function MessageList({
                         }
                       >
                         {mine ? (
-                          <div className="max-w-[70%] rounded-2xl bg-[#fff4cc] px-4 py-2.5 text-[15px] leading-7 text-zinc-900">
+                          <div className="user-bubble max-w-[70%] rounded-2xl bg-[#fff4cc] px-4 py-2.5 text-[15px] leading-7 text-zinc-900">
                             {message.content ? (
                               <div className="whitespace-pre-wrap">
                                 {message.content}
@@ -279,47 +276,13 @@ export function MessageList({
                         ) : (
                           <div className="flex w-full max-w-[760px] flex-col gap-2">
                             {processParts.length > 0 ? (
-                              <div
-                                className="process-rail flex flex-col gap-2"
-                                data-testid="process-rail"
-                              >
-                                {processParts.map((part) => {
-                                  const key = partKey(part);
-                                  if (part.type === 'reasoning') {
-                                    const later = reasoningHasLaterActivity(
-                                      orderedParts,
-                                      part.item_id,
-                                    );
-                                    const partStatus =
-                                      message.status === 'stopped' &&
-                                      part.status === 'streaming'
-                                        ? 'stopped'
-                                        : part.status;
-                                    return (
-                                      <ReasoningFold
-                                        key={key}
-                                        itemId={part.item_id}
-                                        text={part.text}
-                                        status={partStatus}
-                                        truncated={part.truncated}
-                                        duration_ms={part.duration_ms}
-                                        laterActivity={later}
-                                        messageStopped={
-                                          message.status === 'stopped'
-                                        }
-                                      />
-                                    );
-                                  }
-                                  if (part.type === 'tool')
-                                    return (
-                                      <ToolCallChip key={key} part={part} />
-                                    );
-                                  return null;
-                                })}
-                              </div>
+                              <ProcessRail
+                                parts={processParts}
+                                messageStatus={message.status}
+                              />
                             ) : null}
                             {showBubble ? (
-                              <div className="max-w-[70%] rounded-2xl bg-zinc-100 px-4 py-2.5 text-[15px] leading-7 text-zinc-900">
+                              <div className="assistant-bubble max-w-[70%] rounded-2xl bg-zinc-100 px-4 py-2.5 text-[15px] leading-7 text-zinc-900">
                                 {hasTextPart
                                   ? textParts.map((part) => (
                                       <div

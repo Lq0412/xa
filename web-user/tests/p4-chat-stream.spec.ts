@@ -32,7 +32,7 @@ async function prepareAgent(
   api: string,
   toolConfig: Record<string, unknown> = {
     timezone: 'Asia/Shanghai',
-    delay_ms: 12000,
+    delay_ms: 5000,
   },
 ) {
   const tokenRes = await request.post(`${api}/api/v1/auth/login`, {
@@ -69,7 +69,7 @@ async function prepareAgent(
         configuration: {
           model: 'qwen3.7-plus',
           soul_md:
-            '先一句思考说明将调用 current_time，立刻调用工具，禁止在工具完成前写正文。',
+            '思考时必须写出 Markdown：一行加粗标题，再加一个至少两项的无序列表。先写完思考再调用 current_time，工具返回前不要写正文。',
           enable_thinking: true,
         },
       },
@@ -106,7 +106,7 @@ function processRail(page: import('@playwright/test').Page) {
   return lastAssistant(page).locator('[data-testid="process-rail"]');
 }
 
-test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async ({
+test('P4.1 流式：一行过程、时间线、历史用时、失败', async ({
   page,
   context,
   request,
@@ -122,7 +122,7 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
   const stopBtn = page.getByRole('button', { name: '停止生成' });
 
   await composer.fill(
-    '必须先调用 current_time。在思考里写清你要先查时间再回答；正文两句话说明当前时间即可。',
+    '请先在思考里用加粗标题和无序列表说明你要查询当前时间，然后调用 current_time。工具返回后再用两句话回答现在的时间。',
   );
   await composer.press('Enter');
   await expect(stopBtn).toBeVisible({ timeout: 120000 });
@@ -130,24 +130,22 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
 
   const assistant = lastAssistant(page);
   const rail = processRail(page);
-
   await expect(rail).toBeVisible({ timeout: 120000 });
 
   await Promise.all([
     page
       .waitForFunction(
         () => {
-          const fold = [
-            ...document.querySelectorAll('[data-testid="reasoning-fold"]'),
-          ].pop();
-          if (!fold) return false;
-          if (fold.getAttribute('data-reasoning-status') !== 'streaming')
-            return false;
-          const title = fold.querySelector('button')?.textContent || '';
-          return title.includes('思考中');
+          const node = document.querySelector('[data-testid="process-rail"]');
+          if (node?.getAttribute('data-phase') !== 'thinking') return false;
+          const title =
+            node.querySelector('[data-testid="process-summary"]')
+              ?.textContent || '';
+          const shimmer = node.querySelector('.process-summary-shimmer');
+          return /正在思考/.test(title) && /秒/.test(title) && Boolean(shimmer);
         },
         undefined,
-        { timeout: 120000, polling: 100 },
+        { timeout: 120000, polling: 80 },
       )
       .then(async () => {
         await page.screenshot({
@@ -158,10 +156,12 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
     page
       .waitForFunction(
         () => {
-          const chip = document.querySelector('[data-testid="tool-call-chip"]');
-          if (!chip) return false;
-          const st = chip.getAttribute('data-tool-status');
-          return st === 'preparing' || st === 'pending' || st === 'running';
+          const node = document.querySelector('[data-testid="process-rail"]');
+          if (node?.getAttribute('data-phase') !== 'tool') return false;
+          const title =
+            node.querySelector('[data-testid="process-summary"]')
+              ?.textContent || '';
+          return title.includes('正在调用');
         },
         undefined,
         { timeout: 180000, polling: 50 },
@@ -174,41 +174,40 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
       }),
   ]);
 
-  await expect(
-    page.locator('[data-testid="tool-call-chip"][data-status="done"]').first(),
-  ).toBeVisible({ timeout: 240000 });
-  await expect(composer).toBeEnabled({ timeout: 180000 });
-
-  const bubbleBox = assistant.locator('.rounded-2xl.bg-zinc-100').first();
-  const railBox = rail.first();
-  const bubbleY = (await bubbleBox.boundingBox())?.y ?? 0;
-  const railY = (await railBox.boundingBox())?.y ?? 0;
-  expect(railY).toBeLessThan(bubbleY);
-
+  await expect(composer).toBeEnabled({ timeout: 240000 });
+  const summary = assistant.locator('[data-testid="process-summary"]');
   await expect
     .poll(async () => {
-      const fold = assistant.locator('[data-testid="reasoning-fold"]').last();
-      const expanded = await fold
-        .getByRole('button')
-        .getAttribute('aria-expanded');
-      const title = await fold.getByRole('button').innerText();
+      const expanded = await summary.getAttribute('aria-expanded');
+      const title = await summary.innerText();
       return `${expanded}:${title}`;
     })
-    .toMatch(/^false:.*已思考/);
+    .toMatch(/^false:.*(已思考|思考并调用了|调用了)/);
+
+  const bubble = assistant.locator('.assistant-bubble').first();
+  const bubbleY = (await bubble.boundingBox())?.y ?? 0;
+  const railY = (await rail.boundingBox())?.y ?? 0;
+  expect(railY).toBeLessThan(bubbleY);
+  await expect(rail.locator('[data-testid="process-preview"]')).toHaveCount(0);
 
   await page.screenshot({
     path: path.join(artifactDir, 'p41-complete-folded.png'),
     fullPage: true,
   });
 
-  const liveReasoning = assistant.locator('[data-testid="reasoning-fold"]').first();
-  await liveReasoning.getByRole('button').click();
-  const reasoningBody = liveReasoning.locator(
-    '[data-testid="reasoning-fold-body"]',
-  );
-  await expect(reasoningBody).toBeVisible({ timeout: 30000 });
-  const bodyText = (await reasoningBody.innerText()) || '';
-  expect(bodyText).not.toMatch(/\*\*[^*]+\*\*/);
+  await summary.click();
+  await expect(summary).toHaveAttribute('aria-expanded', 'true');
+  const reasoningBodies = rail.locator('[data-testid="reasoning-body"]');
+  await expect(reasoningBodies.first()).toBeVisible();
+  const bodyCount = await reasoningBodies.count();
+  let sawMarkdown = false;
+  for (let index = 0; index < bodyCount; index += 1) {
+    const body = reasoningBodies.nth(index);
+    const bodyText = (await body.innerText()) || '';
+    expect(bodyText).not.toMatch(/\*\*[^*]+\*\*/);
+    if ((await body.locator('strong, li').count()) > 0) sawMarkdown = true;
+  }
+  expect(sawMarkdown).toBe(true);
   await page.screenshot({
     path: path.join(artifactDir, 'p41-reasoning-markdown.png'),
     fullPage: true,
@@ -218,22 +217,26 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(composer).toBeVisible({ timeout: 60000 });
   const histAssistant = lastAssistant(page);
+  const histSummary = histAssistant.locator('[data-testid="process-summary"]');
+  await expect(histSummary).toBeVisible({ timeout: 60000 });
+  await expect(histSummary).toHaveAttribute('aria-expanded', 'false');
+  expect(await histSummary.innerText()).toMatch(/已思考|思考并调用了|调用了/);
+  await histSummary.click();
+  const histSegment = histAssistant
+    .locator('[data-testid="reasoning-segment"]')
+    .first();
+  await expect(histSegment).toHaveAttribute('data-expandable', '0');
+  await expect(histSegment).toContainText('已思考');
   await expect(
-    histAssistant.locator('[data-testid="process-rail"]'),
-  ).toBeVisible({
-    timeout: 60000,
-  });
-  const histTitle = await histAssistant
-    .locator('[data-testid="reasoning-fold"] button')
-    .first()
-    .innerText();
-  expect(histTitle).toMatch(/已思考/);
-  await histAssistant
-    .locator('[data-testid="reasoning-fold"] button')
-    .first()
-    .click();
+    histAssistant.locator('[data-testid="reasoning-body"]'),
+  ).toHaveCount(0);
+  const histTool = histAssistant
+    .locator('[data-testid="tool-call-chip"]')
+    .first();
+  await expect(histTool).toBeVisible();
+  await histTool.getByRole('button').click();
   await expect(
-    histAssistant.locator('[data-testid="reasoning-fold-placeholder"]'),
+    histTool.locator('[data-testid="tool-summary"], pre').first(),
   ).toBeVisible();
   await page.screenshot({
     path: path.join(artifactDir, 'p41-history-refresh.png'),
@@ -246,11 +249,16 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
   });
   await composer.fill('只调用 current_time 一次，然后一句话说明结果。');
   await composer.press('Enter');
+  const failedChip = page
+    .locator('[data-testid="tool-call-chip"][data-tool-status="failed"]')
+    .last();
+  await expect(failedChip).toBeVisible({ timeout: 180000 });
+  await expect(composer).toBeEnabled({ timeout: 180000 });
+  const failedRail = processRail(page);
   await expect(
-    page
-      .locator('[data-testid="tool-call-chip"][data-tool-status="failed"]')
-      .last(),
-  ).toBeVisible({ timeout: 180000 });
+    failedRail.locator('[data-testid="process-summary"]'),
+  ).toHaveAttribute('aria-expanded', 'true');
+  await expect(failedChip.locator('[data-testid="tool-error"]')).toBeVisible();
   await page.screenshot({
     path: path.join(artifactDir, 'p41-tool-failed.png'),
     fullPage: true,
@@ -261,9 +269,19 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
     `/chat?agentId=${encodeURIComponent(primaryId)}&conversationId=${convId}`,
     { waitUntil: 'domcontentloaded' },
   );
-  await expect(lastAssistant(page)).toBeVisible({ timeout: 60000 });
+  await expect(
+    lastAssistant(page).locator('[data-testid="process-summary"]'),
+  ).toBeVisible({
+    timeout: 60000,
+  });
   await page.screenshot({
     path: path.join(artifactDir, 'p41-narrow-viewport.png'),
+    fullPage: true,
+  });
+
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.screenshot({
+    path: path.join(artifactDir, 'p41-dark.png'),
     fullPage: true,
   });
 
@@ -274,12 +292,15 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
   const histBody = (await hist.json()) as {
     messages: {
       role: string;
-      parts?: { type: string; duration_ms?: number }[];
+      parts?: { type: string; duration_ms?: number; text?: string }[];
     }[];
   };
-  const assistantMsg = histBody.messages.find((m) => m.role === 'assistant');
+  const assistantMsg = [...histBody.messages]
+    .reverse()
+    .find((m) => m.role === 'assistant');
   const reasoning = assistantMsg?.parts?.find((p) => p.type === 'reasoning');
-  expect(reasoning?.duration_ms).toBeGreaterThan(0);
+  expect(reasoning?.text ?? '').toBe('');
+  expect(reasoning?.duration_ms ?? 0).toBeGreaterThan(1000);
 
   const files = [
     'p41-reasoning-streaming.png',
@@ -289,6 +310,7 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
     'p41-history-refresh.png',
     'p41-tool-failed.png',
     'p41-narrow-viewport.png',
+    'p41-dark.png',
   ].map((n) => path.join(artifactDir, n));
   expect(new Set(files.map(md5File)).size).toBe(files.length);
 });
