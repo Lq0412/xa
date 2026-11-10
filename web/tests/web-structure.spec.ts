@@ -20,16 +20,14 @@ test('管理端仅展示可用模块，已删除页面返回 404', async ({ page
     localStorage.getItem('xa.web.session'),
   );
   try {
-    const menu = page.getByRole('menu');
+    const menu = page.getByRole('navigation', { name: '主导航' });
     await expect(menu.getByRole('link')).toHaveCount(3);
-    await expect(menu.getByRole('link', { name: /平台概览/ })).toBeVisible();
-    await expect(menu.getByRole('link', { name: /审批记录/ })).toBeVisible();
-    await page.getByRole('link', { name: '进入 Agent 管理' }).click();
+    await expect(menu.getByRole('link', { name: '今天' })).toBeVisible();
+    await expect(menu.getByRole('link', { name: '确认记录' })).toBeVisible();
+    await menu.getByRole('link', { name: 'Agent', exact: true }).click();
     await expect(page).toHaveURL(/\/agents$/);
     await page.reload();
-    await expect(
-      page.getByRole('button', { name: '新建 Agent' }),
-    ).toBeVisible();
+    await expect(page.getByRole('link', { name: '新建 Agent' })).toBeVisible();
     for (const path of [
       '/models',
       '/knowledge',

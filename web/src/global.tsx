@@ -1,2 +1,6 @@
-// 沿用 Pro v6 的 Tailwind CSS v4 入口，控件样式仍由 Ant Design 提供。
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-600.css';
 import '../tailwind.css';
+
+document.documentElement.lang = 'zh-CN';

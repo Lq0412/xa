@@ -38,6 +38,7 @@ declare namespace XA {
     visibility: 'public' | 'private';
     status: 'active' | 'offline' | 'deleted';
     is_default: boolean;
+    is_primary: boolean;
     created_by: string;
     created_at: string;
     updated_at: string;
@@ -56,17 +57,29 @@ declare namespace XA {
 
   /** 服务端完整配置；尚未提供编辑界面的字段仍需原样提交。 */
   type Configuration = {
-    prompts: PromptSlot[] | null;
+    soul_md?: string;
+    model?: string;
+    prompts?: PromptSlot[] | null;
     models?: unknown[] | null;
-    tools?: unknown[] | null;
+    tools?: ToolBinding[] | null;
     knowledge?: unknown[] | null;
     evaluations?: unknown[] | null;
-    memory_policy?: unknown;
-    runtime_limits?: unknown;
+    memory_policy?: { enabled?: boolean; [key: string]: unknown } | null;
+    runtime_limits?: Record<string, unknown> | null;
+    [key: string]: unknown;
+  };
+
+  /** 工具绑定保留服务端扩展字段，只编辑启用状态和审批策略。 */
+  type ToolBinding = {
+    name: string;
+    enabled: boolean;
+    approval?: string;
+    [key: string]: unknown;
   };
 
   /** 不可变配置版本，保存时携带其 id 进行并发校验。 */
   type AgentVersion = {
+    available_models: string[];
     id: string;
     agent_id: string;
     version_number: number;

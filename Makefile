@@ -55,7 +55,6 @@ check: prepare
 	cd server && go vet ./...
 	cd server && go build ./...
 	cd web && npm run lint
-	cd web && npm run lint:antd
 	cd web && npm run build
 	cd web-user && npm run lint
 	cd web-user && npm run build

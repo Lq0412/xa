@@ -1,4 +1,4 @@
-import { history } from '@umijs/max';
+import { history } from 'umi';
 
 /** 与已有 Web 登录保持相同的存储键；有效身份始终以服务端为准。 */
 export const TOKEN_KEY = 'xa.web.session';
@@ -23,9 +23,9 @@ export function redirectToLogin() {
 export function getLoginRedirect() {
   const value = new URLSearchParams(window.location.search).get('redirect');
   if (!value?.startsWith('/') || value.startsWith('//') || value.includes('\\'))
-    return '/agents';
+    return '/overview';
   const url = new URL(value, window.location.origin);
   return url.origin === window.location.origin && !isAuthPage(url.pathname)
     ? url.pathname + url.search + url.hash
-    : '/agents';
+    : '/overview';
 }

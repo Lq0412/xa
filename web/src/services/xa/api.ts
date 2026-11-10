@@ -1,11 +1,11 @@
-import { request } from '@umijs/max';
+import { request } from './request';
 
 /** 登录失败交给表单展示，不触发会话过期跳转。 */
 export async function login(email: string, password: string) {
   return request<XA.LoginResult>('/api/v1/auth/login', {
     method: 'POST',
     data: { email, password },
-    skipErrorHandler: true,
+    anonymous: true,
   });
 }
 
@@ -18,7 +18,7 @@ export async function register(
   return request<XA.User>('/api/v1/auth/register', {
     method: 'POST',
     data: { email, password, display_name: displayName },
-    skipErrorHandler: true,
+    anonymous: true,
   });
 }
 
@@ -33,8 +33,8 @@ export async function getCurrentUser() {
 }
 
 /** 获取当前用户有权浏览的公共和私有 Agent。 */
-export async function listAgents() {
-  return request<{ agents: XA.Agent[] | null }>('/api/v1/agents');
+export async function listAgents(signal?: AbortSignal) {
+  return request<{ agents: XA.Agent[] | null }>('/api/v1/agents', { signal });
 }
 
 /** 读取编辑时的最新元数据，避免直接沿用列表缓存。 */
@@ -95,4 +95,70 @@ export async function deleteAgent(agentId: string) {
   return request<void>(`/api/v1/agents/${encodeURIComponent(agentId)}`, {
     method: 'DELETE',
   });
+}
+
+/** 管理端的审批摘要不包含工具原始参数。 */
+export type ApprovalRecord = {
+  id: string;
+  created_at: string;
+  user: string;
+  conversation_id: string;
+  agent_id: string;
+  agent: string;
+  tool_name: string;
+  title: string | null;
+  summary: string | null;
+  status: string;
+  wait_ms: number;
+  decider: string;
+  remember: string;
+  run_id: string;
+};
+
+/** 由服务端筛选并返回下一页游标。 */
+export function listApprovals(
+  filters: {
+    status: string;
+    tool_name: string;
+    cursor: string;
+  },
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({ limit: '50' });
+  for (const [name, value] of Object.entries(filters)) {
+    if (value) query.set(name, value);
+  }
+  return request<{ approvals: ApprovalRecord[]; next_cursor: string }>(
+    `/api/v1/admin/approvals?${query}`,
+    { signal },
+  );
+}
+
+/** 目录可供管理员读取，公共 Agent 不调用仅限所有者的工具视图接口。 */
+export type CatalogTool = {
+  name: string;
+  title: string;
+  available: boolean;
+  default_enabled: boolean;
+  approval: { default: 'always' | 'never'; overridable: boolean };
+};
+
+export function listTools() {
+  return request<{ tools: CatalogTool[] }>('/api/v1/tools');
+}
+
+/** 概览统计遍历全部游标，不能把第一页的条数当成总数。 */
+export async function allApprovals(signal: AbortSignal) {
+  const rows: ApprovalRecord[] = [];
+  let cursor = '';
+  do {
+    signal.throwIfAborted();
+    const result = await listApprovals(
+      { status: '', tool_name: '', cursor },
+      signal,
+    );
+    rows.push(...result.approvals);
+    cursor = result.next_cursor;
+  } while (cursor);
+  return rows;
 }

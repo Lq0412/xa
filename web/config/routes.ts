@@ -1,47 +1,21 @@
-// 管理端导航只列出已接入的页面。
+// 登录、注册和 404 保留独立页面，业务路由共用管理布局。
 export default [
+  { path: '/user/login', component: './user/login' },
+  { path: '/user/register', component: './user/register' },
   {
-    path: '/user',
-    layout: false,
+    path: '/',
+    component: '@/components/AdminLayout',
     routes: [
-      {
-        name: 'login',
-        path: '/user/login',
-        component: './user/login',
-      },
-      {
-        name: 'register',
-        path: '/user/register',
-        component: './user/register',
-      },
+      { path: '/', redirect: '/overview' },
+      { path: '/overview', component: './overview' },
+      { path: '/agents', component: './agents' },
+      { path: '/agents/new', component: './agents/AgentEditor' },
+      { path: '/agents/:id', component: './agents/AgentEditor' },
+      { path: '/approvals', component: './approvals' },
     ],
   },
   {
-    path: '/overview',
-    name: '平台概览',
-    icon: 'dashboard',
-    component: './overview',
-  },
-  {
-    path: '/agents',
-    name: 'Agent 管理',
-    icon: 'robot',
-    component: './agents',
-  },
-  {
-    path: '/approvals',
-    name: '审批记录',
-    icon: 'checkCircle',
-    access: 'canAdmin',
-    component: './approvals',
-  },
-  {
-    path: '/',
-    redirect: '/overview',
-  },
-  {
     component: './exception/404',
-    layout: false,
     path: '*',
   },
 ];
