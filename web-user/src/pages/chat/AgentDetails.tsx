@@ -10,7 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -220,13 +219,13 @@ export function AgentDetails({
   const date = cardDate(agent.created_at);
   const soulCard = (
     <>
-      <span className="text-sm font-medium">SOUL</span>
-      <span className="version-label mt-1 text-xs text-zinc-800">{`v${version?.version_number ?? ''}`}</span>
-      <span className="mt-auto pt-6 text-[11px] text-zinc-700">{date}</span>
+      <span className="text-[11px] text-zinc-600">SOUL</span>
+      <span className="version-label mt-1 text-[13px] font-semibold text-zinc-900">{`v${version?.version_number ?? ''}`}</span>
+      <span className="mt-auto pt-2 text-[11px] text-zinc-600">{date}</span>
     </>
   );
   const soulStyle = {
-    background: 'linear-gradient(160deg, #ffe08a 0%, #fff6d0 100%)',
+    background: '#f7e8a3',
   };
   if (memory.detailOpen) {
     return (
@@ -339,10 +338,10 @@ export function AgentDetails({
           <Icon name="close" size={18} />
         </button>
       )}
-      <div className="min-h-0 flex-1 overflow-auto px-5 pt-8 pb-6">
+      <div className="min-h-0 flex-1 overflow-auto px-5 pt-6 pb-5">
         <div className="flex flex-col items-center text-center">
           <div className="relative">
-            <AgentAvatar size={96} />
+            <AgentAvatar size={88} />
             {editable && (
               <button
                 type="button"
@@ -354,7 +353,7 @@ export function AgentDetails({
               </button>
             )}
           </div>
-          <h2 className="mt-4 text-xl font-medium">{agent.name}</h2>
+          <h2 className="mt-2 text-base font-semibold">{agent.name}</h2>
           {agent.description.trim() && (
             <p className="mt-1 line-clamp-2 max-w-full px-2 text-xs leading-5 text-zinc-500">
               {agent.description}
@@ -389,12 +388,12 @@ export function AgentDetails({
             </div>
           )
         ) : (
-          <Tabs defaultValue="modules" className="mt-6">
+          <Tabs defaultValue="modules" className="mt-4">
             <TabsList>
               <TabsTrigger value="modules">模块</TabsTrigger>
               <TabsTrigger value="about">详情</TabsTrigger>
             </TabsList>
-            <TabsContent value="modules" className="mt-4">
+            <TabsContent value="modules" className="mt-5">
               {memory.error && (
                 <div
                   className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800"
@@ -410,14 +409,14 @@ export function AgentDetails({
                   </button>
                 </div>
               )}
-              <div className="rounded-2xl border border-zinc-200 bg-white p-4 text-left">
-                <p className="line-clamp-4 text-sm leading-6 whitespace-pre-wrap text-zinc-600">
+              <div className="rounded-[14px] border border-zinc-200 bg-white px-3.5 py-3 text-left">
+                <p className="line-clamp-4 text-xs leading-[1.65] whitespace-pre-wrap text-zinc-600">
                   {soul || '未设置'}
                 </p>
                 {editable && (
                   <button
                     type="button"
-                    className="mt-3 text-sm text-zinc-800 underline underline-offset-4"
+                    className="mt-1.5 text-xs font-medium text-zinc-800 hover:underline"
                     aria-label="编辑 SOUL.md"
                     onClick={openSoul}
                   >
@@ -425,12 +424,11 @@ export function AgentDetails({
                   </button>
                 )}
               </div>
-              <Separator className="my-4" />
-              <div className="grid grid-cols-2 items-stretch gap-3">
+              <div className="mt-3 grid grid-cols-2 items-stretch gap-2.5">
                 {editable ? (
                   <button
                     type="button"
-                    className="flex min-h-36 flex-col rounded-[20px] p-3 text-left"
+                    className="flex min-h-[88px] flex-col rounded-2xl p-3 text-left"
                     style={soulStyle}
                     onClick={openSoul}
                     disabled={saving}
@@ -439,24 +437,15 @@ export function AgentDetails({
                   </button>
                 ) : (
                   <div
-                    className="flex min-h-36 flex-col rounded-[20px] p-3 text-left"
+                    className="flex min-h-[88px] flex-col rounded-2xl p-3 text-left"
                     style={soulStyle}
                   >
                     {soulCard}
                   </div>
                 )}
-                <div
-                  className="flex min-h-36 flex-col rounded-[20px] p-3 text-left"
-                  style={{
-                    background:
-                      'linear-gradient(160deg, #d7e6ff 0%, #f4f8ff 100%)',
-                  }}
-                >
-                  <span className="text-sm font-medium">模型</span>
-                  <span className="mt-1 truncate text-xs text-zinc-700">
-                    {model}
-                  </span>
-                  {editable && (
+                <div className="flex min-h-[88px] min-w-0 flex-col rounded-2xl bg-[#dbe7fb] py-3 pr-1.5 pl-3 text-left text-zinc-900">
+                  <span className="text-[11px] text-zinc-600">模型</span>
+                  {editable ? (
                     <Select
                       value={model}
                       disabled={saving}
@@ -465,7 +454,11 @@ export function AgentDetails({
                         setNotice('');
                       }}
                     >
-                      <SelectTrigger className="mt-2" aria-label="模型">
+                      <SelectTrigger
+                        className="mt-1 h-auto min-h-6 min-w-0 justify-start gap-0.5 rounded-sm border-0 bg-transparent p-0 text-[13px] font-semibold focus-visible:ring-2 [&>span]:truncate [&>svg]:size-3 [&>svg]:shrink-0"
+                        aria-label="模型"
+                        title={model}
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -476,8 +469,15 @@ export function AgentDetails({
                         ))}
                       </SelectContent>
                     </Select>
+                  ) : (
+                    <span
+                      className="mt-1 truncate text-[13px] font-semibold"
+                      title={model}
+                    >
+                      {model}
+                    </span>
                   )}
-                  <span className="mt-auto pt-4 text-[11px] text-zinc-600">
+                  <span className="mt-auto pt-2 text-[11px] text-zinc-600">
                     {date}
                   </span>
                   {editable && model !== version.configuration.model && (

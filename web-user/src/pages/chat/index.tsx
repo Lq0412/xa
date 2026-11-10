@@ -90,7 +90,7 @@ export default function ChatPage() {
     <div className="flex h-full min-h-0 flex-1">
       {sidebarInline ? (
         <aside
-          className="agent-sidebar flex h-full w-[260px] shrink-0 flex-col border-r border-zinc-200 bg-[#f4f4f5] px-3 py-3"
+          className="agent-sidebar flex h-full w-[248px] shrink-0 flex-col border-r border-zinc-200 bg-[#f4f4f5] px-3 py-3"
           aria-label="对话 Agent"
         >
           {sidebar}
@@ -208,6 +208,7 @@ export default function ChatPage() {
             </div>
           )}
           <MessageComposer
+            key={`composer:${session.key}`}
             value={session.draft}
             disabled={
               !session.loaded ||
@@ -217,7 +218,7 @@ export default function ChatPage() {
             }
             sending={session.sending}
             creating={session.creating}
-            waitingApproval={session.waitingApproval}
+            approval={session.pendingApproval}
             onChange={session.setDraft}
             onSend={() => void session.send()}
             onStop={() => void session.stop()}
@@ -228,7 +229,7 @@ export default function ChatPage() {
         details.open &&
         (detailsInline ? (
           <aside
-            className="agent-details-panel h-full w-[340px] shrink-0 border-l border-zinc-200 bg-white"
+            className="agent-details-panel h-full w-[300px] shrink-0 border-l border-zinc-200 bg-white"
             aria-label="Agent 配置栏"
           >
             {panel}

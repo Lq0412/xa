@@ -127,6 +127,9 @@ export function applyRunEvent(
           decision: ev.decision as NonNullable<
             ToolPart['approval']
           >['decision'],
+          remember: ev.remember as NonNullable<
+            ToolPart['approval']
+          >['remember'],
         };
         part.status =
           ev.decision === 'approved'

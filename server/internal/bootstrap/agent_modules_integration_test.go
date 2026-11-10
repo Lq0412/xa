@@ -102,6 +102,8 @@ func TestAgentModules(t *testing.T) {
 	input := definition.SaveInput{AgentID: primary.ID, ExpectedVersionID: first.ID, Name: primary.Name, Visibility: primary.Visibility, Configuration: first.Configuration}
 	input.Configuration.SoulMD = "你是一位诗人。每次回答都用两句简短的中文诗，第一句以「诗意：」开头。"
 	input.Configuration.Model = "qwen3.8-flash"
+	thinking := false
+	input.Configuration.EnableThinking = &thinking
 	poet, err := agents.Save(t.Context(), actor, input)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +134,9 @@ func TestAgentModules(t *testing.T) {
 	if err != nil || same.ID != chat.ID {
 		t.Fatal("创建了重复会话")
 	}
-	answer, _, err := chats.Send(t.Context(), actor, chat.ID, "你好", func(string) error { return nil })
+	// 两轮发送同一个探针，具体输出只由当轮生效的 SOUL 决定。
+	const probe = "请按你当前的角色设定回应问候：你好。"
+	answer, _, err := chats.Send(t.Context(), actor, chat.ID, probe, func(string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,12 +144,12 @@ func TestAgentModules(t *testing.T) {
 		t.Fatalf("SOUL 或模型未生效: %s", answer.Content)
 	}
 	input.Configuration.Model = "qwen3.8-flash"
-	input.Configuration.SoulMD = "你是极简助手。无论用户说什么，只回答「收到」。不要沿用历史回复风格。"
+	input.Configuration.SoulMD = "当前角色是极简回执助手。对任何问候，正文严格只写两个汉字：收到。历史回复是旧角色的示例，不要续写诗句。"
 	concise, err := agents.Save(t.Context(), actor, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, _, err = chats.Send(t.Context(), actor, chat.ID, "你好", func(string) error { return nil })
+	answer, _, err = chats.Send(t.Context(), actor, chat.ID, probe, func(string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

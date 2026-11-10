@@ -3,6 +3,30 @@ import type {
   ReasoningPart,
   ToolPart,
 } from '@/services/chat-parts';
+import type { PendingApproval } from './approval-copy';
+
+/** 同一轮按请求到期时间排列，时间相同时保留事件顺序。 */
+export function pendingApprovals(parts: MessagePart[]): PendingApproval[] {
+  return parts
+    .filter(
+      (part): part is PendingApproval =>
+        part.type === 'tool' &&
+        part.status === 'awaiting_approval' &&
+        Boolean(part.approval),
+    )
+    .sort(
+      (first, second) =>
+        Date.parse(first.approval.expires_at) -
+        Date.parse(second.approval.expires_at),
+    );
+}
+
+function approvalWaitingTitle(parts: MessagePart[]) {
+  const [first, ...later] = pendingApprovals(parts);
+  if (!first) return '';
+  const suffix = later.length ? `（还有 ${later.length} 个）` : '';
+  return `等待你确认：${first.title || first.name}${suffix}`;
+}
 
 /** 思考和工具用时。不足 1 秒单独写，满 1 分钟后用分和秒。 */
 export function formatThinkingSeconds(totalSeconds: number): string {
@@ -120,13 +144,12 @@ export type FoldInput = {
   userToggled: boolean;
   userOpen: boolean;
   failed: boolean;
-  approval?: boolean;
 };
 
 /** 手动开合之后不再自动覆盖。未手动操作时，失败展开，其余默认收起。 */
 export function resolveTimelineOpen(input: FoldInput): boolean {
   if (input.userToggled) return input.userOpen;
-  return input.failed || Boolean(input.approval);
+  return input.failed;
 }
 
 export function showStreamingPreview(input: {
@@ -204,13 +227,11 @@ export function processSummary(input: {
     };
   }
   const active = messageStatus === 'pending' ? activePart(parts) : undefined;
-  const awaiting = tools.filter((part) => part.status === 'awaiting_approval');
-  if (messageStatus === 'pending' && awaiting.length) {
+  const waitingTitle =
+    messageStatus === 'pending' && approvalWaitingTitle(parts);
+  if (waitingTitle) {
     return {
-      title:
-        awaiting.length === 1
-          ? `需要确认：${awaiting[0].title || awaiting[0].name}`
-          : `需要确认 ${awaiting.length} 个操作`,
+      title: waitingTitle,
       phase: 'approval',
       live: false,
     };

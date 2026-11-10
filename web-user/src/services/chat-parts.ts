@@ -39,6 +39,7 @@ export type ApprovalInfo = {
   items?: { label: string; value: string }[];
   can_remember_agent?: boolean;
   decision?: 'approved' | 'rejected' | 'expired' | 'cancelled';
+  remember?: 'once' | 'conversation' | 'agent';
 };
 
 export type TextPart = { type: 'text'; text: string };

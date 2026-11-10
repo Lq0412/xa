@@ -17,6 +17,7 @@ import {
 import { applyRunEvent } from '@/services/chat-run';
 import { errorMessage } from '@/services/http';
 import type { MemoryCue } from './MemoryPanel';
+import { pendingApprovals } from './process-summary';
 
 /** 每个会话独立保存草稿和请求状态，流式回调始终按会话 ID 更新。 */
 type Session = {
@@ -359,7 +360,15 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       current.agent.status !== 'active' ||
       !text ||
       current.sending ||
-      current.loading
+      current.loading ||
+      current.messages.some(
+        (message) =>
+          message.status === 'pending' &&
+          message.parts?.some(
+            (part) =>
+              part.type === 'tool' && part.status === 'awaiting_approval',
+          ),
+      )
     )
       return;
     const controller = new AbortController();
@@ -526,12 +535,10 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
   };
 
   const current = sessions.get(key) || emptySession;
-  const waitingApproval = current.messages.some(
-    (message) =>
-      message.status === 'pending' &&
-      message.parts?.some(
-        (part) => part.type === 'tool' && part.status === 'awaiting_approval',
-      ),
+  const [pendingApproval] = pendingApprovals(
+    current.messages.flatMap((message) =>
+      message.status === 'pending' ? (message.parts ?? []) : [],
+    ),
   );
   const loadOlder = async () => {
     const state = cache.current.get(key) || emptySession;
@@ -567,7 +574,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
 
   return {
     ...current,
-    waitingApproval,
+    pendingApproval,
     key,
     agentID,
     conversationID,

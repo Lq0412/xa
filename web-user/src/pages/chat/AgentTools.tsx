@@ -77,30 +77,36 @@ export function AgentTools({
     }
   };
   return (
-    <section className="mt-4 space-y-2 text-left" aria-label="工具设置">
-      <h3 className="text-sm font-medium">工具</h3>
+    <section className="mt-[18px] text-left" aria-label="工具设置">
+      <h3 className="mb-2 text-sm font-semibold">工具</h3>
       {tools
         .filter((tool) => tool.enabled && tool.available)
-        .map((tool) => (
-          <label
-            key={tool.name}
-            className="flex min-h-11 items-center justify-between gap-3 text-xs"
-          >
-            <span>{tool.title}</span>
-            <span className="flex items-center gap-2">
-              需要确认
-              <input
-                type="checkbox"
-                role="switch"
-                aria-checked={tool.approval === 'always'}
-                aria-label={`${tool.title}需要确认`}
-                checked={tool.approval === 'always'}
-                disabled={saving || !tool.approval_overridable}
-                onChange={() => void toggle(tool)}
-              />
-            </span>
-          </label>
-        ))}
+        .map((tool) => {
+          const requiresApproval = tool.approval === 'always';
+          const status = requiresApproval ? '需确认' : '自动运行';
+          const style = requiresApproval ? 'font-medium' : 'text-zinc-400';
+          return (
+            <div
+              key={tool.name}
+              className="flex min-h-9 items-center justify-between gap-3 text-[13px]"
+            >
+              <span>{tool.title}</span>
+              {tool.approval_overridable ? (
+                <button
+                  type="button"
+                  className={`shrink-0 py-1 text-xs hover:underline ${style}`}
+                  aria-label={`${tool.title}：${status}`}
+                  disabled={saving}
+                  onClick={() => void toggle(tool)}
+                >
+                  {status}
+                </button>
+              ) : (
+                <span className={`text-xs ${style}`}>{status}</span>
+              )}
+            </div>
+          );
+        })}
       {error && (
         <p role="alert" className="text-xs text-rose-600">
           {error}

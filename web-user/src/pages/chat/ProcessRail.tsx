@@ -6,7 +6,7 @@ import type {
   ReasoningPart,
   ToolPart,
 } from '@/services/chat-parts';
-import { ApprovalActions } from './ApprovalActions';
+import { approvalReceipt } from './approval-copy';
 import {
   formatDurationMs,
   hasFailedTool,
@@ -82,7 +82,8 @@ function ToolTrace({ part }: { part: ToolPart }) {
   const active = isActiveToolStatus(part.status);
   const [userToggled, setUserToggled] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
-  const open = userToggled ? userOpen : failed;
+  const receipt = approvalReceipt(part);
+  const open = userToggled ? userOpen : failed && !receipt;
   const duration = !active ? formatDurationMs(part.duration_ms) : '';
   const status = toolStatusText(part.status);
   const title = part.title || part.name;
@@ -143,13 +144,14 @@ function ToolTrace({ part }: { part: ToolPart }) {
           {body}
         </div>
       )}
-      {part.approval ? <ApprovalActions part={part} /> : null}
-      {part.approval?.decision === 'approved' ||
-      part.approval?.decision === 'expired' ? (
-        <p className="pl-6 text-xs text-zinc-400">
-          {part.approval.decision === 'approved' ? '已允许' : '未确认'}
+      {receipt && (
+        <p
+          className="pb-1 pl-[22px] text-xs text-zinc-400"
+          data-testid="approval-receipt"
+        >
+          {receipt}
         </p>
-      ) : null}
+      )}
       {open && hasDetails ? (
         <div id={detailsId} className="space-y-1.5 pb-1 pl-6 text-xs">
           {errorText ? (
@@ -259,13 +261,18 @@ export function ProcessRail({ parts, messageStatus }: Props) {
   const now = useClock(streaming);
   const reasoningMs = useReasoningDurations(parts, now);
   const summary = processSummary({ parts, messageStatus, reasoningMs });
+  const showDetails = parts.some(
+    (part) => part.type === 'tool' && part.approval?.decision,
+  );
   const failed = hasFailedTool(parts) || messageStatus === 'failed';
   const [userToggled, setUserToggled] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
-  const approval = parts.some(
-    (part) => part.type === 'tool' && part.status === 'awaiting_approval',
-  );
-  const open = resolveTimelineOpen({ userToggled, userOpen, failed, approval });
+  const waiting = summary.phase === 'approval';
+  const open = resolveTimelineOpen({
+    userToggled,
+    userOpen,
+    failed: !waiting && (failed || showDetails),
+  });
   const streamingPart = [...parts]
     .reverse()
     .find(
@@ -275,11 +282,13 @@ export function ProcessRail({ parts, messageStatus }: Props) {
         reasoningHasBody(part),
     );
   const preview = streamingPart ? reasoningPreview(streamingPart.text) : '';
-  const showPreview = showStreamingPreview({
-    userToggled,
-    timelineOpen: open,
-    streamingText: preview,
-  });
+  const showPreview =
+    !waiting &&
+    showStreamingPreview({
+      userToggled,
+      timelineOpen: open,
+      streamingText: preview,
+    });
   const timeline = visibleTimelineParts(parts);
   if (!summary.title) return null;
   return (

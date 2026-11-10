@@ -338,8 +338,8 @@ func (s *RunService) heartbeatLease(ctx context.Context, runID string) func() {
 	}
 	ttl := s.leaseTTL()
 	renew := func() {
-		_, _ = s.DB.Exec(ctx, `UPDATE runs SET lease_owner=$2,lease_expires_at=now()+($3::text||' milliseconds')::interval,heartbeat_at=now() WHERE id=$1 AND status='running'`,
-			runID, owner, int(ttl.Milliseconds()))
+		_, _ = s.DB.Exec(ctx, `UPDATE runs SET lease_owner=$2,lease_expires_at=now()+make_interval(secs => $3),heartbeat_at=now() WHERE id=$1 AND status='running'`,
+			runID, owner, ttl.Seconds())
 	}
 	renew()
 	stop := make(chan struct{})

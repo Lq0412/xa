@@ -190,9 +190,15 @@ func buildPartsFromEvents(events []replayEvent, opts partsReplayOpts) []MessageP
 				part["status"] = "awaiting_approval"
 				part["call_id"] = callID
 				part["approval"] = map[string]any{"approval_id": data["approval_id"], "expires_at": data["expires_at"], "summary": data["summary"], "items": data["items"], "can_remember_agent": data["can_remember_agent"]}
+				if preview, ok := data["args_preview"].(string); ok && preview != "" {
+					part["args_preview"] = preview
+				}
 			case "approval.resolved":
 				if a, ok := part["approval"].(map[string]any); ok {
 					a["decision"] = data["decision"]
+					if remember, ok := data["remember"].(string); ok && remember != "" {
+						a["remember"] = remember
+					}
 				}
 				part["status"] = "rejected"
 				if data["decision"] == "approved" {

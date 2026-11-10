@@ -8,11 +8,12 @@ test.skip(
   '通过 make integration 启动真实服务',
 );
 
-test('过程轨审批在刷新后恢复，批准后执行，拒绝后保留记忆', async ({
+test('输入区审批可刷新和键盘操作，历史留下收据，工具状态可切换', async ({
   page,
   request,
   browser,
 }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
   const shotDir = process.env.XA_P5_SHOTS;
   if (shotDir) await mkdir(shotDir, { recursive: true });
   const shot = async (name: string, target = page) => {
@@ -54,13 +55,21 @@ test('过程轨审批在刷新后恢复，批准后执行，拒绝后保留记�
   const stop = page.getByRole('button', { name: '停止生成' });
   const rail = page.getByTestId('process-rail').last();
   const summary = rail.getByTestId('process-summary');
-  const actions = rail.getByTestId('approval-actions');
+  const actions = page.getByRole('region', { name: '需要确认遗忘记忆' });
+  // 一个回复容器可以包含多个正文段，按整条回复断言。
   const reply = page
     .locator('.message-row.assistant')
     .last()
-    .getByTestId('message-text-part');
-  const approve = actions.getByRole('button', { name: /^允许本次遗忘记忆/ });
-  const reject = actions.getByRole('button', { name: /^拒绝遗忘记忆/ });
+    .locator('.assistant-bubble');
+  const approve = actions.getByRole('button', { name: /^允许本次，忘掉/ });
+  const reject = actions.getByRole('button', { name: /^拒绝，忘掉/ });
+  const conversationOption = actions.getByRole('button', {
+    name: /^本对话不再询问，忘掉/,
+  });
+  const agentOption = actions.getByRole('button', {
+    name: /^以后在这个 Agent 上都允许，忘掉/,
+  });
+  const receipt = rail.getByTestId('approval-receipt');
   const tool = rail.getByTestId('tool-call-chip').last();
   const add = async (content: string) => {
     const result = await request.post('/api/v1/memories', {
@@ -76,13 +85,38 @@ test('过程轨审批在刷新后恢复，批准后执行，拒绝后保留记�
       `请忘掉「${content}」这条记忆。直接用 memory_forget，记忆 ID 为 ${id}。`,
     );
     await composer.press('Enter');
-    await expect(actions).toContainText(content, { timeout: 90000 });
-    await expect(summary).toContainText('需要确认：遗忘记忆');
+    await expect(actions.getByTestId('approval-sentence')).toHaveText(
+      `要忘掉「${content}」这条记忆。`,
+      { timeout: 90000 },
+    );
+    await expect(summary).toHaveText('等待你确认：遗忘记忆');
+    await expect(summary).toHaveAttribute('aria-expanded', 'false');
+    await expect(rail.getByRole('button')).toHaveCount(1);
+    await expect(
+      page.getByTestId('composer-stack').getByTestId('approval-dock'),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId('composer-stack').getByRole('textbox', { name: '消息' }),
+    ).toBeDisabled();
     await expect(composer).toHaveAttribute('placeholder', '请先确认上方的操作');
     await expect(stop).toBeVisible();
     await expect(page.getByRole('button', { name: '发送消息' })).toHaveCount(0);
     await expect(approve).toBeFocused();
-    await expect(actions).toHaveCSS('border-top-width', '0px');
+    await expect(approve).toHaveCSS('outline-style', 'none');
+    await expect(
+      actions
+        .getByRole('button')
+        .filter({ has: page.locator('.approval-option-number') }),
+    ).toHaveText([
+      '1允许本次',
+      '2本对话不再询问',
+      '3以后在这个 Agent 上都允许',
+      '4拒绝',
+    ]);
+    await expect(actions.getByTestId('approval-countdown')).toHaveCount(0);
+    await expect(actions.getByTestId('approval-arguments')).toHaveCount(0);
+    await expect(actions).not.toContainText(id);
+    await expect(agentOption).toHaveAccessibleDescription(/只影响之后的对话/);
   };
 
   const coffee = await add('我喜欢手冲咖啡');
@@ -91,20 +125,44 @@ test('过程轨审批在刷新后恢复，批准后执行，拒绝后保留记�
     '1 条',
   );
   await forget('我喜欢手冲咖啡', coffee);
+  await expect(
+    page.getByRole('heading', { name: agentName, level: 1 }),
+  ).toHaveCount(0);
+  const modelLabel = page
+    .getByRole('combobox', { name: '模型' })
+    .locator('span')
+    .first();
+  await expect
+    .poll(() =>
+      modelLabel.evaluate((node) => node.scrollWidth <= node.clientWidth),
+    )
+    .toBe(true);
   await shot('01-waiting');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(approve).toBeVisible({ timeout: 20000 });
   await expect(actions).toContainText('我喜欢手冲咖啡');
   await shot('02-refresh-waiting');
-  await approve.click();
+  const details = actions.getByRole('button', { name: '详情' });
+  await expect(details).toHaveAttribute('aria-expanded', 'false');
+  await details.click();
+  await expect(actions.getByTestId('approval-arguments')).toContainText(coffee);
+  await details.press('4');
+  await expect(actions).toBeVisible();
+  await details.click();
+  await approve.focus();
+  await approve.press('ArrowDown');
+  await expect(conversationOption).toBeFocused();
+  await expect(conversationOption).toHaveCSS('outline-style', 'solid');
+  await conversationOption.press('ArrowUp');
+  await expect(approve).toBeFocused();
+  await approve.press('Enter');
   await expect(reply).toContainText(/已经删除这条记忆/, {
     timeout: 90000,
   });
   await expect(stop).toBeHidden();
-  if ((await summary.getAttribute('aria-expanded')) !== 'true')
-    await summary.click();
+  await expect(actions).toHaveCount(0);
   await expect(tool).toHaveAttribute('data-tool-status', 'succeeded');
-  await expect(tool).toContainText('已允许');
+  await expect(receipt).toHaveText('已允许本次');
   const deleted = await request.get('/api/v1/memories?status=deleted', {
     headers,
   });
@@ -119,22 +177,33 @@ test('过程轨审批在刷新后恢复，批准后执行，拒绝后保留记�
   const tea = await add('我喜欢乌龙茶');
   await forget('我喜欢乌龙茶', tea);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(approve).toBeVisible();
-  const buttons = await Promise.all([
-    approve.boundingBox(),
-    reject.boundingBox(),
-  ]);
-  expect(buttons[0]?.height).toBeGreaterThanOrEqual(44);
-  expect(buttons[1]?.height).toBeGreaterThanOrEqual(44);
-  expect(buttons[1]?.y).toBeGreaterThan(buttons[0]?.y ?? 0);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(approve).toBeFocused();
+  await expect(approve).toHaveCSS('outline-style', 'none');
+  const stack = await page.getByTestId('composer-stack').boundingBox();
+  expect(stack?.width).toBeGreaterThanOrEqual(360);
+  const buttons = await Promise.all(
+    [approve, conversationOption, agentOption, reject].map((option) =>
+      option.boundingBox(),
+    ),
+  );
+  for (const [index, box] of buttons.entries()) {
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+    expect(box?.width).toBe(buttons[0]?.width);
+    if (index > 0) expect(box?.y).toBeGreaterThan(buttons[index - 1]?.y ?? 0);
+  }
   await shot('04-narrow-waiting');
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await reject.click();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await approve.press('4');
   await expect(reply).toContainText(/没有删除这条记忆/, {
     timeout: 90000,
   });
   await expect(stop).toBeHidden();
+  await expect(actions).toHaveCount(0);
   await expect(tool).toHaveAttribute('data-tool-status', 'rejected');
+  await expect(receipt).toHaveText('已拒绝忘掉「我喜欢乌龙茶」');
+  await expect(rail.locator('pre')).toHaveCount(0);
+  await expect(rail).not.toContainText(tea);
   await shot('05-rejected');
   const active = await request.get('/api/v1/memories?status=active', {
     headers,
@@ -143,13 +212,15 @@ test('过程轨审批在刷新后恢复，批准后执行，拒绝后保留记�
     expect.arrayContaining([expect.objectContaining({ id: tea })]),
   );
 
-  const setting = page.getByRole('switch', { name: '遗忘记忆需要确认' });
-  await expect(setting).toBeChecked();
-  await setting.click();
-  await expect(setting).not.toBeChecked();
+  const toolSettings = page.getByRole('region', { name: '工具设置' });
+  const ask = toolSettings.getByRole('button', { name: '遗忘记忆：需确认' });
+  const auto = toolSettings.getByRole('button', { name: '遗忘记忆：自动运行' });
+  await expect(toolSettings.getByRole('checkbox')).toHaveCount(0);
+  await ask.click();
+  await expect(auto).toBeEnabled();
   await shot('06-agent-tool-switch');
-  await setting.click();
-  await expect(setting).toBeChecked();
+  await auto.click();
+  await expect(ask).toBeEnabled();
 
   const adminURL = process.env.XA_P5_ADMIN_URL;
   if (adminURL) {
@@ -176,4 +247,18 @@ test('过程轨审批在刷新后恢复，批准后执行，拒绝后保留记�
     await shot('07-admin-approval-records', admin);
     await admin.close();
   }
+
+  const extra = await add('我喜欢冷萃咖啡');
+  await forget('我喜欢冷萃咖啡', extra);
+  await approve.press('3');
+  await expect(receipt).toHaveText(
+    '已允许，以后在这个 Agent 上都不再询问遗忘记忆',
+    { timeout: 90000 },
+  );
+  await expect(auto).toBeEnabled();
+  await expect(stop).toBeHidden();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(receipt).toHaveText(
+    '已允许，以后在这个 Agent 上都不再询问遗忘记忆',
+  );
 });

@@ -411,6 +411,102 @@ func TestP5ApprovalLifecycle(t *testing.T) {
 	}
 }
 
+// TestP5ApprovalRaces 让两次真实 HTTP 决定都在 PostgreSQL 等待同一行，覆盖两种争抢顺序。
+func TestP5ApprovalRaces(t *testing.T) {
+	db := newP5Database(t)
+	for _, tc := range []struct {
+		name, first, second, approval, run, tool, memory string
+		secondCode, deletes                              int
+	}{
+		{"approve_twice", "approve", "approve", "approved", "completed", "succeeded", "deleted", 200, 1},
+		{"approve_first", "approve", "cancel", "approved", "completed", "succeeded", "deleted", 409, 1},
+		{"cancel_first", "cancel", "approve", "cancelled", "cancelled", "cancelled", "active", 409, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newP5Fixture(t, db, "qwen3.8-flash")
+			item := f.add(t, "coffee")
+			rid, approval := f.start(t, item, true)
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			lock, err := db.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Rollback(context.WithoutCancel(ctx))
+			if _, err := lock.Exec(ctx, `SELECT id FROM runs WHERE id=$1 FOR UPDATE`, rid); err != nil {
+				t.Fatal(err)
+			}
+			h := &agenthttp.RunHandler{Runs: f.chats.Runs}
+			submit := func(action string) <-chan *httptest.ResponseRecorder {
+				result := make(chan *httptest.ResponseRecorder, 1)
+				go func() {
+					w := httptest.NewRecorder()
+					actor := auth.WithPrincipal(ctx, f.owner)
+					if action == "cancel" {
+						req := httptest.NewRequestWithContext(actor, http.MethodPost, "/api/v1/runs/"+rid+"/cancel", nil)
+						req.SetPathValue("run_id", rid)
+						h.Cancel(w, req)
+					} else {
+						req := httptest.NewRequestWithContext(actor, http.MethodPost, "/api/v1/approvals/"+approval.ID+"/decision", strings.NewReader(`{"decision":"approve","remember":"once"}`))
+						req.SetPathValue("approval_id", approval.ID)
+						h.Decision(w, req)
+					}
+					result <- w
+				}()
+				return result
+			}
+			awaitLock := func(want int) {
+				for ctx.Err() == nil {
+					var waiting int
+					err := db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM runs WHERE id=$1 FOR UPDATE'`).Scan(&waiting)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if waiting == want {
+						return
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+				t.Fatalf("没有 %d 个请求同时等待 run 行锁", want)
+			}
+			first := submit(tc.first)
+			awaitLock(1)
+			second := submit(tc.second)
+			awaitLock(2)
+			if err := lock.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, result := range []struct {
+				response <-chan *httptest.ResponseRecorder
+				code     int
+			}{{first, 200}, {second, tc.secondCode}} {
+				select {
+				case response := <-result.response:
+					if response.Code != result.code {
+						t.Fatalf("HTTP %d，预期 %d：%s", response.Code, result.code, response.Body)
+					}
+				case <-ctx.Done():
+					t.Fatal("审批或取消未返回", ctx.Err())
+				}
+			}
+			if tc.run == "completed" {
+				f.completed(t, rid)
+			}
+			var runStatus, approvalStatus, toolStatus, memoryStatus string
+			var deletes, resolutions, terminal int
+			err = db.QueryRow(t.Context(), `SELECT r.status,a.status,tr.status,m.status,
+				(SELECT count(*) FROM memory_events WHERE memory_id=m.id AND op='DELETE'),
+				(SELECT count(*) FROM run_events WHERE run_id=r.id AND type='approval.resolved'),
+				(SELECT count(*) FROM run_events WHERE run_id=r.id AND type IN ('run.completed','run.cancelled','run.failed'))
+				FROM runs r JOIN run_approvals a ON a.run_id=r.id JOIN tool_results tr ON tr.run_id=r.id AND tr.call_id=a.call_id
+				JOIN memory_items m ON m.id=$2 WHERE r.id=$1`, rid, item.ID).Scan(&runStatus, &approvalStatus, &toolStatus, &memoryStatus, &deletes, &resolutions, &terminal)
+			if err != nil || runStatus != tc.run || approvalStatus != tc.approval || toolStatus != tc.tool || memoryStatus != tc.memory || deletes != tc.deletes || resolutions != 1 || terminal != 1 {
+				t.Fatalf("竞争后的状态不符：run=%s approval=%s tool=%s memory=%s deletes=%d resolutions=%d terminal=%d err=%v", runStatus, approvalStatus, toolStatus, memoryStatus, deletes, resolutions, terminal, err)
+			}
+		})
+	}
+}
+
 // newP5Database 隔离真实抽取任务，避免本机 worker 提前领取。
 func newP5Database(t *testing.T) *pgxpool.Pool {
 	t.Helper()
