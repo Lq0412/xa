@@ -40,6 +40,7 @@ type RunConfig struct {
 	MaxTokensCap     int `env:"MAX_TOKENS_CAP" envDefault:"400000"`
 
 	ReconnectGraceSec int `env:"RECONNECT_GRACE" envDefault:"30"`
+	ApprovalTTLSec    int `env:"APPROVAL_TTL" envDefault:"600"`
 	LeaseTTLMS        int `env:"LEASE_TTL" envDefault:"30000"`
 	StaleAfterSec     int `env:"STALE_AFTER" envDefault:"30"`
 	SweepIntervalSec  int `env:"SWEEP_INTERVAL" envDefault:"15"`

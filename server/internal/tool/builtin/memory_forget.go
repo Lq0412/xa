@@ -7,12 +7,33 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"linq-bs/server/internal/agent/memory"
+	"linq-bs/server/internal/framework/redact"
 	"linq-bs/server/internal/tool"
 )
 
 var schemaMemoryForget = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["memory_id","reason"],"properties":{"memory_id":{"type":"string","minLength":1,"maxLength":64},"reason":{"type":"string","minLength":1,"maxLength":200}}}`)
 
 type MemoryForget struct{ svc *memory.Service }
+
+// Preview 只读取当前用户在该 Agent 下可删除的 active 记忆。
+func (m *MemoryForget) Preview(ctx context.Context, call tool.Call, env tool.Env) (tool.Display, error) {
+	var in struct {
+		MemoryID string `json:"memory_id"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal(call.Arguments, &in); err != nil {
+		return tool.Display{}, err
+	}
+	var content, namespace string
+	err := m.svc.DB.QueryRow(ctx, `SELECT content,namespace FROM memory_items WHERE id=$1 AND workspace_id=$2 AND owner_user_id=$3 AND status='active' AND (scope='user' OR (scope='agent' AND agent_id=$4))`, in.MemoryID, env.WorkspaceID, env.Principal.UserID, env.AgentID).Scan(&content, &namespace)
+	if err == pgx.ErrNoRows {
+		return tool.Display{}, &tool.Error{Code: "not_found", Message: "未找到可删除的记忆"}
+	}
+	if err != nil {
+		return tool.Display{}, err
+	}
+	return tool.Display{Summary: "将删除这条记忆", Items: []tool.DisplayItem{{Label: "内容", Value: content}, {Label: "命名空间", Value: namespace}, {Label: "原因", Value: in.Reason}}}, nil
+}
 
 func NewMemoryForget(svc *memory.Service) *MemoryForget { return &MemoryForget{svc: svc} }
 
@@ -64,7 +85,7 @@ func (m *MemoryForget) runTx(ctx context.Context, tx pgx.Tx, call tool.Call, env
 		}
 		return tool.Result{
 			Data:    map[string]any{"memory_id": item.ID, "status": "deleted"},
-			Display: tool.Display{Summary: "已删除记忆", Items: []tool.DisplayItem{{Label: "内容", Value: trimRunes(item.Content, 80)}}},
+			Display: tool.Display{Summary: "已删除记忆", Items: []tool.DisplayItem{{Label: "内容", Value: trimRunes(redact.String(item.Content), 80)}}},
 			Effects: []tool.Effect2{{Kind: "memory.delete", TargetID: item.ID, Attrs: map[string]string{"namespace": item.Namespace, "scope": item.Scope}}},
 		}, nil
 	}

@@ -699,14 +699,9 @@ export function MemoryCard({
   date: string;
 }) {
   return (
-    <div
-      className="col-span-2 flex min-h-36 flex-col rounded-[20px] p-3 text-left"
-      style={{
-        background: 'linear-gradient(160deg, #e4d4ff 0%, #f7f3ff 100%)',
-      }}
-    >
+    <div className="col-span-2 flex min-h-[88px] flex-col rounded-2xl bg-[#e4d7f8] px-3.5 py-3 text-left text-zinc-900">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-medium">记忆</span>
+        <span className="text-[11px] text-zinc-600">记忆</span>
         <Switch
           checked={memory.policy.enabled}
           disabled={!memory.editable || memory.policySaving}
@@ -716,14 +711,14 @@ export function MemoryCard({
       </div>
       <button
         type="button"
-        className="mt-1 flex flex-1 flex-col text-left"
+        className="flex flex-1 flex-col text-left"
         aria-label="查看记忆"
         onClick={() => memory.setDetailOpen(true)}
       >
-        <span className="text-xs text-zinc-700">
+        <span className="text-base font-semibold">
           {memory.count == null ? '…' : `${memory.count} 条`}
         </span>
-        <span className="mt-auto pt-6 text-[11px] text-zinc-700">{date}</span>
+        <span className="mt-auto pt-2 text-[11px] text-zinc-600">{date}</span>
       </button>
     </div>
   );

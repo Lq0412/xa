@@ -322,6 +322,96 @@ details:not([open]) > :not(summary) {
   }
 }
 
+.composer-wrap {
+  width: 100%;
+  max-width: 808px;
+  margin-inline: auto;
+  padding: 0 24px 18px;
+  flex-shrink: 0;
+}
+
+.composer-stack {
+  display: flex;
+  flex-direction: column;
+  max-height: 70dvh;
+  overflow: hidden;
+  border: 1px solid var(--color-zinc-200);
+  border-radius: 28px;
+  background: var(--color-white);
+  box-shadow: 0 8px 30px rgb(24 24 27 / 8%);
+}
+
+.approval-dock {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 12px;
+}
+
+.approval-dock + .message-composer {
+  border-top: 1px solid var(--color-zinc-100);
+}
+
+.approval-sentence {
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.approval-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.approval-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding-inline: 4px;
+  border-radius: 999px;
+  color: var(--color-zinc-600);
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.approval-option-number {
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--color-zinc-400);
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.approval-option[data-primary] {
+  padding-inline: 10px 14px;
+  background: #f5c518;
+  color: #3a2a00;
+  font-weight: 500;
+}
+
+.approval-option[data-primary] .approval-option-number { color: inherit; }
+.approval-option:disabled { opacity: 0.55; }
+.approval-option:focus-visible { outline: 2px solid #a16f00; outline-offset: -2px; }
+.approval-option[data-primary]:focus-visible { outline: none; }
+.approval-option[data-primary]:not([data-initial-focus]):focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+
+@media (max-width: 480px) {
+  .composer-wrap { padding: 0 12px 16px; }
+  .composer-stack { border-radius: 24px; }
+  .approval-sentence { font-size: 15px; }
+  .approval-option, .approval-option[data-primary] {
+    width: 100%;
+    min-height: 44px;
+    padding-inline: 12px;
+  }
+  .user-app:has(.approval-dock) .icon-rail { display: none; }
+}
+
 @media (prefers-color-scheme: dark) {
   .user-app {
     background: #18181b;
@@ -348,11 +438,14 @@ details:not([open]) > :not(summary) {
     color: #fafafa;
   }
 
-  .message-composer {
+  .composer-stack {
     background: #111113;
     border-color: #3f3f46;
     color: #fafafa;
   }
+
+  .approval-dock + .message-composer { border-color: #27272a; }
+  .approval-option:not([data-primary]) { color: var(--color-zinc-300); }
 
   .process-rail,
   .markdown-reasoning .markdown,

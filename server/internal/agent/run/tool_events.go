@@ -28,7 +28,7 @@ func emitToolCalled(ctx context.Context, rc *RunContext, pc PlannedCall) {
 	status := "pending"
 	payload := map[string]any{
 		"call_id": pc.Call.ID, "index": pc.Index, "name": pc.Call.Name, "title": title, "status": status,
-		"args_preview": redact.String(truncateRunes(pc.Call.Arguments, 512)),
+		"args_preview": truncateRunes(redact.String(pc.Call.Arguments), 512),
 	}
 	if !pc.Accepted {
 		payload["status"] = "rejected"

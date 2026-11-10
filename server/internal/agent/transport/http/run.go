@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -65,23 +66,46 @@ func (h *RunHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runID := r.PathValue("run_id")
-	var owner string
-	if err := h.Conversations.DB.QueryRow(r.Context(), `SELECT owner_user_id FROM runs WHERE id=$1`, runID).Scan(&owner); err != nil {
-		conversationError(w, r, fmt.Errorf("not found"))
-		return
-	}
-	if owner != p.UserID {
-		conversationError(w, r, fmt.Errorf("not found"))
-		return
-	}
 	if h.Runs == nil {
 		frameworkhttp.WriteError(w, r, 500, "run_unavailable", fmt.Errorf("RunService 未配置"))
 		return
 	}
-	_ = h.Runs.Coord
-	if h.Runs.Coord == nil {
-		h.Runs.Coord = run.NewCoordinator()
+	status, err := h.Runs.Cancel(r.Context(), p, runID)
+	if err != nil {
+		var ae *run.ApprovalError
+		if errors.As(err, &ae) {
+			frameworkhttp.WriteError(w, r, ae.Status, ae.Code, err)
+			return
+		}
+		conversationError(w, r, err)
+		return
 	}
-	_ = h.Runs.Coord.CancelRun(r.Context(), h.Runs.Redis, runID, "user_cancel")
-	frameworkhttp.WriteJSON(w, 202, map[string]string{"status": "cancelling"})
+	code := 200
+	if status == "cancelling" {
+		code = 202
+	}
+	frameworkhttp.WriteJSON(w, code, map[string]string{"status": status})
+}
+
+// Decision 只接受 owner 本人的审批决定。
+func (h *RunHandler) Decision(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var in run.DecisionInput
+	if !decodeAgentJSON(w, r, &in) {
+		return
+	}
+	result, err := h.Runs.Decide(r.Context(), p, r.PathValue("approval_id"), in)
+	if err != nil {
+		var ae *run.ApprovalError
+		if errors.As(err, &ae) {
+			frameworkhttp.WriteError(w, r, ae.Status, ae.Code, err)
+			return
+		}
+		conversationError(w, r, err)
+		return
+	}
+	frameworkhttp.WriteJSON(w, 200, result)
 }

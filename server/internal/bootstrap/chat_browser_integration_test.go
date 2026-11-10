@@ -136,8 +136,33 @@ func TestChatBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	frontend := serveBrowserFrontend(dist, proxy)
+	defer frontend.Close()
+	command := exec.CommandContext(ctx, "npm", "test")
+	command.Dir = filepath.Join(root, "web-user")
+	command.Env = append(os.Environ(), "XA_CHAT_INTEGRATION=1", "XA_WEB_URL="+frontend.URL,
+		"XA_E2E_EMAIL="+account.Email, "XA_E2E_PASSWORD="+password,
+		"XA_E2E_PRIMARY_ID="+primary.Definition.ID, "XA_E2E_PUBLIC_ID="+publicID, "XA_E2E_PUBLIC_NAME="+public.Definition.Name)
+	if os.Getenv("XA_P5_SHOTS") != "" {
+		adminDist := filepath.Join(root, "web", "dist")
+		if _, err := os.Stat(filepath.Join(adminDist, "index.html")); err != nil {
+			t.Fatal("请先构建管理端以拍摄审批列表", err)
+		}
+		adminFrontend := serveBrowserFrontend(adminDist, proxy)
+		defer adminFrontend.Close()
+		command.Env = append(command.Env, "XA_P5_ADMIN_URL="+adminFrontend.URL, "XA_P5_ADMIN_EMAIL="+cfg.Admin.Email, "XA_P5_ADMIN_PASSWORD="+cfg.Admin.Password)
+	}
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		t.Fatal("对话浏览器验收失败: ", err)
+	}
+}
+
+// serveBrowserFrontend 将两个前端的真实请求代理到同一验收服务。
+func serveBrowserFrontend(dist string, proxy http.Handler) *httptest.Server {
 	files := http.FileServer(http.Dir(dist))
-	frontend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			proxy.ServeHTTP(w, r)
 			return
@@ -148,15 +173,4 @@ func TestChatBrowser(t *testing.T) {
 		}
 		files.ServeHTTP(w, r)
 	}))
-	defer frontend.Close()
-	command := exec.CommandContext(ctx, "npm", "test")
-	command.Dir = filepath.Join(root, "web-user")
-	command.Env = append(os.Environ(), "XA_CHAT_INTEGRATION=1", "XA_WEB_URL="+frontend.URL,
-		"XA_E2E_EMAIL="+account.Email, "XA_E2E_PASSWORD="+password,
-		"XA_E2E_PRIMARY_ID="+primary.Definition.ID, "XA_E2E_PUBLIC_ID="+publicID, "XA_E2E_PUBLIC_NAME="+public.Definition.Name)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if err := command.Run(); err != nil {
-		t.Fatal("对话浏览器验收失败: ", err)
-	}
 }

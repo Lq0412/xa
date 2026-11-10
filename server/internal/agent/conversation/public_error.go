@@ -14,6 +14,10 @@ func PublicError(err error) string {
 	if err == nil {
 		return ""
 	}
+	var waiting *WaitingApprovalError
+	if errors.As(err, &waiting) {
+		return waiting.Error()
+	}
 	if errors.Is(err, runtime.ErrMessageTooLong) {
 		return "消息太长，请缩短后重试"
 	}

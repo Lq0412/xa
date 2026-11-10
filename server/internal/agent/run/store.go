@@ -31,8 +31,11 @@ type Store interface {
 	ListRecentCompletedToolRuns(ctx context.Context, conversationID string, limit int) ([]Run, error)
 	GetMessageRunIDs(ctx context.Context, messageIDs []string) (map[string]string, error)
 
-	// PendingCallsOfLastStep P4 审批恢复用；P3 恒为空。
+	// PendingCallsOfLastStep 返回最后一个 assistant 步尚未执行的调用。
 	PendingCallsOfLastStep(ctx context.Context, runID string) ([]PlannedCall, error)
+	ApprovalForCall(ctx context.Context, runID, callID string) (*Approval, error)
+	ConversationAllows(ctx context.Context, conversationID, ownerID, toolName string) (bool, error)
+	SuspendApproval(ctx context.Context, rc *RunContext, row ToolResultRow, approval Approval) error
 
 	AppendRunEvent(ctx context.Context, runID string, seq int64, typ string, payload []byte, terminal bool) error
 	UpdateLastEventSeq(ctx context.Context, runID string, seq int64) error

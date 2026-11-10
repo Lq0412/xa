@@ -169,6 +169,11 @@ func (h *ConversationHandler) Send(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 func conversationError(w http.ResponseWriter, r *http.Request, err error) {
+	var waiting *conversation.WaitingApprovalError
+	if errors.As(err, &waiting) {
+		frameworkhttp.WriteJSON(w, 409, map[string]string{"code": "run_waiting_approval", "message": waiting.Error(), "run_id": waiting.RunID})
+		return
+	}
 	status := 500
 	code := "conversation_unavailable"
 	if errors.Is(err, runtime.ErrMessageTooLong) {

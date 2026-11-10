@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// 事件类型常量；审批与 tool.output 本期仅预留类型名，供前端忽略未知 type。
+// 事件类型常量。tool.output 保留给支持增量输出的工具。
 const (
 	EventRunStarted         = "run.started"
 	EventStepStarted        = "step.started"

@@ -135,7 +135,10 @@ func (s *Service) executeJob(ctx context.Context, tx pgx.Tx, p auth.Principal, k
 		return s.rewriteSummary(ctx, tx, p, ref)
 	}
 	var agentID, content string
-	if err := tx.QueryRow(ctx, `SELECT c.agent_id,m.content FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=$1 AND c.user_id=$2`, ref, p.UserID).Scan(&agentID, &content); err != nil {
+	var toolOwnsDeletion bool
+	if err := tx.QueryRow(ctx, `SELECT c.agent_id,m.content,EXISTS(
+SELECT 1 FROM runs r WHERE r.conversation_id=c.id AND r.user_message_id=m.id AND r.stream_protocol>=2)
+FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=$1 AND c.user_id=$2`, ref, p.UserID).Scan(&agentID, &content, &toolOwnsDeletion); err != nil {
 		return err
 	}
 	a, err := s.Agents.Get(ctx, p, agentID)
@@ -156,7 +159,7 @@ func (s *Service) executeJob(ctx context.Context, tx pgx.Tx, p auth.Principal, k
 	if kind == "summarize" {
 		return s.summarize(ctx, tx, p, a, ref, policy)
 	}
-	return s.extract(ctx, tx, p, a, ref, content)
+	return s.extract(ctx, tx, p, a, ref, content, toolOwnsDeletion)
 }
 
 type decision struct {
@@ -173,7 +176,7 @@ type decision struct {
 // extractionSchema 在供应商端约束所有操作字段，NOOP 同样必须带 namespace 与 importance。
 const extractionSchema = `{"type":"object","additionalProperties":false,"required":["operations"],"properties":{"operations":{"type":"array","minItems":1,"maxItems":10,"items":{"type":"object","additionalProperties":false,"required":["op","id","namespace","subject_key","content","importance","kind","sensitive"],"properties":{"op":{"type":"string","enum":["ADD","UPDATE","DELETE","NOOP"]},"id":{"type":"string"},"namespace":{"type":"string","pattern":"^[a-z][a-z0-9_.-]{0,63}$"},"subject_key":{"type":"string"},"content":{"type":"string"},"importance":{"type":"integer","minimum":1,"maximum":10},"kind":{"type":"string","enum":["fact","preference","episode","procedure"]},"sensitive":{"type":"boolean"}}}}}}`
 
-func (s *Service) extract(ctx context.Context, tx pgx.Tx, p auth.Principal, a definition.AgentDefinition, ref, content string) error {
+func (s *Service) extract(ctx context.Context, tx pgx.Tx, p auth.Principal, a definition.AgentDefinition, ref, content string, toolOwnsDeletion bool) error {
 	scope := "agent"
 	var agentID *string = &a.ID
 	if a.IsPrimary {
@@ -255,7 +258,8 @@ func (s *Service) extract(ctx context.Context, tx pgx.Tx, p auth.Principal, a de
 		if !namespacePattern.MatchString(d.Namespace) || d.Importance < 1 || d.Importance > 10 {
 			return fmt.Errorf("抽取 %s 的 namespace=%q 或 importance=%d 无效", d.Op, d.Namespace, d.Importance)
 		}
-		if d.Op == "NOOP" {
+		// v2 的遗忘由工具负责。任务可能先于工具运行，不能从用户原话推断已获批准。
+		if d.Op == "NOOP" || (toolOwnsDeletion && d.Op == "DELETE") {
 			if err := event(ctx, tx, p, nil, &ref, "NOOP", "agent", nil, nil, ""); err != nil {
 				return err
 			}

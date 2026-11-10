@@ -16,6 +16,7 @@ export type ToolPart = {
   status:
     | 'preparing'
     | 'pending'
+    | 'awaiting_approval'
     | 'running'
     | 'succeeded'
     | 'failed'
@@ -27,6 +28,18 @@ export type ToolPart = {
   items?: { label: string; value: string }[];
   error_code?: string;
   duration_ms?: number;
+  approval?: ApprovalInfo;
+};
+
+/** 审批展示信息随事件和历史消息保存，决定绑定单个 call_id。 */
+export type ApprovalInfo = {
+  approval_id: string;
+  expires_at: string;
+  summary?: string;
+  items?: { label: string; value: string }[];
+  can_remember_agent?: boolean;
+  decision?: 'approved' | 'rejected' | 'expired' | 'cancelled';
+  remember?: 'once' | 'conversation' | 'agent';
 };
 
 export type TextPart = { type: 'text'; text: string };

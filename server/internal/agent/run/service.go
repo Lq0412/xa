@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -11,9 +12,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisclient "github.com/redis/go-redis/v9"
+	"linq-bs/server/internal/agent/definition"
 	"linq-bs/server/internal/agent/memory"
 	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/config"
+	"linq-bs/server/internal/framework/redact"
 	"linq-bs/server/internal/infra/provider"
 	"linq-bs/server/internal/tool"
 )
@@ -26,6 +29,7 @@ type RunService struct {
 	Registry   *tool.Registry
 	Provider   provider.ChatProvider
 	Memory     *memory.Service
+	Agents     definition.Service
 	Redis      redisclient.Cmdable
 	RedisOK    func() bool
 	Config     config.RunConfig
@@ -39,7 +43,9 @@ func (s *RunService) StartDrive(parent context.Context, in StreamStartInput, bus
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		_ = s.DriveRun(parent, in, bus, v1)
+		if err := s.DriveRun(parent, in, bus, v1); err != nil {
+			slog.Error("执行对话轮次失败", "run_id", in.RunID, "error", redact.String(err.Error()))
+		}
 	}()
 }
 

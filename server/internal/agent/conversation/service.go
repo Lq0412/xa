@@ -103,9 +103,10 @@ func (s *Service) List(ctx context.Context, p auth.Principal) ([]Conversation, e
 
 // ActiveRun 是会话内仍在执行的 run，供断线续传。
 type ActiveRun struct {
-	ID           string `json:"id"`
-	Status       string `json:"status"`
-	LastEventSeq int64  `json:"last_event_seq"`
+	ID               string         `json:"id"`
+	Status           string         `json:"status"`
+	LastEventSeq     int64          `json:"last_event_seq"`
+	PendingApprovals []run.Approval `json:"pending_approvals,omitempty"`
 }
 
 type MessagePage struct {
@@ -200,6 +201,21 @@ func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, bef
 		return MessagePage{}, err
 	} else if active != nil {
 		page.ActiveRun = &ActiveRun{ID: active.ID, Status: active.Status, LastEventSeq: active.LastEventSeq}
+		if active.Status == "waiting_approval" {
+			pending, err := store.PendingCallsOfLastStep(ctx, active.ID)
+			if err != nil {
+				return MessagePage{}, err
+			}
+			for _, pc := range pending {
+				a, err := store.ApprovalForCall(ctx, active.ID, pc.Call.ID)
+				if err != nil {
+					return MessagePage{}, err
+				}
+				if a != nil && a.Status == "pending" {
+					page.ActiveRun.PendingApprovals = append(page.ActiveRun.PendingApprovals, *a)
+				}
+			}
+		}
 	}
 	return page, nil
 }

@@ -125,6 +125,9 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
     await page.locator('.message-row code .hljs-string').count(),
   ).toBeGreaterThan(0);
   const firstURL = page.url();
+  const firstReply = await page
+    .locator('.message-row.assistant')
+    .getAttribute('data-message-id');
   const conversationID = new URL(firstURL).searchParams.get('conversationId');
   expect(conversationID).toBeTruthy();
   const same = await (
@@ -150,7 +153,9 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
     node.scrollTop = 0;
   });
   await expect(page.locator('.message-row')).toHaveCount(22);
-  await expect(page.locator('.message-row.assistant pre code')).toBeVisible();
+  await expect(
+    page.locator(`[data-message-id="${firstReply}"] pre code`),
+  ).toBeVisible();
   await input.fill('主 Agent 的草稿');
   await page.getByRole('button', { name: '新建 Agent', exact: true }).click();
   const create = page.getByRole('dialog', { name: '新建 Agent' });
@@ -170,6 +175,27 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
   await expect(
     details.getByRole('button', { name: '保存', exact: true }),
   ).toBeHidden();
+  // 滚动与停止测试需要持续输出正文，避免模型先花掉等待时间做深度思考。
+  const secondAgent = new URL(page.url()).searchParams.get('agentId');
+  const secondConfig = await request.get(
+    `/api/v1/agents/${secondAgent}/config`,
+    { headers },
+  );
+  expect(secondConfig.ok()).toBe(true);
+  const version = await secondConfig.json();
+  const directReply = await request.put(
+    `/api/v1/agents/${secondAgent}/config`,
+    {
+      headers,
+      data: {
+        expected_version_id: version.id,
+        name: '第二个助手',
+        visibility: 'private',
+        configuration: { ...version.configuration, enable_thinking: false },
+      },
+    },
+  );
+  expect(directReply.ok()).toBe(true);
   await sidebar
     .getByRole('button', { name: '我的主 Agent', exact: true })
     .click();
@@ -230,7 +256,10 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
   await input.press('Enter');
   await expect(page.getByRole('alert')).toContainText('无法连接服务');
   await context.setOffline(false);
-  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await page
+    .getByRole('alert')
+    .getByRole('button', { name: '重试', exact: true })
+    .click();
   await expect(page.getByRole('alert')).toBeHidden();
   await expect(page.locator('.message-row')).toHaveCount(2);
   await page

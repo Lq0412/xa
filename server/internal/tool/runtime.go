@@ -114,3 +114,8 @@ type TxTool interface {
 type Summarizer interface {
 	ModelView(Result, int) (string, bool)
 }
+
+// Previewable 在执行前读取审批摘要，不产生副作用。
+type Previewable interface {
+	Preview(context.Context, Call, Env) (Display, error)
+}

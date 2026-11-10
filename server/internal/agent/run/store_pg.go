@@ -42,13 +42,19 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now()+
 }
 
 func (s *PGStore) UpdateRun(ctx context.Context, tx pgx.Tx, run Run) error {
-	_, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 UPDATE runs SET status=$2,steps=$3,model_turns=$4,tool_calls=$5,prompt_tokens=$6,completion_tokens=$7,
 cached_tokens=$8,latency_ms=$9,active_ms=$10,error_code=$11,error=$12,final_message_id=$13,ended_at=$14,updated_at=now()
-WHERE id=$1`,
+WHERE id=$1 AND status='running'`,
 		run.ID, run.Status, run.Steps, run.ModelTurns, run.ToolCalls, run.PromptTokens, run.CompletionTokens,
 		run.CachedTokens, run.LatencyMS, run.ActiveMS, run.ErrorCode, run.Error, run.FinalMessageID, run.EndedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("run %s 已不在执行状态", run.ID)
+	}
+	return nil
 }
 
 func (s *PGStore) GetRun(ctx context.Context, id string) (Run, error) {
@@ -57,7 +63,7 @@ func (s *PGStore) GetRun(ctx context.Context, id string) (Run, error) {
 	var ended *time.Time
 	err := s.DB.QueryRow(ctx, `
 SELECT id,workspace_id,owner_user_id,conversation_id,agent_id,agent_version_id,root_run_id,status,user_message_id,
-final_message_id,provider,model,stream_protocol,limits,toolset,steps,model_turns,tool_calls,prompt_tokens,completion_tokens,
+COALESCE(final_message_id,''),provider,model,stream_protocol,limits,toolset,steps,model_turns,tool_calls,prompt_tokens,completion_tokens,
 cached_tokens,latency_ms,active_ms,error_code,error,started_at,ended_at
 FROM runs WHERE id=$1`, id).Scan(
 		&run.ID, &run.WorkspaceID, &run.OwnerUserID, &run.ConversationID, &run.AgentID, &run.AgentVersionID,
@@ -198,30 +204,45 @@ func (s *PGStore) GetToolResult(ctx context.Context, id string) (ToolResultRow, 
 }
 
 func (s *PGStore) GetToolResultByCallID(ctx context.Context, runID, callID string) (ToolResultRow, error) {
+	return scanToolResult(s.DB.QueryRow(ctx, toolResultByCallSQL, runID, callID))
+}
+
+const toolResultByCallSQL = `SELECT id,run_id,conversation_id,owner_user_id,step,call_index,call_id,tool_name,tool_version,effect,arguments,raw_arguments,args_hash,status,error_code,error_message,model_content,data,display,truncated,total_chars,attempts FROM tool_results WHERE run_id=$1 AND call_id=$2`
+
+func scanToolResult(r pgx.Row) (ToolResultRow, error) {
 	var row ToolResultRow
-	err := s.DB.QueryRow(ctx, `SELECT id,run_id,call_id,tool_name,status,model_content FROM tool_results WHERE run_id=$1 AND call_id=$2`, runID, callID).
-		Scan(&row.ID, &row.RunID, &row.CallID, &row.ToolName, &row.Status, &row.ModelContent)
+	err := r.Scan(&row.ID, &row.RunID, &row.ConversationID, &row.OwnerUserID, &row.Step, &row.CallIndex, &row.CallID, &row.ToolName, &row.ToolVersion, &row.Effect, &row.Arguments, &row.RawArguments, &row.ArgsHash, &row.Status, &row.ErrorCode, &row.ErrorMessage, &row.ModelContent, &row.Data, &row.Display, &row.Truncated, &row.TotalChars, &row.Attempts)
 	return row, err
 }
 
 func (s *PGStore) SaveRunContext(ctx context.Context, tx pgx.Tx, snap RunContextSnapshot) error {
 	msgs, _ := json.Marshal(snap.Messages)
-	_, err := tx.Exec(ctx, `INSERT INTO run_contexts(run_id,messages,segments) VALUES($1,$2,$3)
-ON CONFLICT (run_id) DO UPDATE SET messages=EXCLUDED.messages, segments=EXCLUDED.segments`,
-		snap.RunID, msgs, snap.Segments)
+	resume, err := json.Marshal(snap.Resume)
+	if err != nil {
+		return err
+	}
+	segments := snap.Segments
+	if len(segments) == 0 {
+		segments = []byte("[]")
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO run_contexts(run_id,messages,segments,resume_state) VALUES($1,$2,$3,$4)
+ON CONFLICT (run_id) DO UPDATE SET messages=EXCLUDED.messages, segments=EXCLUDED.segments,resume_state=EXCLUDED.resume_state`,
+		snap.RunID, msgs, segments, resume)
 	return err
 }
 
 func (s *PGStore) LoadRunContext(ctx context.Context, runID string) (RunContextSnapshot, error) {
 	var snap RunContextSnapshot
-	var msgs []byte
+	var msgs, resume []byte
 	snap.RunID = runID
-	err := s.DB.QueryRow(ctx, `SELECT messages,segments FROM run_contexts WHERE run_id=$1`, runID).Scan(&msgs, &snap.Segments)
+	err := s.DB.QueryRow(ctx, `SELECT messages,segments,resume_state FROM run_contexts WHERE run_id=$1`, runID).Scan(&msgs, &snap.Segments, &resume)
 	if err != nil {
 		return snap, err
 	}
-	_ = json.Unmarshal(msgs, &snap.Messages)
-	return snap, nil
+	if err := json.Unmarshal(msgs, &snap.Messages); err != nil {
+		return snap, err
+	}
+	return snap, json.Unmarshal(resume, &snap.Resume)
 }
 
 func (s *PGStore) ListRecentCompletedToolRuns(ctx context.Context, conversationID string, limit int) ([]Run, error) {
@@ -265,7 +286,23 @@ func (s *PGStore) GetMessageRunIDs(ctx context.Context, messageIDs []string) (ma
 }
 
 func (s *PGStore) PendingCallsOfLastStep(ctx context.Context, runID string) ([]PlannedCall, error) {
-	return nil, nil
+	rows, err := s.DB.Query(ctx, `SELECT call_id,tool_name,arguments,call_index FROM tool_results WHERE run_id=$1 AND status IN ('pending','awaiting_approval') AND step=(SELECT max(step) FROM run_messages WHERE run_id=$1 AND role='assistant') ORDER BY call_index`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var calls []PlannedCall
+	for rows.Next() {
+		var pc PlannedCall
+		var args []byte
+		if err := rows.Scan(&pc.Call.ID, &pc.Call.Name, &args, &pc.Index); err != nil {
+			return nil, err
+		}
+		pc.Call.Arguments = string(args)
+		pc.Accepted = true
+		calls = append(calls, pc)
+	}
+	return calls, rows.Err()
 }
 
 func nullable(s string) any {

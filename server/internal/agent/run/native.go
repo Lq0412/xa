@@ -27,6 +27,23 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 		rc.WallStarted = time.Now()
 	}
 	sch := e.Scheduler
+	pending, err := rc.Store.PendingCallsOfLastStep(ctx, rc.Run.ID)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if len(pending) > 0 {
+		if err := rc.Budget.HardCheck(ActiveMS(rc.WallStarted)); err != nil {
+			return Outcome{Kind: OutcomeBudgetExhausted, Code: "wall_time"}, nil
+		}
+		out, err := sch.runPending(ctx, rc, pending)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if out.Suspended {
+			return Outcome{Kind: OutcomeWaitingApproval}, nil
+		}
+		rc.Budget.RecordToolStepFailure(out.AllFailed)
+	}
 	for {
 		activeMS := ActiveMS(rc.WallStarted)
 		if err := rc.Budget.HardCheck(activeMS); err != nil {
@@ -60,9 +77,6 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 			req.ParallelToolCalls = &par
 		}
 		rc.Step++
-		rc.mu.Lock()
-		rc.stepCallIndex = 0
-		rc.mu.Unlock()
 		if rc.Emitter != nil {
 			_ = rc.Emitter.Emit(ctx, EventStepStarted, map[string]any{"step": rc.Step})
 		}
@@ -84,6 +98,7 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 		rc.Budget.AddModelTurn(resp.Usage)
 		rc.Run.PromptTokens += resp.Usage.PromptTokens
 		rc.Run.CompletionTokens += resp.Usage.CompletionTokens
+		rc.Run.CachedTokens += resp.Usage.CachedTokens
 		calls := resp.Message.ToolCalls
 		if wrapUp && len(calls) > 0 {
 			calls = nil
@@ -115,6 +130,9 @@ func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, er
 				return Outcome{Kind: OutcomeCancelled, Code: "cancelled", Message: "已停止生成"}, nil
 			}
 			return Outcome{}, err
+		}
+		if out.Suspended {
+			return Outcome{Kind: OutcomeWaitingApproval}, nil
 		}
 		rc.Budget.RecordToolStepFailure(out.AllFailed)
 	}
@@ -160,7 +178,7 @@ func insertRejectedResults(ctx context.Context, rc *RunContext, plan CallPlan) e
 		}
 		row := ToolResultRow{
 			ID: ref, RunID: rc.Run.ID, ConversationID: rc.Env.ConversationID,
-			OwnerUserID: rc.Env.Principal.UserID, Step: rc.Step, CallID: pc.Call.ID,
+			OwnerUserID: rc.Env.Principal.UserID, Step: rc.Step, CallIndex: pc.Index + 1, CallID: pc.Call.ID,
 			ToolName: pc.Call.Name, ToolVersion: toolVersion, Effect: effect,
 			Arguments: args, RawArguments: string(args), ArgsHash: argsHash(pc.Call.Name, args),
 			Status: "rejected", ErrorCode: pc.ErrorCode,

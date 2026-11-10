@@ -21,13 +21,16 @@ import (
 
 func postStreamV2(t *testing.T, h *agenthttp.ConversationHandler, owner auth.Principal, convID, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
+	// 等待终止事件也要有上限，避免连接问题拖到整个测试包超时。
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
+	defer cancel()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/conversations/"+convID+"/messages", strings.NewReader(body))
 	req.Header.Set("X-XA-Stream", "2")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	req.SetPathValue("conversation_id", convID)
-	req = req.WithContext(auth.WithPrincipal(context.Background(), owner))
+	req = req.WithContext(auth.WithPrincipal(ctx, owner))
 	w := httptest.NewRecorder()
 	h.Send(w, req)
 	return w
@@ -106,9 +109,15 @@ func TestAcceptance9Cancel(t *testing.T) {
 	if status != "cancelled" {
 		t.Fatalf("2s 内未 cancelled，当前=%s", status)
 	}
-	w2 := postStreamV2(t, h, owner, c.ID, `{"content":"继续：用一句话说你好"}`, nil)
-	if w2.Code != 200 {
+	w2 := postStreamV2(t, h, owner, c.ID, `{"content":"请只回复「你好」。这是一条新消息，不需要继续上一条长文。"}`, nil)
+	if w2.Code != 200 || !strings.Contains(w2.Body.String(), "event: run.completed") {
 		t.Fatalf("取消后无法立即发送: %d %s", w2.Code, w2.Body.String())
+	}
+	// 创建时的心跳和创建时间相同，真正进入执行后必须续租。
+	var renewed bool
+	nextID := firstRunID(t, w2.Body.String())
+	if err := db.QueryRow(t.Context(), `SELECT heartbeat_at > created_at FROM runs WHERE id=$1`, nextID).Scan(&renewed); err != nil || !renewed {
+		t.Fatalf("下一轮没有续租：%v", err)
 	}
 	<-done
 	if runID == "" {

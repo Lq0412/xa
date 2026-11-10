@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-if (process.env.XA_P4_CHAT_SCREENSHOTS !== '1') {
-  throw new Error('请设置 XA_P4_CHAT_SCREENSHOTS=1');
-}
+test.skip(
+  process.env.XA_P4_CHAT_SCREENSHOTS !== '1',
+  '仅在专门拍摄 P4 过程轨时运行',
+);
 
 const artifactDir = '/opt/cursor/artifacts';
 

@@ -143,7 +143,7 @@ func buildPartsFromEvents(events []replayEvent, opts partsReplayOpts) []MessageP
 			if d, ok := data["duration_ms"].(float64); ok && d > 0 {
 				parts[idx]["duration_ms"] = int(d)
 			}
-		case "tool.preparing", "tool.called", "tool.started", "tool.completed":
+		case "tool.preparing", "tool.called", "tool.started", "tool.completed", "approval.required", "approval.resolved":
 			callID, _ := data["call_id"].(string)
 			indexF, _ := data["index"].(float64)
 			var part MessagePart
@@ -163,7 +163,7 @@ func buildPartsFromEvents(events []replayEvent, opts partsReplayOpts) []MessageP
 						break
 					}
 				}
-				if partIdx < 0 && name != "" && fmt.Sprint(p["name"]) == name {
+				if partIdx < 0 && name != "" && fmt.Sprint(p["name"]) == name && firstNonEmpty(p["call_id"]) == "" {
 					partIdx = i
 				}
 			}
@@ -186,6 +186,27 @@ func buildPartsFromEvents(events []replayEvent, opts partsReplayOpts) []MessageP
 				partIdx = len(parts) - 1
 			}
 			switch typ {
+			case "approval.required":
+				part["status"] = "awaiting_approval"
+				part["call_id"] = callID
+				part["approval"] = map[string]any{"approval_id": data["approval_id"], "expires_at": data["expires_at"], "summary": data["summary"], "items": data["items"], "can_remember_agent": data["can_remember_agent"]}
+				if preview, ok := data["args_preview"].(string); ok && preview != "" {
+					part["args_preview"] = preview
+				}
+			case "approval.resolved":
+				if a, ok := part["approval"].(map[string]any); ok {
+					a["decision"] = data["decision"]
+					if remember, ok := data["remember"].(string); ok && remember != "" {
+						a["remember"] = remember
+					}
+				}
+				part["status"] = "rejected"
+				if data["decision"] == "approved" {
+					part["status"] = "pending"
+				}
+				if data["decision"] == "cancelled" {
+					part["status"] = "cancelled"
+				}
 			case "tool.preparing":
 				part["status"] = "preparing"
 			case "tool.called":
