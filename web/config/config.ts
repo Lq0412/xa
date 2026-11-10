@@ -1,17 +1,18 @@
-import { join } from 'node:path';
-import { defineConfig } from '@umijs/max';
-import defaultSettings from './defaultSettings';
+import { defineConfig } from 'umi';
 import proxy from './proxy';
 import routes from './routes';
 
-// 基于 Ant Design Pro v6.0.3，使用 Umi Max 管理布局、认证状态和请求。
+// 使用 Umi 的构建、路由和开发代理，界面及会话由应用管理。
 export default defineConfig({
   hash: true,
-  // Utoo 开发资源也写入磁盘，独立目录避免构建 dist 时破坏正在运行的页面。
+  // 开发和生产输出分开，构建时可以继续验收开发页面。
   outputPath:
     process.env.NODE_ENV === 'development' ? '../.output/web-dev' : 'dist',
   publicPath: '/',
-  title: 'xa 管理控制台',
+  title: '管理',
+  metas: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
+  mfsu: false,
+  esbuildMinifyIIFE: true,
   define: {
     'process.env.XA_USER_WEB_URL':
       process.env.XA_USER_WEB_URL ||
@@ -20,19 +21,15 @@ export default defineConfig({
   routes,
   proxy,
   fastRefresh: true,
-  model: {},
-  initialState: {},
-  access: {},
-  layout: { locale: true, ...defaultSettings },
-  locale: { default: 'zh-CN', antd: true, baseNavigator: false },
-  antd: {
-    appConfig: {},
-    configProvider: { theme: { token: { colorPrimary: '#1677ff' } } },
+  chainWebpack(memo) {
+    // Tailwind 4 只处理应用的样式入口。
+    memo.module
+      .rule('tailwind')
+      .enforce('pre')
+      .test(/[/\\]tailwind\.css$/)
+      .use('tailwind')
+      .loader(require.resolve('@tailwindcss/webpack'));
+    return memo;
   },
-  request: {},
-  // 开发环境直接访问 xa 后端，禁止使用模板演示接口。
   mock: false,
-  tailwindcss: {},
-  utoopack: { root: join(__dirname, '../..') },
-  headScripts: [{ src: '/scripts/loading.js', async: true }],
 });

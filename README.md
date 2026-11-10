@@ -7,7 +7,7 @@ Agent 管理与运行平台，后端使用 Go。通过配置创建公共或私�
 目录说明：
 
 - `server/`：Go 后端服务和异步任务进程
-- `web/`：独立 Web 管理端，使用 Ant Design Pro v6
+- `web/`：独立 Web 管理端，使用 Umi 4、React、Tailwind CSS、Radix UI 和 TanStack Table
 - `web-user/`：独立 Web 用户端，提供 Agent 发现、创建和对话入口
 - `mobile/`：英语陪练移动端
 - `docs/`：架构和产品设计文档

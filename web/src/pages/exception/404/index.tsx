@@ -1,18 +1,14 @@
-import { Link } from '@umijs/max';
-import { Button, Result } from 'antd';
+import { Link } from 'umi';
+import { ResultPage } from '@/components/Page';
+import { Button } from '@/components/ui/button';
 
-/** 未匹配路由提供返回入口，避免展示模板的演示页面。 */
+/** 未匹配路由返回统一的管理入口。 */
 export default function NotFoundPage() {
   return (
-    <Result
-      status="404"
-      title="404"
-      subTitle="访问的页面不存在"
-      extra={
-        <Link to="/agents">
-          <Button type="primary">返回 Agent 管理</Button>
-        </Link>
-      }
-    />
+    <ResultPage title="404" description="访问的页面不存在">
+      <Button asChild>
+        <Link to="/agents">返回 Agent 管理</Link>
+      </Button>
+    </ResultPage>
   );
 }

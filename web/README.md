@@ -1,8 +1,6 @@
 # xa Web
 
-基于 Ant Design Pro v6.0.3 官方模板，使用 React 19、Ant Design 6、Umi Max 4 和 ProComponents 3。保留上游 MIT 许可证（LICENSE）。
-
-页面使用标准 ProLayout、ProTable、ModalForm 和 LoginForm。管理员登录后可使用平台概览和真实 Agent 管理；尚未实现的模块统一记录在 ROADMAP 的 Icebox 中。普通用户使用独立的 `web-user/` 工程。
+使用 Umi 4、React 19、Tailwind CSS 4、Radix UI、Lucide 和 TanStack Table。管理员登录后可以访问今天、Agent 列表、整页配置和只读确认记录。普通用户使用独立的 `web-user/` 工程。
 
 ## 启动
 
@@ -19,23 +17,25 @@ make web
 
 ```bash
 cd web
+npm ci
 npm run lint
-npm run lint:antd
 npm run build
 ```
 
-`config/` 管理路由、布局及开发代理；`src/pages/` 存放业务页面；`src/services/xa/` 封装真实接口。生成目录 `src/.umi*`、依赖和构建产物不提交。
-
-`src/services/ant-design-pro/` 和 `config/oneapi.json` 保留上游生成示例供模板参考，业务页面不会调用其中的演示接口。改造基于官方 v6.0.3 发布源码，未接入其演示 Worker、Mock、统计服务和部署工作流。
+`config/` 管理路由和开发代理，`src/pages/` 存放业务页面，`src/components/ui/` 存放本项目的通用控件，`src/services/xa/` 封装真实接口。生成目录 `src/.umi*`、依赖和构建产物不提交。
 
 ## 浏览器验收
 
-`npm test` 使用 Playwright 连接已经启动的两个 Web 和 server，不替换网络响应。首次运行先执行 `npx playwright install --with-deps chromium`，需要安装 Chromium 及系统依赖。测试使用环境变量 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 指定已有的管理员测试账号；凭证不得写入文件或提交。管理端默认 `http://127.0.0.1:8000`，用户端默认 `http://127.0.0.1:8002`，分别可用 `XA_WEB_URL`、`XA_USER_WEB_URL` 修改。
+`npm run test:smoke` 使用 Playwright 连接已运行的真实后端，验证登录、今天、Agent 创建与配置保存、工具审批切换、未保存退出保护、版本冲突、启停、确认记录及退出。临时 Agent 和测试会话在结束后清理。先准备 Chromium，并通过环境变量 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入已有的管理员测试账号。管理端默认访问 `http://127.0.0.1:8000`，可用 `XA_WEB_URL` 修改。可选的 `XA_ADMIN_SHOTS` 指定截图目录，登录页截图在输入凭证前采集。
 
-测试会创建并删除自己的 Agent，覆盖登录、刷新恢复会话、筛选、编辑配置保留、启停、删除和退出。输出保存在仓库根目录 `.output/web-e2e/`，不采集截图、录屏或包含凭证的 trace。
+`npm test` 还会运行原有的两端回归，使用 `XA_USER_WEB_URL` 指定用户端地址，默认 `http://127.0.0.1:8002`。测试输出保存在仓库根目录 `.output/web-e2e/`。
 
 ## 构建产物
 
-`npm run build` 输出 `dist/`，开发资源输出到仓库根目录 `.output/web-dev/`，两者可同时运行。安装时 `prepare` 生成 Umi 类型；日常 lint 不重新清空生成目录，以免干扰运行中的开发服务。
+`npm run build` 输出 `dist/`，开发资源使用独立目录。安装时 `prepare` 生成 Umi 类型。
 
-生产静态服务器需要将页面路由回退到 `index.html`，并将 `/api/` 和 `/health/` 代理到 server；开发代理不会包含在构建产物中。构建时用 `XA_USER_WEB_URL` 指定独立用户端地址，未配置时不展示跨端链接，生产产物不内置本机地址。
+生产静态服务器需要将页面路由回退到 `index.html`，并将 `/api/` 和 `/health/` 代理到 server。构建时通过 `XA_USER_WEB_URL` 指定用户端地址。
+
+今天页遍历审批接口的全部游标后计算统计；“今日已处理”和平均等待按本机自然日内的决定计算，包含拒绝、超时和取消。确认记录只展示服务端已提供的脱敏摘要与字段，不推断原始参数和到期时间。运行追踪入口暂不可用。
+
+Agent 的 SOUL、模型和工具通过完整配置版本保存，保留知识库、评价、记忆策略、运行限制及其他未编辑的绑定。新建时模型使用服务端默认值，创建后可选择服务端返回的模型。记忆和运行限制目前只读。

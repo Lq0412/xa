@@ -1,8 +1,11 @@
-import { Skeleton } from 'antd';
+import { Skeleton } from '@/components/ui/skeleton';
 
-// 路由模块加载期间使用 Ant Design 骨架屏保留内容位置。
-const Loading: React.FC = () => (
-  <Skeleton style={{ padding: '24px 40px', height: '60vh' }} active />
-);
-
-export default Loading;
+/** 路由模块和登录态加载时使用同一组占位。 */
+export default function Loading() {
+  return (
+    <div aria-busy="true" className="space-y-6 p-8">
+      <Skeleton className="h-7 w-40" />
+      <Skeleton className="h-36 w-full" />
+    </div>
+  );
+}
