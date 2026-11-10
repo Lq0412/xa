@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -90,5 +91,43 @@ func TestBuildPartsReasoningStripped(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing reasoning stub")
+	}
+}
+
+func TestHistoryKeepsReasoningDurationFromFirstDelta(t *testing.T) {
+	mem := run.NewMemStore()
+	bus := run.NewEventBus("run_hist", nil, func() bool { return false }, mem)
+	bus.SetStepProvider(func() int { return 1 })
+	ctx := context.Background()
+	if err := bus.ReasoningDelta(ctx, "reason_step1", "甲"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(180 * time.Millisecond)
+	if err := bus.ReasoningDelta(ctx, "reason_step1", "乙"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if err := bus.ReasoningCompleted(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	bus.Close()
+	events, err := mem.ListRunEventsAfter(ctx, "run_hist", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := make([]replayEvent, 0, len(events))
+	for _, ev := range events {
+		replay = append(replay, replayEvent{Seq: ev.Seq, Type: ev.Type, Payload: ev.Payload})
+	}
+	parts := buildPartsFromEvents(replay, partsReplayOpts{stripReasoningText: true})
+	if len(parts) != 1 || parts[0]["type"] != "reasoning" {
+		t.Fatalf("parts=%v", parts)
+	}
+	if parts[0]["text"] != "" {
+		t.Fatal("历史不应保留思考正文")
+	}
+	d, ok := parts[0]["duration_ms"].(int)
+	if !ok || d < 150 {
+		t.Fatalf("duration_ms=%v", parts[0]["duration_ms"])
 	}
 }

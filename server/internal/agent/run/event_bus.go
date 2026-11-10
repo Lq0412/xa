@@ -190,11 +190,15 @@ func (b *EventBus) ReasoningDelta(ctx context.Context, itemID, delta string) err
 	if b.closed {
 		return fmt.Errorf("事件总线已关闭")
 	}
-	if itemID != "" {
+	// 用时从本段第一个增量开始。缓冲每次刷出都会被清空，不能用缓冲是否为空来判断新的一段。
+	if itemID != "" && itemID != b.reasonItemID {
+		if b.reasonItemID != "" {
+			b.reasoningStartedAt = time.Time{}
+		}
 		b.reasonItemID = itemID
 	}
 	b.reasoningOpen = true
-	if b.reasonBuf.Len() == 0 {
+	if b.reasoningStartedAt.IsZero() {
 		b.reasoningStartedAt = time.Now()
 	}
 	b.reasonBuf.WriteString(delta)

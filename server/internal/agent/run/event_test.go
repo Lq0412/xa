@@ -29,12 +29,102 @@ func TestMarshalEnvelopeUnknownFieldsForwardCompat(t *testing.T) {
 	}
 }
 
+func TestToolEventSummaryUsesErrorMessage(t *testing.T) {
+	summary, _ := toolEventSummary(ToolResultRow{
+		Status: "failed", ErrorCode: "invalid_config", ErrorMessage: "时区无效",
+	})
+	if summary != "时区无效" {
+		t.Fatalf("summary=%q", summary)
+	}
+	summary, _ = toolEventSummary(ToolResultRow{
+		ErrorMessage: "时区无效",
+		Display:      []byte(`{"summary":"已有摘要"}`),
+	})
+	if summary != "已有摘要" {
+		t.Fatalf("已有 display 摘要时不应被错误信息覆盖: %q", summary)
+	}
+}
+
 func TestRedactInToolEventPreview(t *testing.T) {
 	secret := "Bearer sk-test-not-real-key-abcdef"
 	preview := redact.String(`{"query":"` + secret + `"}`)
 	if strings.Contains(preview, "sk-test") {
 		t.Fatal("args_preview 应脱敏密钥")
 	}
+}
+
+func TestEventBusReasoningDurationSpansFlushedDeltas(t *testing.T) {
+	mem := NewMemStore()
+	bus := NewEventBus("run_span", nil, func() bool { return false }, mem)
+	bus.SetStepProvider(func() int { return 1 })
+	if err := bus.ReasoningDelta(context.Background(), "reason_step1", "甲"); err != nil {
+		t.Fatal(err)
+	}
+	// 每次增量都会立刻刷出并清空缓冲。用时必须从本段第一个增量算到结束，不能只覆盖最后一次刷出。
+	time.Sleep(180 * time.Millisecond)
+	if err := bus.ReasoningDelta(context.Background(), "reason_step1", "乙"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if err := bus.ReasoningCompleted(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	bus.Close()
+	got := lastReasoningDurationMS(t, mem, "run_span")
+	if got < 150 {
+		t.Fatalf("duration_ms=%v，应从第一段增量计到结束", got)
+	}
+}
+
+func TestEventBusReasoningDurationResetsOnNewSegment(t *testing.T) {
+	mem := NewMemStore()
+	bus := NewEventBus("run_seg", nil, func() bool { return false }, mem)
+	bus.SetStepProvider(func() int { return 1 })
+	if err := bus.ReasoningDelta(context.Background(), "reason_step1", "甲"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(180 * time.Millisecond)
+	if err := bus.ReasoningDelta(context.Background(), "reason_step2", "乙"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if err := bus.ReasoningCompleted(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	bus.Close()
+	got := lastReasoningDurationMS(t, mem, "run_seg")
+	if got >= 120 {
+		t.Fatalf("新一段思考的 duration_ms=%v，不应包含上一段", got)
+	}
+}
+
+func lastReasoningDurationMS(t *testing.T, mem *MemStore, runID string) float64 {
+	t.Helper()
+	events, err := mem.ListRunEventsAfter(context.Background(), runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got float64
+	found := false
+	for _, ev := range events {
+		if ev.Type != EventReasoningCompleted {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		d, ok := payload["duration_ms"].(float64)
+		if !ok {
+			t.Fatalf("reasoning.completed 缺少 duration_ms: %v", payload)
+		}
+		got = d
+		found = true
+	}
+	if !found {
+		t.Fatal("没有 reasoning.completed")
+	}
+	return got
 }
 
 func TestEventBusReasoningCompletedDuration(t *testing.T) {
