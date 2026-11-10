@@ -81,12 +81,24 @@ func buildPartsFromEvents(events []replayEvent, opts partsReplayOpts) []MessageP
 		case "message.delta":
 			pushText(fmt.Sprint(data["delta"]))
 		case "reasoning.delta":
-			if opts.stripReasoningText {
-				continue
-			}
 			itemID := fmt.Sprint(data["item_id"])
 			if itemID == "" || itemID == "<nil>" {
 				itemID = "reason"
+			}
+			if opts.stripReasoningText {
+				idx := -1
+				for i, p := range parts {
+					if p["type"] == "reasoning" && p["item_id"] == itemID {
+						idx = i
+						break
+					}
+				}
+				if idx < 0 {
+					parts = append(parts, MessagePart{
+						"type": "reasoning", "item_id": itemID, "text": "", "status": "streaming",
+					})
+				}
+				continue
 			}
 			idx := -1
 			for i, p := range parts {
@@ -105,34 +117,31 @@ func buildPartsFromEvents(events []replayEvent, opts partsReplayOpts) []MessageP
 			parts[idx]["text"] = cur + fmt.Sprint(data["delta"])
 		case "reasoning.completed":
 			itemID := fmt.Sprint(data["item_id"])
+			if itemID == "" || itemID == "<nil>" {
+				itemID = "reason"
+			}
+			idx := -1
 			for i, p := range parts {
-				if p["type"] == "reasoning" && (itemID == "" || p["item_id"] == itemID) {
-					parts[i]["status"] = "completed"
-					if opts.stripReasoningText {
-						parts[i]["text"] = ""
-					}
-					if v, ok := data["truncated"].(bool); ok {
-						parts[i]["truncated"] = v
-					}
+				if p["type"] == "reasoning" && p["item_id"] == itemID {
+					idx = i
+					break
 				}
 			}
+			if idx < 0 {
+				parts = append(parts, MessagePart{
+					"type": "reasoning", "item_id": itemID, "text": "", "status": "completed",
+				})
+				idx = len(parts) - 1
+			}
+			parts[idx]["status"] = "completed"
 			if opts.stripReasoningText {
-				// 历史列表仍展示折叠占位，不含正文。
-				found := false
-				for _, p := range parts {
-					if p["type"] == "reasoning" {
-						found = true
-						break
-					}
-				}
-				if !found {
-					if itemID == "" || itemID == "<nil>" {
-						itemID = "reason"
-					}
-					parts = append(parts, MessagePart{
-						"type": "reasoning", "item_id": itemID, "text": "", "status": "completed",
-					})
-				}
+				parts[idx]["text"] = ""
+			}
+			if v, ok := data["truncated"].(bool); ok {
+				parts[idx]["truncated"] = v
+			}
+			if d, ok := data["duration_ms"].(float64); ok && d > 0 {
+				parts[idx]["duration_ms"] = int(d)
 			}
 		case "tool.preparing", "tool.called", "tool.started", "tool.completed":
 			callID, _ := data["call_id"].(string)

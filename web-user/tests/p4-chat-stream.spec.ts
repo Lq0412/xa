@@ -13,9 +13,27 @@ function md5File(file: string) {
   return createHash('md5').update(fs.readFileSync(file)).digest('hex');
 }
 
+async function login(page: import('@playwright/test').Page, primaryId: string) {
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await page.locator('input[name=email]').fill(process.env.XA_E2E_EMAIL || '');
+  await page
+    .locator('input[name=password]')
+    .fill(process.env.XA_E2E_PASSWORD || '');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page).toHaveURL(/\/chat/, { timeout: 60000 });
+  await page.goto(`/chat?agentId=${encodeURIComponent(primaryId)}`, {
+    waitUntil: 'networkidle',
+  });
+  await expect(page.getByPlaceholder('发消息')).toBeEnabled({ timeout: 60000 });
+}
+
 async function prepareAgent(
   request: Parameters<typeof test>[0]['request'],
   api: string,
+  toolConfig: Record<string, unknown> = {
+    timezone: 'Asia/Shanghai',
+    delay_ms: 5000,
+  },
 ) {
   const tokenRes = await request.post(`${api}/api/v1/auth/login`, {
     data: {
@@ -51,7 +69,7 @@ async function prepareAgent(
         configuration: {
           model: 'qwen3.7-plus',
           soul_md:
-            '先一句思考说明将调用 current_time，立刻调用工具，禁止在工具完成前写正文。',
+            '思考时必须写出 Markdown：一行加粗标题，再加一个至少两项的无序列表。先写完思考再调用 current_time，工具返回前不要写正文。',
           enable_thinking: true,
         },
       },
@@ -69,7 +87,7 @@ async function prepareAgent(
         {
           name: 'current_time',
           enabled: true,
-          configuration: { timezone: 'Asia/Shanghai', delay_ms: 5000 },
+          configuration: toolConfig,
         },
       ],
       runtime_limits: { max_tool_calls: 8 },
@@ -84,191 +102,216 @@ function lastAssistant(page: import('@playwright/test').Page) {
     .last();
 }
 
-test('P4 流式：思考折叠、工具 chip、刷新续传', async ({
+function processRail(page: import('@playwright/test').Page) {
+  return lastAssistant(page).locator('[data-testid="process-rail"]');
+}
+
+test('P4.1 流式：一行过程、时间线、历史用时、失败', async ({
   page,
   context,
   request,
 }) => {
-  test.setTimeout(480000);
+  test.setTimeout(600000);
   const api = process.env.XA_API_BASE || 'http://127.0.0.1:18080';
-  const { primaryId } = await prepareAgent(request, api);
+  const { primaryId, token } = await prepareAgent(request, api);
 
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[name=email]').fill(process.env.XA_E2E_EMAIL || '');
-  await page
-    .locator('input[name=password]')
-    .fill(process.env.XA_E2E_PASSWORD || '');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/chat/, { timeout: 60000 });
-  await page.goto(`/chat?agentId=${encodeURIComponent(primaryId)}`, {
-    waitUntil: 'networkidle',
-  });
+  await login(page, primaryId);
 
   const composer = page.getByPlaceholder('发消息');
-  await expect(composer).toBeEnabled({ timeout: 60000 });
+  const stopBtn = page.getByRole('button', { name: '停止生成' });
 
   await composer.fill(
-    '必须先调用 current_time。在思考里写清你要先查时间再回答；正文两句话说明当前时间即可。',
+    '请先在思考里用加粗标题和无序列表说明你要查询当前时间，然后调用 current_time。工具返回后再用两句话回答现在的时间。',
   );
   await composer.press('Enter');
-
-  const stopBtn = page.getByRole('button', { name: '停止生成' });
+  await expect(stopBtn).toBeVisible({ timeout: 120000 });
   await expect(page).toHaveURL(/conversationId=/, { timeout: 120000 });
 
-  const toolChip = page.locator('[data-testid="tool-call-chip"]');
   const assistant = lastAssistant(page);
-  const reasoning = page.locator('[data-testid="reasoning-fold"]').last();
-  await expect(stopBtn).toBeVisible({ timeout: 120000 });
+  const rail = processRail(page);
+  await expect(rail).toBeVisible({ timeout: 120000 });
 
   await Promise.all([
     page
       .waitForFunction(
         () => {
-          const folds = document.querySelectorAll(
-            '[data-testid="reasoning-fold"]',
-          );
-          for (const node of folds) {
-            const fold = node as HTMLElement;
-            const title = fold.querySelector('button span')?.textContent || '';
-            if (!title.includes('思考中')) continue;
-            const live =
-              fold.getAttribute('data-live-run') === '1' ||
-              fold.getAttribute('data-reasoning-status') === 'streaming';
-            if (!live) continue;
-            const body = fold.querySelector(
-              '[data-testid="reasoning-fold-body"]',
-            );
-            const text = body?.textContent?.replace(/\s/g, '') || '';
-            if (
-              text.length > 8 &&
-              !fold.textContent?.includes('思考内容未保留')
-            )
-              return true;
-          }
-          return false;
+          const node = document.querySelector('[data-testid="process-rail"]');
+          if (node?.getAttribute('data-phase') !== 'thinking') return false;
+          const title =
+            node.querySelector('[data-testid="process-summary"]')
+              ?.textContent || '';
+          const shimmer = node.querySelector('.process-summary-shimmer');
+          return /正在思考/.test(title) && /秒/.test(title) && Boolean(shimmer);
         },
         undefined,
-        { timeout: 120000, polling: 30 },
+        { timeout: 120000, polling: 80 },
       )
       .then(async () => {
-        const fold = page.locator('[data-testid="reasoning-fold"]').last();
-        await fold.getByRole('button').click();
-        await expect(stopBtn).toBeVisible();
         await page.screenshot({
-          path: path.join(artifactDir, 'p4-chat-reasoning-fold.png'),
+          path: path.join(artifactDir, 'p41-reasoning-streaming.png'),
           fullPage: true,
         });
       }),
     page
       .waitForFunction(
         () => {
-          const row = [...document.querySelectorAll('article.assistant')].pop();
-          if (!row) return false;
-          const running = row.querySelector(
-            '[data-testid="tool-call-chip"][data-status="running"]',
-          );
-          if (!running) return false;
-          const finals = row.querySelectorAll(
-            '[data-testid="message-text-part"]',
-          );
-          for (const el of finals) {
-            if (/年.*月.*日.*星期/.test(el.textContent || '')) return false;
-          }
-          return true;
+          const node = document.querySelector('[data-testid="process-rail"]');
+          if (node?.getAttribute('data-phase') !== 'tool') return false;
+          const title =
+            node.querySelector('[data-testid="process-summary"]')
+              ?.textContent || '';
+          return title.includes('正在调用');
         },
         undefined,
-        { timeout: 120000, polling: 20 },
+        { timeout: 180000, polling: 50 },
       )
       .then(async () => {
-        await expect(stopBtn).toBeVisible();
-        await expect(
-          assistant.locator('[data-testid="message-text-part"]').filter({
-            hasText: /现在是.*年|年.*月.*日.*星期/,
-          }),
-        ).toHaveCount(0);
         await page.screenshot({
-          path: path.join(artifactDir, 'p4-chat-tool-running.png'),
+          path: path.join(artifactDir, 'p41-tool-running.png'),
           fullPage: true,
         });
       }),
   ]);
-  await expect(reasoning).toBeVisible();
 
-  await expect(
-    page.locator('[data-testid="tool-call-chip"][data-status="done"]').first(),
-  ).toBeVisible({ timeout: 180000 });
-  await expect(composer).toBeEnabled({ timeout: 120000 });
-  const convId = new URL(page.url()).searchParams.get('conversationId');
-  const token = await page.evaluate(() =>
-    localStorage.getItem('xa.user.session'),
-  );
+  await expect(composer).toBeEnabled({ timeout: 240000 });
+  const summary = assistant.locator('[data-testid="process-summary"]');
   await expect
-    .poll(
-      async () => {
-        const hist = await request.get(
-          `${api}/api/v1/conversations/${convId}/messages`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
-        const histBody = (await hist.json()) as {
-          messages: {
-            role: string;
-            content?: string;
-            parts?: { type: string }[];
-          }[];
-        };
-        const assistantMsg = histBody.messages.find(
-          (m) => m.role === 'assistant',
-        );
-        const hasParts = assistantMsg?.parts?.some(
-          (p) => p.type === 'tool' || p.type === 'reasoning',
-        );
-        const hasText = (assistantMsg?.content?.trim().length ?? 0) > 0;
-        return hasParts || hasText;
-      },
-      { timeout: 60000 },
-    )
-    .toBeTruthy();
-  await page.screenshot({
-    path: path.join(artifactDir, 'p4-chat-tool-done.png'),
-    fullPage: true,
-  });
-
-  await composer.fill(
-    '【续传】再次调用 current_time，然后写至少八百字散文，分四段输出，不要提前结束。',
-  );
-  await composer.press('Enter');
-  await expect(stopBtn).toBeVisible({ timeout: 120000 });
-  await expect
-    .poll(
-      async () =>
-        (await lastAssistant(page).innerText()).replace(/\s/g, '').length,
-      { timeout: 90000 },
-    )
-    .toBeGreaterThan(40);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(composer).toBeVisible();
-  const resumed = lastAssistant(page);
-  await expect
-    .poll(async () => (await resumed.innerText()).replace(/\s/g, '').length, {
-      timeout: 30000,
+    .poll(async () => {
+      const expanded = await summary.getAttribute('aria-expanded');
+      const title = await summary.innerText();
+      return `${expanded}:${title}`;
     })
-    .toBeGreaterThan(20);
-  await expect(
-    stopBtn.or(page.locator('.streaming-caret')).first(),
-  ).toBeVisible({ timeout: 120000 });
-  await expect(toolChip.first()).toBeVisible({ timeout: 120000 });
+    .toMatch(/^false:.*(已思考|思考并调用了|调用了)/);
+
+  const bubble = assistant.locator('.assistant-bubble').first();
+  const bubbleY = (await bubble.boundingBox())?.y ?? 0;
+  const railY = (await rail.boundingBox())?.y ?? 0;
+  expect(railY).toBeLessThan(bubbleY);
+  await expect(rail.locator('[data-testid="process-preview"]')).toHaveCount(0);
+
   await page.screenshot({
-    path: path.join(artifactDir, 'p4-chat-resume.png'),
+    path: path.join(artifactDir, 'p41-complete-folded.png'),
     fullPage: true,
   });
-  await expect(composer).toBeEnabled({ timeout: 300000 });
+
+  await summary.click();
+  await expect(summary).toHaveAttribute('aria-expanded', 'true');
+  const reasoningBodies = rail.locator('[data-testid="reasoning-body"]');
+  await expect(reasoningBodies.first()).toBeVisible();
+  const bodyCount = await reasoningBodies.count();
+  let sawMarkdown = false;
+  for (let index = 0; index < bodyCount; index += 1) {
+    const body = reasoningBodies.nth(index);
+    const bodyText = (await body.innerText()) || '';
+    expect(bodyText).not.toMatch(/\*\*[^*]+\*\*/);
+    if ((await body.locator('strong, li').count()) > 0) sawMarkdown = true;
+  }
+  expect(sawMarkdown).toBe(true);
+  await page.screenshot({
+    path: path.join(artifactDir, 'p41-reasoning-markdown.png'),
+    fullPage: true,
+  });
+
+  const convId = new URL(page.url()).searchParams.get('conversationId');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(composer).toBeVisible({ timeout: 60000 });
+  const histAssistant = lastAssistant(page);
+  const histSummary = histAssistant.locator('[data-testid="process-summary"]');
+  await expect(histSummary).toBeVisible({ timeout: 60000 });
+  await expect(histSummary).toHaveAttribute('aria-expanded', 'false');
+  expect(await histSummary.innerText()).toMatch(/已思考|思考并调用了|调用了/);
+  await histSummary.click();
+  const histSegment = histAssistant
+    .locator('[data-testid="reasoning-segment"]')
+    .first();
+  await expect(histSegment).toHaveAttribute('data-expandable', '0');
+  await expect(histSegment).toContainText('已思考');
+  await expect(
+    histAssistant.locator('[data-testid="reasoning-body"]'),
+  ).toHaveCount(0);
+  const histTool = histAssistant
+    .locator('[data-testid="tool-call-chip"]')
+    .first();
+  await expect(histTool).toBeVisible();
+  await histTool.getByRole('button').click();
+  await expect(
+    histTool.locator('[data-testid="tool-summary"], pre').first(),
+  ).toBeVisible();
+  await page.screenshot({
+    path: path.join(artifactDir, 'p41-history-refresh.png'),
+    fullPage: true,
+  });
+
+  await prepareAgent(request, api, { timezone: 'Not/A_Valid_Zone' });
+  await page.goto(`/chat?agentId=${encodeURIComponent(primaryId)}`, {
+    waitUntil: 'networkidle',
+  });
+  await composer.fill('只调用 current_time 一次，然后一句话说明结果。');
+  await composer.press('Enter');
+  const failedChip = page
+    .locator('[data-testid="tool-call-chip"][data-tool-status="failed"]')
+    .last();
+  await expect(failedChip).toBeVisible({ timeout: 180000 });
+  await expect(composer).toBeEnabled({ timeout: 180000 });
+  const failedRail = processRail(page);
+  await expect(
+    failedRail.locator('[data-testid="process-summary"]'),
+  ).toHaveAttribute('aria-expanded', 'true');
+  await expect(failedChip.locator('[data-testid="tool-error"]')).toBeVisible();
+  await page.screenshot({
+    path: path.join(artifactDir, 'p41-tool-failed.png'),
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(
+    `/chat?agentId=${encodeURIComponent(primaryId)}&conversationId=${convId}`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await expect(
+    lastAssistant(page).locator('[data-testid="process-summary"]'),
+  ).toBeVisible({
+    timeout: 60000,
+  });
+  await page.screenshot({
+    path: path.join(artifactDir, 'p41-narrow-viewport.png'),
+    fullPage: true,
+  });
+
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.screenshot({
+    path: path.join(artifactDir, 'p41-dark.png'),
+    fullPage: true,
+  });
+
+  const hist = await request.get(
+    `${api}/api/v1/conversations/${convId}/messages`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const histBody = (await hist.json()) as {
+    messages: {
+      role: string;
+      run_id?: string;
+      parts?: { type: string; duration_ms?: number; text?: string }[];
+    }[];
+  };
+  // 接口按时间从早到晚返回。失败轮也在这条会话里，取最后一条会读到那一轮较短的思考。
+  const firstAssistant = histBody.messages.find((m) => m.role === 'assistant');
+  expect(firstAssistant?.run_id).toBeTruthy();
+  const reasoning = firstAssistant?.parts?.find((p) => p.type === 'reasoning');
+  expect(reasoning?.text ?? '').toBe('');
+  expect(reasoning?.duration_ms ?? 0).toBeGreaterThan(1000);
 
   const files = [
-    'p4-chat-reasoning-fold.png',
-    'p4-chat-tool-running.png',
-    'p4-chat-tool-done.png',
-    'p4-chat-resume.png',
+    'p41-reasoning-streaming.png',
+    'p41-tool-running.png',
+    'p41-complete-folded.png',
+    'p41-reasoning-markdown.png',
+    'p41-history-refresh.png',
+    'p41-tool-failed.png',
+    'p41-narrow-viewport.png',
+    'p41-dark.png',
   ].map((n) => path.join(artifactDir, n));
-  expect(new Set(files.map(md5File)).size).toBe(4);
+  expect(new Set(files.map(md5File)).size).toBe(files.length);
 });

@@ -52,7 +52,7 @@ func emitToolCompleted(ctx context.Context, rc *RunContext, row ToolResultRow, e
 	if entry.Spec.Title != "" {
 		title = entry.Spec.Title
 	}
-	summary, items := displayPreview(row.Display)
+	summary, items := toolEventSummary(row)
 	payload := map[string]any{
 		"call_id": row.CallID, "name": row.ToolName, "title": title, "status": row.Status,
 		"summary": redact.String(summary), "duration_ms": durationMS, "truncated": row.Truncated, "result_ref": row.ID,
@@ -64,6 +64,15 @@ func emitToolCompleted(ctx context.Context, rc *RunContext, row ToolResultRow, e
 		payload["items"] = items
 	}
 	_ = rc.Emitter.Emit(ctx, EventToolCompleted, payload)
+}
+
+// toolEventSummary 优先用展示摘要；失败且没有摘要时带上错误信息，供时间线直接显示。
+func toolEventSummary(row ToolResultRow) (string, []map[string]string) {
+	summary, items := displayPreview(row.Display)
+	if summary == "" {
+		summary = row.ErrorMessage
+	}
+	return summary, items
 }
 
 func displayPreview(raw json.RawMessage) (string, []map[string]string) {

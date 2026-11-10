@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -37,6 +38,37 @@ func TestBuildPartsFromEventsToolAndText(t *testing.T) {
 	}
 }
 
+func TestBuildPartsReasoningOrderWithLateCompleted(t *testing.T) {
+	payload := func(seq int64, typ string, extra map[string]any) []byte {
+		m := map[string]any{"type": typ, "run_id": "run_t", "seq": seq}
+		for k, v := range extra {
+			m[k] = v
+		}
+		b, _ := json.Marshal(m)
+		return b
+	}
+	events := []replayEvent{
+		{Type: run.EventReasoningDelta, Payload: payload(1, run.EventReasoningDelta, map[string]any{"delta": "x", "item_id": "r1"})},
+		{Type: run.EventMessageDelta, Payload: payload(2, run.EventMessageDelta, map[string]any{"delta": "正文"})},
+		{Type: run.EventReasoningCompleted, Payload: payload(3, run.EventReasoningCompleted, map[string]any{
+			"item_id": "r1", "duration_ms": 1200,
+		})},
+	}
+	parts := buildPartsFromEvents(events, partsReplayOpts{stripReasoningText: true})
+	if len(parts) != 2 {
+		t.Fatalf("parts=%v", parts)
+	}
+	if parts[0]["type"] != "reasoning" {
+		t.Fatalf("first part should be reasoning, got %v", parts[0])
+	}
+	if parts[1]["type"] != "text" || parts[1]["text"] != "正文" {
+		t.Fatalf("text part=%v", parts[1])
+	}
+	if parts[0]["duration_ms"] != 1200 {
+		t.Fatalf("duration_ms=%v", parts[0]["duration_ms"])
+	}
+}
+
 func TestBuildPartsReasoningStripped(t *testing.T) {
 	now := time.Now().UTC()
 	raw, _ := run.MarshalEnvelope(1, "run_t", run.EventReasoningDelta, now, 1, map[string]any{"delta": "secret", "item_id": "r1"})
@@ -59,5 +91,43 @@ func TestBuildPartsReasoningStripped(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing reasoning stub")
+	}
+}
+
+func TestHistoryKeepsReasoningDurationFromFirstDelta(t *testing.T) {
+	mem := run.NewMemStore()
+	bus := run.NewEventBus("run_hist", nil, func() bool { return false }, mem)
+	bus.SetStepProvider(func() int { return 1 })
+	ctx := context.Background()
+	if err := bus.ReasoningDelta(ctx, "reason_step1", "甲"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(180 * time.Millisecond)
+	if err := bus.ReasoningDelta(ctx, "reason_step1", "乙"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if err := bus.ReasoningCompleted(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	bus.Close()
+	events, err := mem.ListRunEventsAfter(ctx, "run_hist", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := make([]replayEvent, 0, len(events))
+	for _, ev := range events {
+		replay = append(replay, replayEvent{Seq: ev.Seq, Type: ev.Type, Payload: ev.Payload})
+	}
+	parts := buildPartsFromEvents(replay, partsReplayOpts{stripReasoningText: true})
+	if len(parts) != 1 || parts[0]["type"] != "reasoning" {
+		t.Fatalf("parts=%v", parts)
+	}
+	if parts[0]["text"] != "" {
+		t.Fatal("历史不应保留思考正文")
+	}
+	d, ok := parts[0]["duration_ms"].(int)
+	if !ok || d < 150 {
+		t.Fatalf("duration_ms=%v", parts[0]["duration_ms"])
 	}
 }

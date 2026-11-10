@@ -2,8 +2,9 @@ export type ReasoningPart = {
   type: 'reasoning';
   item_id: string;
   text: string;
-  status: 'streaming' | 'completed';
+  status: 'streaming' | 'completed' | 'stopped';
   truncated?: boolean;
+  duration_ms?: number;
 };
 
 export type ToolPart = {

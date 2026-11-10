@@ -10,7 +10,8 @@
     "prepare": "max setup",
     "lint": "biome check && tsc --noEmit",
     "test": "playwright test",
-    "test:memory": "node --experimental-strip-types --test tests/memory-retry.unit.ts"
+    "test:memory": "node --experimental-strip-types --test tests/memory-retry.unit.ts",
+    "test:unit": "node --experimental-strip-types --test tests/*.unit.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

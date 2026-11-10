@@ -265,4 +265,109 @@ details:not([open]) > :not(summary) {
   .streaming-caret {
     animation: none;
   }
+
+  .process-summary-shimmer,
+  .process-tool .animate-spin {
+    animation: none !important;
+  }
+
+  .process-summary-shimmer {
+    color: inherit;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+.markdown-reasoning .markdown {
+  font-size: 13px;
+  color: #71717a;
+}
+
+.markdown-reasoning .markdown p {
+  margin: 0.35em 0;
+}
+
+.markdown-reasoning .markdown pre {
+  font-size: 11px;
+}
+
+.process-timeline {
+  border-color: color-mix(in srgb, currentColor 28%, transparent);
+}
+
+.process-summary-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    #a1a1aa 0%,
+    #a1a1aa 28%,
+    #18181b 46%,
+    #18181b 54%,
+    #a1a1aa 72%,
+    #a1a1aa 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: process-shimmer 1.6s linear infinite;
+}
+
+@keyframes process-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .user-app {
+    background: #18181b;
+    color: #fafafa;
+  }
+
+  .icon-rail {
+    background: #111113;
+    border-color: #27272a;
+  }
+
+  .conversation-main,
+  .agent-details-panel {
+    background: #18181b;
+  }
+
+  .user-bubble {
+    background: #3f3a28;
+    color: #fafafa;
+  }
+
+  .assistant-bubble {
+    background: #27272a;
+    color: #fafafa;
+  }
+
+  .message-composer {
+    background: #111113;
+    border-color: #3f3f46;
+    color: #fafafa;
+  }
+
+  .process-rail,
+  .markdown-reasoning .markdown,
+  .markdown-reasoning .markdown strong {
+    color: #a1a1aa;
+  }
+
+  .process-summary-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      #71717a 0%,
+      #71717a 35%,
+      #f4f4f5 50%,
+      #71717a 65%,
+      #71717a 100%
+    );
+  }
 }
