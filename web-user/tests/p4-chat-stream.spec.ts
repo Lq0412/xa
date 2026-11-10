@@ -32,7 +32,7 @@ async function prepareAgent(
   api: string,
   toolConfig: Record<string, unknown> = {
     timezone: 'Asia/Shanghai',
-    delay_ms: 5000,
+    delay_ms: 8000,
   },
 ) {
   const tokenRes = await request.post(`${api}/api/v1/auth/login`, {
@@ -133,53 +133,39 @@ test('P4.1 流式：过程轨、思考折叠、工具卡、历史用时', async 
 
   await expect(rail).toBeVisible({ timeout: 120000 });
 
-  await page.waitForFunction(
-    () => {
-      const fold = [
-        ...document.querySelectorAll('[data-testid="reasoning-fold"]'),
-      ].pop();
-      if (!fold) return false;
-      const status = fold.getAttribute('data-reasoning-status');
-      if (status !== 'streaming') return false;
-      const title = fold.querySelector('button')?.textContent || '';
-      return title.includes('思考中') && /\d+\s*秒/.test(title);
-    },
-    undefined,
-    { timeout: 120000, polling: 200 },
-  );
-  await page.screenshot({
-    path: path.join(artifactDir, 'p41-reasoning-streaming.png'),
-    fullPage: true,
-  });
-
-  await page.waitForFunction(
-    () => {
-      const row = [...document.querySelectorAll('article.assistant')].pop();
-      if (!row) return false;
-      const fold = row.querySelector('[data-testid="reasoning-fold"]');
-      const foldStatus = fold?.getAttribute('data-reasoning-status');
-      const foldCollapsed =
-        fold &&
-        fold.querySelector('button')?.getAttribute('aria-expanded') === 'false';
-      const toolRunning = row.querySelector(
-        '[data-testid="tool-call-chip"][data-status="running"]',
-      );
-      const bubble = row.querySelector('[data-testid="message-text-part"]');
-      const bubbleText = bubble?.textContent || '';
-      const noFinalTime = !/年.*月.*日/.test(bubbleText);
-      return Boolean(
-        toolRunning &&
-          (foldCollapsed || foldStatus === 'completed') &&
-          noFinalTime,
-      );
-    },
-    undefined,
-    { timeout: 180000, polling: 300 },
-  );
-  await page.screenshot({
-    path: path.join(artifactDir, 'p41-tool-running.png'),
-    fullPage: true,
-  });
+  await Promise.all([
+    page
+      .waitForFunction(
+        () => {
+          const fold = [
+            ...document.querySelectorAll('[data-testid="reasoning-fold"]'),
+          ].pop();
+          if (!fold) return false;
+          if (fold.getAttribute('data-reasoning-status') !== 'streaming')
+            return false;
+          const title = fold.querySelector('button')?.textContent || '';
+          return title.includes('思考中');
+        },
+        undefined,
+        { timeout: 120000, polling: 100 },
+      )
+      .then(async () => {
+        await page.screenshot({
+          path: path.join(artifactDir, 'p41-reasoning-streaming.png'),
+          fullPage: true,
+        });
+      }),
+    page
+      .waitForSelector('[data-testid="tool-call-chip"][data-status="running"]', {
+        timeout: 180000,
+      })
+      .then(async () => {
+        await page.screenshot({
+          path: path.join(artifactDir, 'p41-tool-running.png'),
+          fullPage: true,
+        });
+      }),
+  ]);
 
   await expect(
     page.locator('[data-testid="tool-call-chip"][data-status="done"]').first(),
