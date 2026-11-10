@@ -32,23 +32,24 @@ type EventBus struct {
 	RedisOK  func() bool
 	Recorder EventRecorder
 
-	mu               sync.Mutex
-	seq              int64
-	stepFn           func() int
-	msgBuf           strings.Builder
-	reasonBuf        strings.Builder
-	reasonItemID     string
-	reasoningOpen    bool
-	flushTimer       *time.Timer
-	pendingFlush     bool
-	batch            []pendingEvent
-	terminals        []pendingEvent
-	lastFlushedSeq   int64
-	subscribers      map[int]chan StoredEvent
-	nextSubID        int
-	closed           bool
-	deltaCoalesceMS  int
-	deltaCoalesceLen int
+	mu                 sync.Mutex
+	seq                int64
+	stepFn             func() int
+	msgBuf             strings.Builder
+	reasonBuf          strings.Builder
+	reasonItemID       string
+	reasoningOpen      bool
+	reasoningStartedAt time.Time
+	flushTimer         *time.Timer
+	pendingFlush       bool
+	batch              []pendingEvent
+	terminals          []pendingEvent
+	lastFlushedSeq     int64
+	subscribers        map[int]chan StoredEvent
+	nextSubID          int
+	closed             bool
+	deltaCoalesceMS    int
+	deltaCoalesceLen   int
 }
 
 type pendingEvent struct {
@@ -193,6 +194,9 @@ func (b *EventBus) ReasoningDelta(ctx context.Context, itemID, delta string) err
 		b.reasonItemID = itemID
 	}
 	b.reasoningOpen = true
+	if b.reasonBuf.Len() == 0 {
+		b.reasoningStartedAt = time.Now()
+	}
 	b.reasonBuf.WriteString(delta)
 	b.flushDeltasLocked()
 	b.flushBatchLocked(false)
@@ -215,10 +219,20 @@ func (b *EventBus) ReasoningCompleted(ctx context.Context, truncated bool) error
 	}
 	b.reasoningOpen = false
 	b.reasonBuf.Reset()
+	completedAt := time.Now()
+	var durationMS int64
+	if !b.reasoningStartedAt.IsZero() {
+		durationMS = completedAt.Sub(b.reasoningStartedAt).Milliseconds()
+	}
+	b.reasoningStartedAt = time.Time{}
 	seq := b.seq + 1
-	raw, err := MarshalEnvelope(seq, b.RunID, EventReasoningCompleted, time.Now().UTC(), b.currentStep(), map[string]any{
+	payload := map[string]any{
 		"item_id": itemIDOr(item, b.currentStep()), "chars": chars, "truncated": truncated,
-	})
+	}
+	if durationMS > 0 {
+		payload["duration_ms"] = durationMS
+	}
+	raw, err := MarshalEnvelope(seq, b.RunID, EventReasoningCompleted, completedAt.UTC(), b.currentStep(), payload)
 	if err != nil {
 		return err
 	}

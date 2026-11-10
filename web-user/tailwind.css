@@ -265,4 +265,50 @@ details:not([open]) > :not(summary) {
   .streaming-caret {
     animation: none;
   }
+
+  .reasoning-title-streaming,
+  .reasoning-panel-grid,
+  .tool-panel-grid {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.markdown-reasoning .markdown {
+  font-size: 13px;
+  color: #71717a;
+}
+
+.markdown-reasoning .markdown p {
+  margin: 0.35em 0;
+}
+
+.markdown-reasoning .markdown pre {
+  font-size: 11px;
+}
+
+.reasoning-panel-grid,
+.tool-panel-grid {
+  transition: grid-template-rows 200ms ease;
+}
+
+.reasoning-title-streaming {
+  animation: reasoning-shimmer 2s ease-in-out infinite;
+}
+
+@keyframes reasoning-shimmer {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.65;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .process-rail,
+  .markdown-reasoning .markdown {
+    color: #a1a1aa;
+  }
 }

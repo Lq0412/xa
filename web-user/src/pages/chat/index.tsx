@@ -173,7 +173,6 @@ export default function ChatPage() {
             hasMore={session.hasMore}
             loadingOlder={session.loadingOlder}
             olderError={session.olderError}
-            streamingRun={session.sending}
           />
           {session.agent && session.agent.status !== 'active' && (
             <p className="shrink-0 text-center text-xs text-amber-700">

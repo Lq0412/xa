@@ -61,10 +61,9 @@ export function applyRunEvent(
         }
       }
       if (part) {
-        if (part.text.trim().length > 0) {
-          part.status = 'completed';
-        }
+        part.status = 'completed';
         part.truncated = Boolean(ev.truncated);
+        if (ev.duration_ms != null) part.duration_ms = Number(ev.duration_ms);
       }
       break;
     }
@@ -115,6 +114,17 @@ export function applyRunEvent(
       next[partIdx] = part;
       break;
     }
+  }
+  for (let i = 0; i < next.length; i++) {
+    const p = next[i];
+    if (p.type !== 'reasoning' || p.status !== 'streaming') continue;
+    const later = next.slice(i + 1).some((part) => {
+      if (part.type === 'tool') return true;
+      if (part.type === 'text' && part.text.trim()) return true;
+      if (part.type === 'reasoning' && part.item_id !== p.item_id) return true;
+      return false;
+    });
+    if (later) p.status = 'completed';
   }
   return next;
 }

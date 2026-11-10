@@ -7,6 +7,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { Agent } from '@/services/api';
 import type { ChatMessage } from '@/services/chat';
 import type { MessagePart } from '@/services/chat-parts';
+import {
+  reasoningHasLaterActivity,
+  reorderReasoningBeforeText,
+  splitAssistantParts,
+} from './assistant-parts';
 import { ReasoningFold } from './ReasoningFold';
 import { ToolCallChip } from './ToolCallChip';
 
@@ -22,8 +27,6 @@ type Props = {
   hasMore: boolean;
   loadingOlder: boolean;
   olderError: string;
-  /** 会话仍在接收 SSE（含续传）时为 true。 */
-  streamingRun?: boolean;
 };
 
 const suggestions = ['介绍一下你自己', '你能帮我做什么', '我们从哪里开始'];
@@ -73,7 +76,6 @@ export function MessageList({
   hasMore,
   loadingOlder,
   olderError,
-  streamingRun,
 }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -231,13 +233,25 @@ export function MessageList({
                 aria-relevant="additions"
               >
                 {messages.map((message, index) => {
-                  const lastAssistantId = [...messages]
-                    .reverse()
-                    .find((item) => item.role === 'assistant')?.id;
                   const label = timeLabel(stamp(message));
                   const previous =
                     index > 0 ? timeLabel(stamp(messages[index - 1])) : '';
                   const mine = message.role === 'user';
+                  const orderedParts = message.parts?.length
+                    ? reorderReasoningBeforeText(message.parts)
+                    : [];
+                  const { process: processParts, text: textParts } =
+                    splitAssistantParts(orderedParts);
+                  const hasTextPart = textParts.length > 0;
+                  const showContentFallback =
+                    !hasTextPart && Boolean(message.content?.trim()) && !mine;
+                  const showBubble =
+                    mine ||
+                    hasTextPart ||
+                    showContentFallback ||
+                    message.status === 'pending' ||
+                    message.status === 'stopped' ||
+                    message.status === 'failed';
                   return (
                     <div key={message.id} className="flex flex-col gap-3">
                       {label && label !== previous && (
@@ -254,82 +268,100 @@ export function MessageList({
                           mine ? '你的消息' : `${agent?.name || '助手'}的回复`
                         }
                       >
-                        <div
-                          className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-7 ${mine ? 'bg-[#fff4cc] text-zinc-900' : 'bg-zinc-100 text-zinc-900'}`}
-                        >
-                          {!mine && (message.parts?.length ?? 0) > 0 ? (
-                            <div className="space-y-1">
-                              {message.parts?.map((part) => {
-                                const key = partKey(part);
-                                if (part.type === 'reasoning')
-                                  return (
-                                    <ReasoningFold
-                                      key={key}
-                                      itemId={part.item_id}
-                                      text={part.text}
-                                      status={part.status}
-                                      liveRun={
-                                        Boolean(streamingRun) &&
-                                        !mine &&
-                                        message.id === lastAssistantId
-                                      }
-                                    />
-                                  );
-                                if (part.type === 'tool')
-                                  return <ToolCallChip key={key} part={part} />;
-                                if (part.type === 'text' && part.text)
-                                  return (
-                                    <div
-                                      key={key}
-                                      data-testid="message-text-part"
-                                    >
-                                      <Markdown>{part.text}</Markdown>
-                                    </div>
-                                  );
-                                return null;
-                              })}
-                              {message.content &&
-                              !message.parts?.some(
-                                (p) => p.type === 'text' && p.text,
-                              ) ? (
-                                <div data-testid="message-text-part">
-                                  <Markdown>{message.content}</Markdown>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : message.content ? (
-                            mine ? (
+                        {mine ? (
+                          <div className="max-w-[70%] rounded-2xl bg-[#fff4cc] px-4 py-2.5 text-[15px] leading-7 text-zinc-900">
+                            {message.content ? (
                               <div className="whitespace-pre-wrap">
                                 {message.content}
                               </div>
-                            ) : (
-                              <Markdown>{message.content}</Markdown>
-                            )
-                          ) : null}
-                          {message.status === 'pending' && (
-                            <>
-                              {!message.content && (
-                                <span className="sr-only">正在生成</span>
-                              )}
-                              <span
-                                className="streaming-caret"
-                                aria-hidden="true"
-                              />
-                            </>
-                          )}
-                          {message.status === 'stopped' && (
-                            <span className="mt-2 block text-xs text-amber-700">
-                              已停止生成
-                            </span>
-                          )}
-                          {message.status === 'failed' && (
-                            <span className="mt-2 block text-xs text-amber-700">
-                              {message.error === '已停止生成'
-                                ? message.error
-                                : '回复未完成，请重新加载记录确认结果。'}
-                            </span>
-                          )}
-                        </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="flex w-full max-w-[760px] flex-col gap-2">
+                            {processParts.length > 0 ? (
+                              <div
+                                className="process-rail flex flex-col gap-2"
+                                data-testid="process-rail"
+                              >
+                                {processParts.map((part) => {
+                                  const key = partKey(part);
+                                  if (part.type === 'reasoning') {
+                                    const later = reasoningHasLaterActivity(
+                                      orderedParts,
+                                      part.item_id,
+                                    );
+                                    const partStatus =
+                                      message.status === 'stopped' &&
+                                      part.status === 'streaming'
+                                        ? 'stopped'
+                                        : part.status;
+                                    return (
+                                      <ReasoningFold
+                                        key={key}
+                                        itemId={part.item_id}
+                                        text={part.text}
+                                        status={partStatus}
+                                        truncated={part.truncated}
+                                        duration_ms={part.duration_ms}
+                                        laterActivity={later}
+                                        messageStopped={
+                                          message.status === 'stopped'
+                                        }
+                                      />
+                                    );
+                                  }
+                                  if (part.type === 'tool')
+                                    return (
+                                      <ToolCallChip key={key} part={part} />
+                                    );
+                                  return null;
+                                })}
+                              </div>
+                            ) : null}
+                            {showBubble ? (
+                              <div className="max-w-[70%] rounded-2xl bg-zinc-100 px-4 py-2.5 text-[15px] leading-7 text-zinc-900">
+                                {hasTextPart
+                                  ? textParts.map((part) => (
+                                      <div
+                                        key={partKey(part)}
+                                        data-testid="message-text-part"
+                                      >
+                                        <Markdown>{part.text}</Markdown>
+                                      </div>
+                                    ))
+                                  : null}
+                                {showContentFallback ? (
+                                  <div data-testid="message-text-part">
+                                    <Markdown>{message.content}</Markdown>
+                                  </div>
+                                ) : null}
+                                {message.status === 'pending' ? (
+                                  <>
+                                    {!hasTextPart && !showContentFallback ? (
+                                      <span className="sr-only">正在生成</span>
+                                    ) : null}
+                                    <span
+                                      className="streaming-caret"
+                                      aria-hidden="true"
+                                    />
+                                  </>
+                                ) : null}
+                                {message.status === 'stopped' ? (
+                                  <span className="mt-2 block text-xs text-amber-700">
+                                    已停止生成
+                                  </span>
+                                ) : null}
+                                {message.status === 'failed' ? (
+                                  <span className="mt-2 block text-xs text-amber-700">
+                                    {message.error === '已停止生成'
+                                      ? message.error
+                                      : '回复未完成，请重新加载记录确认结果。'}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
                       </article>
                     </div>
                   );

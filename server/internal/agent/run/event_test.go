@@ -37,6 +37,39 @@ func TestRedactInToolEventPreview(t *testing.T) {
 	}
 }
 
+func TestEventBusReasoningCompletedDuration(t *testing.T) {
+	mem := NewMemStore()
+	bus := NewEventBus("run_r", nil, func() bool { return false }, mem)
+	bus.SetStepProvider(func() int { return 1 })
+	if err := bus.ReasoningDelta(context.Background(), "reason_step1", "想"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if err := bus.ReasoningCompleted(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	bus.Close()
+	events, err := mem.ListRunEventsAfter(context.Background(), "run_r", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completed map[string]any
+	for _, ev := range events {
+		if ev.Type != EventReasoningCompleted {
+			continue
+		}
+		if err := json.Unmarshal(ev.Payload, &completed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if completed["duration_ms"] == nil {
+		t.Fatal("reasoning.completed 应包含 duration_ms")
+	}
+	if completed["duration_ms"].(float64) <= 0 {
+		t.Fatalf("duration_ms=%v", completed["duration_ms"])
+	}
+}
+
 func TestEventBusDeltaCoalesce(t *testing.T) {
 	mem := NewMemStore()
 	bus := NewEventBus("run_t", nil, func() bool { return false }, mem)
