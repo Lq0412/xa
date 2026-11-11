@@ -3,13 +3,15 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 // Check 对真实依赖执行有超时的可用性检查。
@@ -21,11 +23,37 @@ type Check struct {
 // HealthHandler 区分进程存活与依赖就绪，不向外返回连接参数或底层错误。
 func HealthHandler(checks []Check, timeout time.Duration, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"}, logger)
-	})
-	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	RegisterHealthRoutes(NewAPI(mux), checks, timeout, logger)
+	return mux
+}
+
+type healthLive struct {
+	Status string `json:"status" doc:"进程状态" enum:"ok"`
+}
+
+type healthReady struct {
+	Status       string            `json:"status" doc:"依赖就绪状态" enum:"ok,unavailable"`
+	Dependencies map[string]string `json:"dependencies" doc:"各依赖的状态"`
+}
+
+type liveOutput struct{ Body healthLive }
+type readyOutput struct {
+	Status int
+	Body   healthReady
+}
+
+// RegisterHealthRoutes 为 server、worker 和离线导出共用健康接口约定。
+func RegisterHealthRoutes(api huma.API, checks []Check, timeout time.Duration, logger *slog.Logger) {
+	huma.Register(api, Operation(api, "健康检查", "healthLive", "GET", "/health/live", "检查进程存活", 200, 0, nil),
+		func(context.Context, *EmptyInput) (*liveOutput, error) {
+			return &liveOutput{Body: healthLive{Status: "ok"}}, nil
+		})
+	op := Operation(api, "健康检查", "healthReady", "GET", "/health/ready", "检查依赖就绪", 200, 0, nil)
+	op.Responses["503"] = &huma.Response{Description: "依赖不可用", Content: map[string]*huma.MediaType{
+		"application/json": {Schema: api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[healthReady](), true, "HealthReady")},
+	}}
+	huma.Register(api, op, func(ctx context.Context, _ *EmptyInput) (*readyOutput, error) {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		status := http.StatusOK
 		dependencies := make(map[string]string, len(checks))
@@ -41,21 +69,8 @@ func HealthHandler(checks []Check, timeout time.Duration, logger *slog.Logger) h
 		if status != http.StatusOK {
 			state = "unavailable"
 		}
-		writeJSON(w, status, struct {
-			Status       string            `json:"status"`
-			Dependencies map[string]string `json:"dependencies"`
-		}{state, dependencies}, logger)
+		return &readyOutput{Status: status, Body: healthReady{Status: state, Dependencies: dependencies}}, nil
 	})
-	return mux
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any, logger *slog.Logger) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		logger.Warn("写入健康检查响应失败", "error", err)
-	}
 }
 
 // Serve 在调用方提供的监听器上运行，取消时停止接收请求并等待在途请求结束。

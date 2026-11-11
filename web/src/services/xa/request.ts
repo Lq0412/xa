@@ -1,11 +1,13 @@
 import { redirectToLogin, TOKEN_KEY } from './session';
 
-type ErrorBody = { code?: string; message?: string; request_id?: string };
+type ErrorBody = Partial<API.ApiError>;
 type Options = {
   method?: string;
   data?: unknown;
   anonymous?: boolean;
   signal?: AbortSignal;
+  headers?: HeadersInit;
+  params?: Record<string, string | number | boolean | undefined>;
 };
 
 /** 保留 HTTP 状态和服务端错误，页面据此显示表单或列表反馈。 */
@@ -26,18 +28,24 @@ export async function request<T>(
   path: string,
   options: Options = {},
 ): Promise<T> {
-  const headers = new Headers({ Accept: 'application/json' });
+  const headers = new Headers(options.headers);
+  headers.set('Accept', 'application/json');
   const token = options.anonymous ? null : localStorage.getItem(TOKEN_KEY);
   if (token) headers.set('Authorization', `Bearer ${token}`);
   if (options.data !== undefined)
     headers.set('Content-Type', 'application/json');
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(options.params ?? {})) {
+    if (value !== undefined) query.append(key, String(value));
+  }
+  const url = `${path}${query.size ? `?${query}` : ''}`;
   const timeout = AbortSignal.timeout(15000);
   const signal = options.signal
     ? AbortSignal.any([timeout, options.signal])
     : timeout;
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(url, {
       method: options.method,
       headers,
       body:

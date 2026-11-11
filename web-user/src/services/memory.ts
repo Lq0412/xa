@@ -1,90 +1,40 @@
-import { request } from './http';
-import { type DeadJob, manualMemoryBody, parseDeadJobs } from './memoryRetry';
+import * as memory from './generated/memory';
+import {
+  type DeadJob,
+  type MemoryCreate,
+  manualMemoryBody,
+  parseDeadJobs,
+} from './memoryRetry';
+
+export type { MemoryCreate } from './memoryRetry';
 
 /** 记忆条目。编辑和恢复都不会原地修改，成功后返回新的 id。 */
-export type MemoryItem = {
-  id: string;
-  workspace_id: string;
-  owner_user_id: string;
-  scope: 'user' | 'agent' | 'session';
-  agent_id: string | null;
-  conversation_id: string | null;
-  namespace: string;
-  subject_key: string;
-  content: string;
-  kind: string;
-  importance: number;
-  pinned: boolean;
-  status: 'active' | 'superseded' | 'deleted' | 'archived';
-  source: 'auto' | 'user_edited';
-  source_type: string;
-  source_ref: string | null;
-  supersedes_id: string | null;
-  created_at: string;
-  updated_at: string;
-  last_used_at: string | null;
-  retention: number;
-  strength_days: number;
-  sensitive: boolean;
-};
+export type MemoryItem = Awaited<ReturnType<typeof memory.addMemory>>;
 
 /** 一条记忆的审计事件，沿取代链和合并父版本返回。 */
-export type MemoryEvent = {
-  id: number;
-  memory_id: string | null;
-  source_ref: string | null;
-  op: string;
-  actor_type: string;
-  actor_id: string;
-  before: unknown;
-  after: unknown;
-  reason: string;
-  created_at: string;
-};
+export type MemoryEvent = NonNullable<
+  Awaited<ReturnType<typeof memory.listMemoryEvents>>['events']
+>[number];
 
 /**
  * Agent 版本上的记忆策略。
  * 界面只编辑遗忘开关和召回条数，其余预算字段保留给服务端，不在页面展示。
  */
-export type MemoryPolicy = {
-  enabled: boolean;
-  core_budget_tokens: number;
-  recall_top_k: number;
-  decay_enabled: boolean;
-};
+export type MemoryPolicy = Pick<
+  MemoryPolicyResult['memory_policy'],
+  'enabled' | 'core_budget_tokens' | 'recall_top_k' | 'decay_enabled'
+>;
 
 /** memory.md 是按预算渲染的只读视图，不是另一份存储。 */
-export type MemoryView = {
-  markdown: string;
-  estimated_tokens: number;
-  item_ids: string[];
-};
+export type MemoryView = Awaited<ReturnType<typeof memory.getAgentMemory>>;
 
 /** 保存策略后的新版本。再次修改必须使用 current_version_id。 */
-export type MemoryPolicyResult = {
-  current_version_id: string;
-  version_number: number;
-  memory_policy: MemoryPolicy;
-};
+export type MemoryPolicyResult = Awaited<
+  ReturnType<typeof memory.updateMemoryPolicy>
+>;
 
 /** 用户编辑可改的字段。归属、kind 和 subject_key 由服务端保留。 */
-export type MemoryEdit = {
-  content: string;
-  namespace: string;
-  importance: number;
-  pinned: boolean;
-};
-
-/** 手动新增。不传 subject_key，由服务端按内容生成，前端不补固定键。 */
-export type MemoryCreate = {
-  content: string;
-  namespace: string;
-  importance: number;
-  kind?: string;
-  pinned?: boolean;
-  scope?: 'user' | 'agent';
-  agent_id?: string;
-};
+export type MemoryEdit = Parameters<typeof memory.editMemory>[1];
 
 /** 当前用户的记忆统计。deadJobs 最多 20 条，dead 才是失败任务总数。 */
 export type MemoryStats = {
@@ -169,25 +119,17 @@ function readCountMap(value: unknown) {
  * 显式带上 limit 与 cursor，避免退回旧的完整列表。
  */
 export async function listMemories(
-  filter: {
-    scope: string;
-    agent_id?: string;
-    namespace?: string;
-    status?: string;
-    limit: number;
-    cursor?: string;
-  },
+  filter: API.listMemoriesParams,
   signal?: AbortSignal,
 ) {
-  const params = new URLSearchParams();
-  params.set('scope', filter.scope);
-  params.set('limit', String(filter.limit));
-  params.set('cursor', filter.cursor ?? '');
-  if (filter.agent_id) params.set('agent_id', filter.agent_id);
-  if (filter.namespace) params.set('namespace', filter.namespace);
-  if (filter.status) params.set('status', filter.status);
-  const result = await request<{ items: MemoryItem[]; next_cursor?: string }>(
-    `/memories?${params.toString()}`,
+  const result = await memory.listMemories(
+    {
+      ...filter,
+      cursor: filter.cursor ?? '',
+      agent_id: filter.agent_id || undefined,
+      namespace: filter.namespace || undefined,
+      status: filter.status || undefined,
+    },
     { signal },
   );
   if (!Array.isArray(result.items)) throw new Error('记忆列表格式不正确');
@@ -202,12 +144,7 @@ export async function listMemories(
 
 /** 沿游标数完当前筛选下的全部条目，供卡片显示总数。 */
 export async function countMemories(
-  filter: {
-    scope: string;
-    agent_id?: string;
-    namespace?: string;
-    status?: string;
-  },
+  filter: Omit<API.listMemoriesParams, 'limit' | 'cursor'>,
   signal?: AbortSignal,
 ) {
   let cursor = '';
@@ -223,8 +160,8 @@ export async function countMemories(
 
 /** 当前 Agent 可读的 memory.md。关闭或没有条目时 markdown 为空字符串。 */
 export async function getMemoryMarkdown(agentID: string, signal?: AbortSignal) {
-  const result = await request<MemoryView>(
-    `/agents/${encodeURIComponent(agentID)}/memory`,
+  const result = await memory.getAgentMemory(
+    { agent_id: encodeURIComponent(agentID) },
     { signal },
   );
   if (
@@ -238,30 +175,22 @@ export async function getMemoryMarkdown(agentID: string, signal?: AbortSignal) {
 }
 
 export const createMemory = (input: MemoryCreate) =>
-  request<MemoryItem>('/memories', {
-    method: 'POST',
-    body: JSON.stringify(manualMemoryBody(input)),
-  });
+  memory.addMemory(manualMemoryBody(input));
 
 /** 用新条目取代旧条目。旧 id 再编辑会返回 409。 */
 export const updateMemory = (id: string, input: MemoryEdit) =>
-  request<MemoryItem>(`/memories/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    body: JSON.stringify(input),
-  });
+  memory.editMemory({ memory_id: encodeURIComponent(id) }, input);
 
 export const deleteMemory = (id: string) =>
-  request<void>(`/memories/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  memory.deleteMemory({ memory_id: encodeURIComponent(id) });
 
 /** 把已归档或已删除的版本恢复成新的生效条目。 */
 export const restoreMemory = (id: string) =>
-  request<MemoryItem>(`/memories/${encodeURIComponent(id)}/restore`, {
-    method: 'POST',
-  });
+  memory.restoreMemory({ memory_id: encodeURIComponent(id) });
 
 export async function listMemoryEvents(id: string, signal?: AbortSignal) {
-  const result = await request<{ events: MemoryEvent[] }>(
-    `/memories/${encodeURIComponent(id)}/events`,
+  const result = await memory.listMemoryEvents(
+    { memory_id: encodeURIComponent(id) },
     { signal },
   );
   if (!Array.isArray(result.events)) throw new Error('记忆历史格式不正确');
@@ -269,9 +198,7 @@ export async function listMemoryEvents(id: string, signal?: AbortSignal) {
 }
 
 export async function getMemoryStats(signal?: AbortSignal) {
-  const result = await request<Record<string, unknown>>('/memory/stats', {
-    signal,
-  });
+  const result = await memory.getMemoryStats({ signal });
   if (
     typeof result.pending !== 'number' ||
     typeof result.failed !== 'number' ||
@@ -310,10 +237,9 @@ export async function getMemoryStats(signal?: AbortSignal) {
 }
 
 /** 只允许重试已经失败到 dead 的整理任务。成功时没有响应体。 */
-export const retryMemoryJob = (id: string) =>
-  request<void>(`/memory/jobs/${encodeURIComponent(id)}/retry`, {
-    method: 'POST',
-  });
+export async function retryMemoryJob(id: string): Promise<void> {
+  await memory.retryMemoryJob({ job_id: encodeURIComponent(id) });
+}
 
 /**
  * 提交开关，以及调用方显式修改的遗忘开关和召回条数。
@@ -321,16 +247,11 @@ export const retryMemoryJob = (id: string) =>
  */
 export async function saveMemoryPolicy(
   agentID: string,
-  input: {
-    expected_version_id: string;
-    enabled: boolean;
-    recall_top_k?: number;
-    decay_enabled?: boolean;
-  },
+  input: Parameters<typeof memory.updateMemoryPolicy>[1],
 ) {
-  const result = await request<MemoryPolicyResult>(
-    `/agents/${encodeURIComponent(agentID)}/memory-policy`,
-    { method: 'PUT', body: JSON.stringify(input) },
+  const result = await memory.updateMemoryPolicy(
+    { agent_id: encodeURIComponent(agentID) },
+    input,
   );
   if (
     typeof result.current_version_id !== 'string' ||

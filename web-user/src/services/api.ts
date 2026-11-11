@@ -1,6 +1,6 @@
+import * as agentLibrary from './generated/agentLibrary';
 import * as agents from './generated/agents';
 import * as auth from './generated/auth';
-import { request } from './http';
 
 export { ApiError, errorMessage, TOKEN_KEY } from './http';
 
@@ -10,12 +10,12 @@ export type Agent = Awaited<ReturnType<typeof agents.getAgent>>;
 /** SOUL 和模型是不可变版本字段；保存时必须携带当前版本号。 */
 export type AgentVersion = Awaited<ReturnType<typeof agents.getAgentConfig>>;
 export const listAgentLibrary = (signal?: AbortSignal) =>
-  request<{ agents: Agent[] }>('/agent-library', { signal });
+  agentLibrary.listAgentLibrary({ signal });
 export const addPublicAgent = (id: string, signal?: AbortSignal) =>
-  request<void>(`/agent-library/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    signal,
-  });
+  agentLibrary.addAgentToLibrary(
+    { agent_id: encodeURIComponent(id) },
+    { signal },
+  );
 export const getAgentConfig = (id: string, signal?: AbortSignal) =>
   agents.getAgentConfig({ agent_id: encodeURIComponent(id) }, { signal });
 

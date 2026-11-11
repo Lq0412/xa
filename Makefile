@@ -54,13 +54,14 @@ api: prepare
 
 api-client: api
 	cd web-user && npm run openapi
+	cd web && npm run openapi
 
 api-docs: api
 	npx --yes @scalar/cli@2.15.0 document serve docs/api/openapi.yaml --watch --port 5177 --config docs/api/scalar.json
 
 api-check: api-client
-	git diff --exit-code --stat -- docs/api/openapi.yaml web-user/src/services/generated || { echo '接口生成物有变化，请检查并暂存后重跑 make check'; exit 1; }
-	test -z "$$(git ls-files --others --exclude-standard -- docs/api/openapi.yaml web-user/src/services/generated)" || { echo '请生成并暂存接口约定和客户端'; exit 1; }
+	git diff --exit-code --stat -- docs/api/openapi.yaml web-user/src/services/generated web/src/services/generated || { echo '接口生成物有变化，请检查并暂存后重跑 make check'; exit 1; }
+	test -z "$$(git ls-files --others --exclude-standard -- docs/api/openapi.yaml web-user/src/services/generated web/src/services/generated)" || { echo '请生成并暂存接口约定和客户端'; exit 1; }
 
 check: prepare api-check
 	cd server && test -z "$$(gofmt -l .)"

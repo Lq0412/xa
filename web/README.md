@@ -24,6 +24,8 @@ npm run build
 
 `config/` 管理路由和开发代理，`src/pages/` 存放业务页面，`src/components/ui/` 存放本项目的通用控件，`src/services/xa/` 封装真实接口。生成目录 `src/.umi*`、依赖和构建产物不提交。
 
+更新 `docs/api/openapi.yaml` 后，在本目录执行 `npm run openapi`，并提交 `src/services/generated/` 的生成结果。
+
 ## 浏览器验收
 
 `npm run test:smoke` 使用 Playwright 连接已运行的真实后端，验证登录、今天、Agent 创建与配置保存、工具审批切换、未保存退出保护、版本冲突、启停、确认记录及退出。临时 Agent 和测试会话在结束后清理。先准备 Chromium，并通过环境变量 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入已有的管理员测试账号。管理端默认访问 `http://127.0.0.1:8000`，可用 `XA_WEB_URL` 修改。可选的 `XA_ADMIN_SHOTS` 指定截图目录，登录页截图在输入凭证前采集。

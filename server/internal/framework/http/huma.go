@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -49,7 +50,7 @@ func init() {
 		return &apiError{Message: message, status: status}
 	}
 	huma.NewErrorWithContext = func(ctx huma.Context, status int, message string, errs ...error) huma.StatusError {
-		if ctx.Operation().MaxBodyBytes > 0 {
+		if ctx.Operation().MaxBodyBytes != 0 {
 			switch message {
 			case "request body is required":
 				return newAPIError(ctx.Context(), http.StatusBadRequest, "invalid_json", "EOF")
@@ -74,6 +75,10 @@ func init() {
 
 type jsonAPI struct{ huma.API }
 
+func (a jsonAPI) Marshal(w io.Writer, _ string, value any) error {
+	return json.NewEncoder(w).Encode(value)
+}
+
 func (a jsonAPI) Unmarshal(_ string, data []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -91,6 +96,7 @@ func NewAPI(mux humago.Mux) huma.API {
 	config.DocsPath = ""
 	config.SchemasPath = ""
 	config.CreateHooks = nil
+	config.OpenAPI.Servers = []*huma.Server{{URL: "http://localhost:18080", Description: "本地 API 服务"}}
 	config.OpenAPI.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
 		bearerScheme: {Type: "http", Scheme: "bearer"},
 	}

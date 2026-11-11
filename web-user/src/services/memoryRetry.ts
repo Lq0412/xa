@@ -1,10 +1,5 @@
 /** 统计接口返回的失败任务。只保留重试所需的字段。 */
-export type DeadJob = {
-  id: string;
-  kind: string;
-  last_error_summary: string;
-  updated_at: string;
-};
+export type DeadJob = API.DeadJob;
 
 export type RetryFeedback = {
   requeued: string[];
@@ -290,27 +285,14 @@ export async function runDeadRetry<
   return finishDeadRetry(nextIDs, input);
 }
 
+/** 手动新增时由服务端按内容生成 subject_key。 */
+export type MemoryCreate = Omit<API.AddMemoryRequest, 'subject_key'>;
+
 /**
  * 手动新增的请求体。不生成、不附带 subject_key，连续两次不同事实各自只带内容。
  */
-export function manualMemoryBody(input: {
-  content: string;
-  namespace: string;
-  importance: number;
-  kind?: string;
-  pinned?: boolean;
-  scope?: 'user' | 'agent';
-  agent_id?: string;
-}) {
-  const body: {
-    content: string;
-    namespace: string;
-    importance: number;
-    kind?: string;
-    pinned?: boolean;
-    scope?: 'user' | 'agent';
-    agent_id?: string;
-  } = {
+export function manualMemoryBody(input: MemoryCreate) {
+  const body: MemoryCreate = {
     content: input.content,
     namespace: input.namespace,
     importance: input.importance,

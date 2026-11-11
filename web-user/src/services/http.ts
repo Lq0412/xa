@@ -15,6 +15,7 @@ export class ApiError extends Error {
 }
 
 function streamApiRoot(path: string, method: string) {
+  if (path.startsWith('/health/')) return '';
   const base = String(process.env.XA_API_STREAM_BASE || '').replace(/\/$/, '');
   if (!base) return '/api/v1';
   const stream =

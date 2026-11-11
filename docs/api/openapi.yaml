@@ -1,5 +1,98 @@
 components:
   schemas:
+    ActiveRun:
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        last_event_seq:
+          format: int64
+          type: integer
+        pending_approvals:
+          items:
+            $ref: "#/components/schemas/Approval"
+          type:
+            - array
+            - "null"
+        status:
+          type: string
+      required:
+        - id
+        - status
+        - last_event_seq
+      type: object
+    ActivityItem:
+      additionalProperties: false
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        result:
+          type: string
+        title:
+          type: string
+      required:
+        - title
+        - result
+        - created_at
+        - id
+      type: object
+    ActivityPage:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/ActivityItem"
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
+    AddMemoryRequest:
+      additionalProperties: false
+      properties:
+        agent_id:
+          description: Agent 范围对应的 ID
+          type: string
+        content:
+          description: 记忆内容
+          type: string
+        importance:
+          description: 重要性，取值 1 至 10
+          format: int64
+          type: integer
+        kind:
+          description: 记忆类型，默认 fact
+          enum:
+            - fact
+            - preference
+            - episode
+            - procedure
+          type: string
+        namespace:
+          description: 命名空间
+          type: string
+        pinned:
+          description: 是否置顶
+          type: boolean
+        scope:
+          description: 记忆范围，默认 user
+          enum:
+            - user
+            - agent
+          type: string
+        subject_key:
+          description: 主题键，省略时自动生成
+          type: string
+      required:
+        - content
+        - namespace
+        - importance
+      type: object
     AgentConfigResponse:
       additionalProperties: false
       properties:
@@ -217,6 +310,69 @@ components:
         - version_number
         - config_checksum
       type: object
+    AgentToolEntry:
+      additionalProperties: false
+      properties:
+        approval:
+          enum:
+            - never
+            - always
+          type: string
+        approval_overridable:
+          type: boolean
+        available:
+          type: boolean
+        configuration:
+          description: 工具特定的生效配置
+        enabled:
+          type: boolean
+        max_calls:
+          format: int64
+          type: integer
+        name:
+          type: string
+        reason:
+          type: string
+        timeout_ms:
+          format: int64
+          type: integer
+        title:
+          type: string
+      required:
+        - name
+        - title
+        - enabled
+        - approval
+        - timeout_ms
+        - max_calls
+        - configuration
+        - available
+        - reason
+        - approval_overridable
+      type: object
+    AgentToolsResponse:
+      additionalProperties: false
+      properties:
+        current_version_id:
+          type: string
+        runtime_limits:
+          $ref: "#/components/schemas/RuntimeLimits"
+        tools:
+          items:
+            $ref: "#/components/schemas/AgentToolEntry"
+          type: array
+        toolset_hash:
+          type: string
+        version_number:
+          description: 更新后返回的新版本序号
+          format: int64
+          type: integer
+      required:
+        - current_version_id
+        - tools
+        - runtime_limits
+        - toolset_hash
+      type: object
     ApiError:
       additionalProperties: false
       properties:
@@ -233,6 +389,119 @@ components:
         - code
         - message
         - request_id
+      type: object
+    Approval:
+      additionalProperties: false
+      properties:
+        approval_id:
+          type: string
+        args_preview:
+          type: string
+        call_id:
+          type: string
+        can_remember_agent:
+          type: boolean
+        expires_at:
+          format: date-time
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/DisplayItem"
+          type:
+            - array
+            - "null"
+        name:
+          type: string
+        reason:
+          type: string
+        remember:
+          type: string
+        run_id:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        title:
+          type: string
+      required:
+        - approval_id
+        - run_id
+        - call_id
+        - name
+        - title
+        - summary
+        - status
+        - can_remember_agent
+        - expires_at
+      type: object
+    ApprovalRecord:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        agent_id:
+          type: string
+        conversation_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        decider:
+          type: string
+        id:
+          type: string
+        remember:
+          type: string
+        run_id:
+          type: string
+        status:
+          type: string
+        summary: {}
+        title: {}
+        tool_name:
+          type: string
+        user:
+          type: string
+        wait_ms:
+          format: int64
+          type: integer
+      required:
+        - id
+        - created_at
+        - user
+        - conversation_id
+        - agent_id
+        - agent
+        - tool_name
+        - title
+        - summary
+        - status
+        - wait_ms
+        - decider
+        - remember
+        - run_id
+      type: object
+    ApprovalRecordsPage:
+      additionalProperties: false
+      properties:
+        approvals:
+          items:
+            $ref: "#/components/schemas/ApprovalRecord"
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - approvals
+        - next_cursor
+      type: object
+    CancelResult:
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+      required:
+        - status
       type: object
     Configuration:
       additionalProperties: false
@@ -285,6 +554,44 @@ components:
         - memory_policy
         - runtime_limits
       type: object
+    Conversation:
+      additionalProperties: false
+      properties:
+        agent_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        title:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+        workspace_id:
+          type: string
+      required:
+        - id
+        - workspace_id
+        - user_id
+        - agent_id
+        - title
+        - created_at
+        - updated_at
+      type: object
+    ConversationList:
+      additionalProperties: false
+      properties:
+        conversations:
+          items:
+            $ref: "#/components/schemas/Conversation"
+          type: array
+      required:
+        - conversations
+      type: object
     CredentialsRequest:
       additionalProperties: false
       properties:
@@ -301,6 +608,92 @@ components:
         - email
         - password
       type: object
+    DeadJob:
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        last_error_summary:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - kind
+        - last_error_summary
+        - updated_at
+      type: object
+    DecisionBody:
+      additionalProperties: false
+      properties:
+        decision:
+          enum:
+            - approve
+            - reject
+          type: string
+        reason:
+          maxLength: 200
+          type: string
+        remember:
+          enum:
+            - once
+            - conversation
+            - agent
+          type: string
+      required:
+        - decision
+      type: object
+    DecisionResult:
+      additionalProperties: false
+      properties:
+        approval_id:
+          type: string
+        run_id:
+          type: string
+        run_status:
+          type: string
+        status:
+          type: string
+        warning:
+          type: string
+      required:
+        - approval_id
+        - status
+        - run_id
+        - run_status
+      type: object
+    DisplayItem:
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+        value:
+          type: string
+      required:
+        - label
+        - value
+      type: object
+    EditInput:
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+        importance:
+          format: int64
+          type: integer
+        namespace:
+          type: string
+        pinned:
+          type: boolean
+      required:
+        - content
+        - namespace
+        - importance
+        - pinned
+      type: object
     EvaluationBinding:
       additionalProperties: false
       properties:
@@ -311,6 +704,164 @@ components:
       required:
         - rubric_id
         - enabled
+      type: object
+    Event:
+      additionalProperties: false
+      properties:
+        actor_id:
+          type: string
+        actor_type:
+          type: string
+        after: {}
+        before: {}
+        created_at:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        memory_id:
+          type:
+            - string
+            - "null"
+        op:
+          type: string
+        reason:
+          type: string
+        source_ref:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - memory_id
+        - source_ref
+        - op
+        - actor_type
+        - actor_id
+        - before
+        - after
+        - reason
+        - created_at
+      type: object
+    HealthLive:
+      additionalProperties: false
+      properties:
+        status:
+          description: 进程状态
+          enum:
+            - ok
+          type: string
+      required:
+        - status
+      type: object
+    HealthReady:
+      additionalProperties: false
+      properties:
+        dependencies:
+          additionalProperties:
+            type: string
+          description: 各依赖的状态
+          type: object
+        status:
+          description: 依赖就绪状态
+          enum:
+            - ok
+            - unavailable
+          type: string
+      required:
+        - status
+        - dependencies
+      type: object
+    Item:
+      additionalProperties: false
+      properties:
+        agent_id:
+          type:
+            - string
+            - "null"
+        content:
+          type: string
+        conversation_id:
+          type:
+            - string
+            - "null"
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        importance:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        last_used_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        namespace:
+          type: string
+        owner_user_id:
+          type: string
+        pinned:
+          type: boolean
+        retention:
+          format: double
+          type: number
+        scope:
+          type: string
+        sensitive:
+          type: boolean
+        source:
+          type: string
+        source_ref:
+          type:
+            - string
+            - "null"
+        source_type:
+          type: string
+        status:
+          type: string
+        strength_days:
+          format: double
+          type: number
+        subject_key:
+          type: string
+        supersedes_id:
+          type:
+            - string
+            - "null"
+        updated_at:
+          format: date-time
+          type: string
+        workspace_id:
+          type: string
+      required:
+        - id
+        - workspace_id
+        - owner_user_id
+        - scope
+        - agent_id
+        - conversation_id
+        - namespace
+        - subject_key
+        - content
+        - kind
+        - importance
+        - pinned
+        - status
+        - source
+        - source_type
+        - source_ref
+        - supersedes_id
+        - created_at
+        - updated_at
+        - last_used_at
+        - retention
+        - strength_days
+        - sensitive
       type: object
     KnowledgeBinding:
       additionalProperties: false
@@ -327,6 +878,17 @@ components:
         - enabled
         - filter
       type: object
+    LibraryListResponse:
+      additionalProperties: false
+      properties:
+        agents:
+          description: 当前用户库中可对话的 Agent
+          items:
+            $ref: "#/components/schemas/AgentDefinition"
+          type: array
+      required:
+        - agents
+      type: object
     LoginResponse:
       additionalProperties: false
       properties:
@@ -339,6 +901,177 @@ components:
       required:
         - token
         - user
+      type: object
+    MemoryEventsResponse:
+      additionalProperties: false
+      properties:
+        events:
+          description: 记忆取代链上的审计事件
+          items:
+            $ref: "#/components/schemas/Event"
+          type:
+            - array
+            - "null"
+      required:
+        - events
+      type: object
+    MemoryPolicy:
+      additionalProperties: false
+      properties:
+        core_budget_tokens:
+          format: int64
+          type: integer
+        decay_enabled:
+          type: boolean
+        enabled:
+          type: boolean
+        history_budget_tokens:
+          format: int64
+          type: integer
+        min_relevance:
+          format: double
+          type: number
+        recall_top_k:
+          format: int64
+          type: integer
+        summary_budget_tokens:
+          format: int64
+          type: integer
+        summary_trigger_tokens:
+          format: int64
+          type: integer
+      required:
+        - enabled
+        - core_budget_tokens
+        - recall_top_k
+        - min_relevance
+        - history_budget_tokens
+        - summary_trigger_tokens
+        - summary_budget_tokens
+        - decay_enabled
+      type: object
+    MemoryPolicyRequest:
+      additionalProperties: false
+      properties:
+        core_budget_tokens:
+          format: int64
+          type: integer
+        decay_enabled:
+          type: boolean
+        enabled:
+          description: 是否启用记忆
+          type: boolean
+        expected_version_id:
+          description: 当前 Agent 配置版本 ID
+          type: string
+        history_budget_tokens:
+          format: int64
+          type: integer
+        min_relevance:
+          format: double
+          type: number
+        recall_top_k:
+          format: int64
+          type: integer
+        summary_budget_tokens:
+          format: int64
+          type: integer
+        summary_trigger_tokens:
+          format: int64
+          type: integer
+      required:
+        - expected_version_id
+        - enabled
+      type: object
+    MemoryPolicyResponse:
+      additionalProperties: false
+      properties:
+        current_version_id:
+          type: string
+        memory_policy:
+          $ref: "#/components/schemas/MemoryPolicy"
+        version_number:
+          format: int64
+          type: integer
+      required:
+        - current_version_id
+        - version_number
+        - memory_policy
+      type: object
+    Message:
+      additionalProperties: false
+      properties:
+        completion_tokens:
+          format: int64
+          type: integer
+        content:
+          type: string
+        conversation_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        error:
+          type: string
+        id:
+          type: string
+        latency_ms:
+          format: int64
+          type: integer
+        model:
+          type: string
+        parts:
+          items:
+            additionalProperties: {}
+            type: object
+          type:
+            - array
+            - "null"
+        prompt_tokens:
+          format: int64
+          type: integer
+        role:
+          enum:
+            - system
+            - user
+            - assistant
+          type: string
+        run_id:
+          type: string
+        status:
+          enum:
+            - pending
+            - completed
+            - failed
+          type: string
+      required:
+        - id
+        - conversation_id
+        - role
+        - content
+        - model
+        - prompt_tokens
+        - completion_tokens
+        - latency_ms
+        - status
+        - created_at
+      type: object
+    MessagePage:
+      additionalProperties: false
+      properties:
+        active_run:
+          $ref: "#/components/schemas/ActiveRun"
+        before:
+          type: string
+        has_more:
+          type: boolean
+        messages:
+          items:
+            $ref: "#/components/schemas/Message"
+          type: array
+      required:
+        - messages
+        - has_more
       type: object
     ModelBinding:
       additionalProperties: false
@@ -353,6 +1086,280 @@ components:
         - capability
         - model_profile_id
         - revision
+      type: object
+    Page:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/Item"
+          type:
+            - array
+            - "null"
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
+    RunDetail:
+      additionalProperties: false
+      properties:
+        active_ms:
+          format: int64
+          type: integer
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+        agent_version_id:
+          type: string
+        cached_tokens:
+          format: int64
+          type: integer
+        cancel_reason:
+          type: string
+        completion_tokens:
+          format: int64
+          type: integer
+        conversation_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        ended_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        error:
+          type: string
+        error_code:
+          type: string
+        final_message_id:
+          type: string
+        id:
+          type: string
+        latency_ms:
+          format: int64
+          type: integer
+        limits: {}
+        model:
+          type: string
+        owner_user_id:
+          type: string
+        prompt_tokens:
+          format: int64
+          type: integer
+        provider:
+          type: string
+        started_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+        steps:
+          format: int64
+          type: integer
+        stream_protocol:
+          format: int64
+          type: integer
+        tool_calls:
+          format: int64
+          type: integer
+        toolset:
+          items:
+            type:
+              - string
+              - "null"
+          type: array
+        toolset_hash:
+          type: string
+        ttft_ms:
+          format: int64
+          type:
+            - integer
+            - "null"
+        user_email:
+          type: string
+        user_message_id:
+          type: string
+        workspace_id:
+          type: string
+      required:
+        - workspace_id
+        - owner_user_id
+        - agent_version_id
+        - user_message_id
+        - final_message_id
+        - provider
+        - stream_protocol
+        - limits
+        - toolset_hash
+        - toolset
+        - error
+        - cancel_reason
+        - id
+        - conversation_id
+        - agent_id
+        - agent_name
+        - status
+        - model
+        - steps
+        - tool_calls
+        - prompt_tokens
+        - completion_tokens
+        - cached_tokens
+        - ttft_ms
+        - latency_ms
+        - active_ms
+        - error_code
+        - created_at
+        - started_at
+        - ended_at
+      type: object
+    RunList:
+      additionalProperties: false
+      properties:
+        next_cursor:
+          type: string
+        runs:
+          items:
+            $ref: "#/components/schemas/RunSummary"
+          type: array
+      required:
+        - runs
+        - next_cursor
+      type: object
+    RunSummary:
+      additionalProperties: false
+      properties:
+        active_ms:
+          format: int64
+          type: integer
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+        cached_tokens:
+          format: int64
+          type: integer
+        completion_tokens:
+          format: int64
+          type: integer
+        conversation_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        ended_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        error_code:
+          type: string
+        id:
+          type: string
+        latency_ms:
+          format: int64
+          type: integer
+        model:
+          type: string
+        prompt_tokens:
+          format: int64
+          type: integer
+        started_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+        steps:
+          format: int64
+          type: integer
+        tool_calls:
+          format: int64
+          type: integer
+        ttft_ms:
+          format: int64
+          type:
+            - integer
+            - "null"
+        user_email:
+          type: string
+      required:
+        - id
+        - conversation_id
+        - agent_id
+        - agent_name
+        - status
+        - model
+        - steps
+        - tool_calls
+        - prompt_tokens
+        - completion_tokens
+        - cached_tokens
+        - ttft_ms
+        - latency_ms
+        - active_ms
+        - error_code
+        - created_at
+        - started_at
+        - ended_at
+      type: object
+    RuntimeLimits:
+      additionalProperties: false
+      properties:
+        history_tool_runs:
+          format: int64
+          type: integer
+        max_calls_per_step:
+          format: int64
+          type: integer
+        max_model_turns:
+          format: int64
+          type: integer
+        max_output_tokens:
+          format: int64
+          type: integer
+        max_parallel_tools:
+          format: int64
+          type: integer
+        max_tool_calls:
+          format: int64
+          type: integer
+        max_total_tokens:
+          format: int64
+          type: integer
+        max_wall_time_ms:
+          format: int64
+          type: integer
+        tool_result_max_tokens:
+          format: int64
+          type: integer
+      required:
+        - max_model_turns
+        - max_tool_calls
+        - max_parallel_tools
+        - max_calls_per_step
+        - max_wall_time_ms
+        - max_total_tokens
+        - max_output_tokens
+        - tool_result_max_tokens
+        - history_tool_runs
+      type: object
+    SendMessageBody:
+      additionalProperties: false
+      properties:
+        content:
+          description: 用户消息正文
+          type: string
+      required:
+        - content
       type: object
     Slot:
       additionalProperties: false
@@ -382,6 +1389,209 @@ components:
         - variables
         - scope
       type: object
+    SpanNode:
+      additionalProperties: false
+      properties:
+        attributes:
+          additionalProperties: {}
+          type: object
+        cached_tokens:
+          format: int64
+          type:
+            - integer
+            - "null"
+        call_id:
+          type: string
+        children:
+          items:
+            $ref: "#/components/schemas/SpanNode"
+          type: array
+        completion_tokens:
+          format: int64
+          type:
+            - integer
+            - "null"
+        duration_ms:
+          format: int64
+          type:
+            - integer
+            - "null"
+        ended_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        error_code:
+          type: string
+        estimated_tokens:
+          format: int64
+          type:
+            - integer
+            - "null"
+        id:
+          type: string
+        input_preview:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        output_preview:
+          type: string
+        parent_span_id:
+          type: string
+        prompt_tokens:
+          format: int64
+          type:
+            - integer
+            - "null"
+        run_id:
+          type: string
+        started_at:
+          format: date-time
+          type: string
+        status:
+          type: string
+        step:
+          format: int64
+          type:
+            - integer
+            - "null"
+      required:
+        - step
+        - call_id
+        - children
+        - id
+        - run_id
+        - kind
+        - name
+        - status
+        - error_code
+        - attributes
+        - input_preview
+        - output_preview
+        - prompt_tokens
+        - completion_tokens
+        - cached_tokens
+        - estimated_tokens
+        - started_at
+        - ended_at
+        - duration_ms
+      type: object
+    Stats:
+      additionalProperties: false
+      properties:
+        dead:
+          format: int64
+          type: integer
+        dead_jobs:
+          items:
+            $ref: "#/components/schemas/DeadJob"
+          type:
+            - array
+            - "null"
+        failed:
+          format: int64
+          type: integer
+        latest_maintain_at:
+          format: date-time
+          type: string
+        latest_summary_at:
+          format: date-time
+          type: string
+        namespace:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        pending:
+          format: int64
+          type: integer
+        status:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+      required:
+        - status
+        - namespace
+        - pending
+        - failed
+        - dead
+        - dead_jobs
+      type: object
+    StreamDelta:
+      additionalProperties: false
+      properties:
+        delta:
+          type: string
+      required:
+        - delta
+      type: object
+    StreamDone:
+      additionalProperties: false
+      properties:
+        completion_tokens:
+          format: int64
+          type: integer
+        message_id:
+          type: string
+        prompt_tokens:
+          format: int64
+          type: integer
+      required:
+        - completion_tokens
+        - message_id
+        - prompt_tokens
+      type: object
+    StreamError:
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+      required:
+        - message
+      type: object
+    Summary:
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+        conversation_id:
+          type: string
+        covers_from_message_id:
+          type:
+            - string
+            - "null"
+        covers_until_message_id:
+          type:
+            - string
+            - "null"
+        created_at:
+          format: date-time
+          type: string
+        estimated_tokens:
+          format: int64
+          type: integer
+        id:
+          type: string
+        message_count:
+          format: int64
+          type: integer
+        version:
+          format: int64
+          type: integer
+      required:
+        - id
+        - conversation_id
+        - content
+        - covers_from_message_id
+        - covers_until_message_id
+        - message_count
+        - estimated_tokens
+        - version
+        - created_at
+      type: object
     ToolBinding:
       additionalProperties: false
       properties:
@@ -410,6 +1620,209 @@ components:
         - name
         - enabled
       type: object
+    ToolCatalogApproval:
+      additionalProperties: false
+      properties:
+        default:
+          enum:
+            - never
+            - always
+          type: string
+        overridable:
+          type: boolean
+      required:
+        - default
+        - overridable
+      type: object
+    ToolCatalogItem:
+      additionalProperties: false
+      properties:
+        approval:
+          $ref: "#/components/schemas/ToolCatalogApproval"
+        available:
+          type: boolean
+        config_schema:
+          description: 工具特定的配置 JSON Schema
+        default_enabled:
+          type: boolean
+        description:
+          type: string
+        effect:
+          enum:
+            - read
+            - write
+            - destructive
+          type: string
+        input_schema:
+          description: 工具特定的输入 JSON Schema
+        name:
+          type: string
+        title:
+          type: string
+      required:
+        - name
+        - title
+        - description
+        - effect
+        - default_enabled
+        - approval
+        - available
+        - config_schema
+        - input_schema
+      type: object
+    ToolCatalogResponse:
+      additionalProperties: false
+      properties:
+        tools:
+          items:
+            $ref: "#/components/schemas/ToolCatalogItem"
+          type: array
+      required:
+        - tools
+      type: object
+    ToolResultDetail:
+      additionalProperties: false
+      properties:
+        arguments: {}
+        call_id:
+          type: string
+        data: {}
+        display: {}
+        model_content:
+          type: string
+        run_id:
+          type: string
+        status:
+          type: string
+        tool_name:
+          type: string
+      required:
+        - run_id
+        - call_id
+        - tool_name
+        - status
+        - arguments
+        - display
+        - model_content
+        - data
+      type: object
+    UpdateAgentToolsRequest:
+      additionalProperties: false
+      properties:
+        expected_version_id:
+          description: 当前 Agent 配置版本 ID
+          type: string
+        runtime_limits:
+          additionalProperties: true
+          description: 运行预算，省略时保留当前预算
+          properties:
+            history_tool_runs:
+              format: int64
+              type: integer
+            max_calls_per_step:
+              format: int64
+              type: integer
+            max_model_turns:
+              format: int64
+              type: integer
+            max_output_tokens:
+              format: int64
+              type: integer
+            max_parallel_tools:
+              format: int64
+              type: integer
+            max_tool_calls:
+              format: int64
+              type: integer
+            max_total_tokens:
+              format: int64
+              type: integer
+            max_wall_time_ms:
+              format: int64
+              type: integer
+            tool_result_max_tokens:
+              format: int64
+              type: integer
+          type:
+            - object
+            - "null"
+        tools:
+          description: Agent 的工具绑定
+          items:
+            $ref: "#/components/schemas/ToolBinding"
+          type:
+            - array
+            - "null"
+      required:
+        - expected_version_id
+        - tools
+      type: object
+    UserApproval:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        agent_id:
+          type: string
+        conversation_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        decided_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        id:
+          type: string
+        remember:
+          type: string
+        run_id:
+          type: string
+        status:
+          type: string
+        summary:
+          type:
+            - string
+            - "null"
+        title:
+          type:
+            - string
+            - "null"
+        tool_name:
+          type: string
+        wait_ms:
+          format: int64
+          type: integer
+      required:
+        - id
+        - created_at
+        - decided_at
+        - conversation_id
+        - agent_id
+        - agent
+        - run_id
+        - tool_name
+        - title
+        - summary
+        - status
+        - remember
+        - wait_ms
+      type: object
+    UserApprovalPage:
+      additionalProperties: false
+      properties:
+        approvals:
+          items:
+            $ref: "#/components/schemas/UserApproval"
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - approvals
+        - next_cursor
+      type: object
     UserResponse:
       additionalProperties: false
       properties:
@@ -435,6 +1848,41 @@ components:
         - role
         - workspace_id
       type: object
+    View:
+      additionalProperties: false
+      properties:
+        estimated_tokens:
+          format: int64
+          type: integer
+        item_ids:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        markdown:
+          type: string
+      required:
+        - markdown
+        - estimated_tokens
+        - item_ids
+      type: object
+    WaitingApprovalResponse:
+      additionalProperties: false
+      properties:
+        code:
+          enum:
+            - run_waiting_approval
+          type: string
+        message:
+          type: string
+        run_id:
+          type: string
+      required:
+        - code
+        - message
+        - run_id
+      type: object
   securitySchemes:
     bearerAuth:
       scheme: bearer
@@ -444,6 +1892,364 @@ info:
   version: 1.0.0
 openapi: 3.1.0
 paths:
+  /api/v1/admin/approvals:
+    get:
+      operationId: listAdminApprovals
+      parameters:
+        - description: 按审批状态筛选
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: 按审批状态筛选
+            enum:
+              - pending
+              - approved
+              - rejected
+              - expired
+              - cancelled
+            type: string
+        - description: 按工具名称筛选
+          explode: false
+          in: query
+          name: tool_name
+          schema:
+            description: 按工具名称筛选
+            type: string
+        - description: 上一页返回的 next_cursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: 上一页返回的 next_cursor
+            type: string
+        - description: 每页条数，范围 1 至 100，默认 50
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: 每页条数，范围 1 至 100，默认 50
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalRecordsPage"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 筛选或分页参数无效（invalid_status、invalid_limit）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 仅管理员可查看（forbidden）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 审批记录不可用（approvals_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 列出工作空间审批记录
+      tags:
+        - 审批
+  /api/v1/admin/runs:
+    get:
+      operationId: listAdminRuns
+      parameters:
+        - description: 按会话 ID 筛选
+          explode: false
+          in: query
+          name: conversation_id
+          schema:
+            description: 按会话 ID 筛选
+            type: string
+        - description: 按 Agent ID 筛选
+          explode: false
+          in: query
+          name: agent_id
+          schema:
+            description: 按 Agent ID 筛选
+            type: string
+        - description: 按运行状态筛选
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: 按运行状态筛选
+            enum:
+              - queued
+              - running
+              - waiting_approval
+              - completed
+              - failed
+              - cancelled
+              - budget_exhausted
+              - interrupted
+            type: string
+        - description: 按用户 ID 筛选，仅管理员可用
+          explode: false
+          in: query
+          name: user_id
+          schema:
+            description: 按用户 ID 筛选，仅管理员可用
+            type: string
+        - description: 上一页返回的 next_cursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: 上一页返回的 next_cursor
+            type: string
+        - description: 每页条数，范围 1 至 100，默认 20
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: 每页条数，范围 1 至 100，默认 20
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunList"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 筛选或分页参数无效（invalid_request、invalid_limit）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 仅管理员可查看（forbidden）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行查询不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 列出工作空间运行
+      tags:
+        - 运行
+  /api/v1/admin/runs/{run_id}:
+    get:
+      operationId: getAdminRun
+      parameters:
+        - description: 运行 ID
+          in: path
+          name: run_id
+          required: true
+          schema:
+            description: 运行 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 仅管理员可查看（forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行查询不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 获取运行详情
+      tags:
+        - 运行
+  /api/v1/admin/runs/{run_id}/spans:
+    get:
+      operationId: getAdminRunSpans
+      parameters:
+        - description: 运行 ID
+          in: path
+          name: run_id
+          required: true
+          schema:
+            description: 运行 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: false
+                properties:
+                  run_id:
+                    type: string
+                  span:
+                    oneOf:
+                      - $ref: "#/components/schemas/SpanNode"
+                      - type: "null"
+                required:
+                  - run_id
+                  - span
+                type: object
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 仅管理员可查看（forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 执行树查询不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 获取运行执行树
+      tags:
+        - 运行
+  /api/v1/agent-library:
+    get:
+      operationId: listAgentLibrary
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryListResponse"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或 Agent 服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 获取用户 Agent 库
+      tags:
+        - Agent 库
+  /api/v1/agent-library/{agent_id}:
+    put:
+      operationId: addAgentToLibrary
+      parameters:
+        - description: Agent ID
+          in: path
+          name: agent_id
+          required: true
+          schema:
+            description: Agent ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或 Agent 服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 添加公开 Agent 到用户库
+      tags:
+        - Agent 库
   /api/v1/agents:
     get:
       operationId: listAgents
@@ -616,6 +2422,73 @@ paths:
       summary: 获取 Agent
       tags:
         - Agent 管理
+  /api/v1/agents/{agent_id}/activity:
+    get:
+      operationId: getAgentActivity
+      parameters:
+        - description: 每页条数，范围 1 至 100，默认 20
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: 每页条数，范围 1 至 100，默认 20
+            type: string
+        - description: 上一页返回的 next_cursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: 上一页返回的 next_cursor
+            type: string
+        - description: Agent ID
+          in: path
+          name: agent_id
+          required: true
+          schema:
+            description: Agent ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityPage"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 分页参数无效（invalid_limit、invalid_cursor）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: Agent 不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 活动记录不可用（activity_unavailable、internal_error）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 列出 Agent 活动
+      tags:
+        - 运行
   /api/v1/agents/{agent_id}/config:
     get:
       operationId: getAgentConfig
@@ -776,6 +2649,130 @@ paths:
       summary: 启用 Agent
       tags:
         - Agent 管理
+  /api/v1/agents/{agent_id}/memory:
+    get:
+      operationId: getAgentMemory
+      parameters:
+        - description: Agent ID
+          in: path
+          name: agent_id
+          required: true
+          schema:
+            description: Agent ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/View"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 没有资源操作权限（agent_forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 获取 Agent 的核心记忆
+      tags:
+        - 记忆
+  /api/v1/agents/{agent_id}/memory-policy:
+    put:
+      operationId: updateMemoryPolicy
+      parameters:
+        - description: Agent ID
+          in: path
+          name: agent_id
+          required: true
+          schema:
+            description: Agent ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryPolicyRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryPolicyResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求 JSON 无效（invalid_json）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 没有资源操作权限（agent_forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 版本冲突（agent_conflict）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 更新 Agent 记忆策略
+      tags:
+        - 记忆
   /api/v1/agents/{agent_id}/offline:
     post:
       operationId: offlineAgent
@@ -819,6 +2816,255 @@ paths:
       summary: 下线 Agent
       tags:
         - Agent 管理
+  /api/v1/agents/{agent_id}/tools:
+    get:
+      operationId: getAgentTools
+      parameters:
+        - description: Agent ID
+          in: path
+          name: agent_id
+          required: true
+          schema:
+            description: Agent ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentToolsResponse"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 没有资源操作权限（agent_forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或 Agent 服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 获取 Agent 当前工具配置
+      tags:
+        - 工具
+    put:
+      operationId: updateAgentTools
+      parameters:
+        - description: Agent ID
+          in: path
+          name: agent_id
+          required: true
+          schema:
+            description: Agent ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAgentToolsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentToolsResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求 JSON 无效（invalid_json）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 没有资源操作权限（agent_forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 版本冲突（agent_conflict）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或 Agent 服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 更新 Agent 工具配置
+      tags:
+        - 工具
+  /api/v1/approvals:
+    get:
+      operationId: listUserApprovals
+      parameters:
+        - description: 每页条数，范围 1 至 100，默认 20
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: 每页条数，范围 1 至 100，默认 20
+            type: string
+        - description: 上一页返回的 next_cursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: 上一页返回的 next_cursor
+            type: string
+        - description: 按 Agent ID 筛选
+          explode: false
+          in: query
+          name: agent_id
+          schema:
+            description: 按 Agent ID 筛选
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserApprovalPage"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 分页参数无效（invalid_limit、invalid_cursor）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 审批记录不可用（approvals_unavailable、internal_error）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 列出我的审批
+      tags:
+        - 审批
+  /api/v1/approvals/{approval_id}/decision:
+    post:
+      operationId: decideApproval
+      parameters:
+        - description: 审批 ID
+          in: path
+          name: approval_id
+          required: true
+          schema:
+            description: 审批 ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecisionBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionResult"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求 JSON 或审批决定无效（invalid_json、invalid_decision）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 审批不存在（not_found）
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 审批状态冲突（approval_conflict、run_not_waiting、conflict）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 审批服务不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 允许或拒绝工具执行
+      tags:
+        - 审批
   /api/v1/auth/login:
     post:
       operationId: login
@@ -983,3 +3229,1216 @@ paths:
       summary: 获取公开可用 Agent
       tags:
         - Agent 管理
+  /api/v1/conversations:
+    get:
+      operationId: listConversations
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationList"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话服务不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 列出我的会话
+      tags:
+        - 会话
+    post:
+      operationId: createConversation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              properties:
+                agent_id:
+                  description: Agent ID
+                  type: string
+              required:
+                - agent_id
+              type: object
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求 JSON 无效（invalid_json）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 没有 Agent 访问权限（forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: Agent 不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话服务不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 创建或获取会话
+      tags:
+        - 会话
+  /api/v1/conversations/{conversation_id}/messages:
+    get:
+      operationId: listConversationMessages
+      parameters:
+        - description: 会话 ID
+          in: path
+          name: conversation_id
+          required: true
+          schema:
+            description: 会话 ID
+            type: string
+        - description: 从此消息之前开始读取
+          explode: false
+          in: query
+          name: before
+          schema:
+            description: 从此消息之前开始读取
+            type: string
+        - description: 每页条数，范围 1 至 100，默认 50
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: 每页条数，范围 1 至 100，默认 50
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePage"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 分页条数无效（invalid_limit）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话不存在（not_found）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 消息游标无效（invalid_request）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话服务不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 列出会话消息
+      tags:
+        - 会话
+    post:
+      description: 默认使用 v1 的 delta、done 和 error 事件。通过 X-XA-Stream 或 stream 选择 v2 后，事件使用运行信封，可用 Last-Event-ID 从指定序号之后继续读取。
+      operationId: sendConversationMessage
+      parameters:
+        - description: 会话 ID
+          in: path
+          name: conversation_id
+          required: true
+          schema:
+            type: string
+        - description: 传 2 选择 v2 事件协议
+          in: query
+          name: stream
+          schema:
+            type: string
+        - description: 传 2 选择 v2 事件协议
+          in: header
+          name: X-XA-Stream
+          schema:
+            type: string
+        - description: v2 发送请求的幂等键
+          in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+        - description: v2 已收到的最后事件序号
+          in: header
+          name: Last-Event-ID
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageBody"
+        required: true
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StreamDelta"
+                  - $ref: "#/components/schemas/StreamDone"
+                  - $ref: "#/components/schemas/StreamError"
+                  - additionalProperties: true
+                    properties:
+                      run_id:
+                        type: string
+                      seq:
+                        format: int64
+                        type: integer
+                      step:
+                        format: int64
+                        type: integer
+                      ts:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                      - seq
+                      - run_id
+                      - type
+                      - ts
+                    type: object
+          description: SSE 事件流，Schema 描述每条事件的 data 字段
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求 JSON 无效（invalid_json）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话不存在（not_found）
+        "409":
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiError"
+                  - $ref: "#/components/schemas/WaitingApprovalResponse"
+          description: 会话已有运行或正在等待审批（conflict、run_waiting_approval）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 消息过长或幂等键无效（message_too_long、invalid_request、idempotency_key_reused）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话服务或流式响应不可用（conversation_unavailable、stream_unsupported）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 发送消息并订阅回复
+      tags:
+        - 会话
+  /api/v1/conversations/{conversation_id}/summary:
+    get:
+      operationId: getConversationSummary
+      parameters:
+        - description: 会话 ID
+          in: path
+          name: conversation_id
+          required: true
+          schema:
+            description: 会话 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Summary"
+                  - additionalProperties: false
+                    properties:
+                      summary:
+                        type: "null"
+                    required:
+                      - summary
+                    type: object
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话服务不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 获取会话摘要
+      tags:
+        - 会话
+  /api/v1/memories:
+    get:
+      operationId: listMemories
+      parameters:
+        - description: 记忆范围
+          explode: false
+          in: query
+          name: scope
+          schema:
+            description: 记忆范围
+            enum:
+              - user
+              - agent
+              - session
+              - all_visible
+            type: string
+        - description: 筛选指定 Agent
+          explode: false
+          in: query
+          name: agent_id
+          schema:
+            description: 筛选指定 Agent
+            type: string
+        - description: 筛选命名空间
+          explode: false
+          in: query
+          name: namespace
+          schema:
+            description: 筛选命名空间
+            type: string
+        - description: 记忆状态，默认 active
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: 记忆状态，默认 active
+            enum:
+              - active
+              - deleted
+              - superseded
+              - archived
+            type: string
+        - description: 每页条数，默认 50，超过 200 按 200 处理
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: 每页条数，默认 50，超过 200 按 200 处理
+            type: integer
+        - description: 上页返回的游标
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: 上页返回的游标
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Page"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 没有资源操作权限（agent_forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 列出当前用户的记忆
+      tags:
+        - 记忆
+    post:
+      operationId: addMemory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddMemoryRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求 JSON 无效（invalid_json）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 没有资源操作权限（agent_forbidden）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 新增手动记忆
+      tags:
+        - 记忆
+  /api/v1/memories/{memory_id}:
+    delete:
+      operationId: deleteMemory
+      parameters:
+        - description: 记忆条目 ID
+          in: path
+          name: memory_id
+          required: true
+          schema:
+            description: 记忆条目 ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 删除记忆
+      tags:
+        - 记忆
+    put:
+      operationId: editMemory
+      parameters:
+        - description: 记忆条目 ID
+          in: path
+          name: memory_id
+          required: true
+          schema:
+            description: 记忆条目 ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditInput"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求 JSON 无效（invalid_json）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 版本冲突（agent_conflict）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 编辑记忆并保留原条目
+      tags:
+        - 记忆
+  /api/v1/memories/{memory_id}/events:
+    get:
+      operationId: listMemoryEvents
+      parameters:
+        - description: 记忆条目 ID
+          in: path
+          name: memory_id
+          required: true
+          schema:
+            description: 记忆条目 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryEventsResponse"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 获取记忆取代链审计
+      tags:
+        - 记忆
+  /api/v1/memories/{memory_id}/restore:
+    post:
+      operationId: restoreMemory
+      parameters:
+        - description: 记忆条目 ID
+          in: path
+          name: memory_id
+          required: true
+          schema:
+            description: 记忆条目 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 版本冲突（agent_conflict）
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 请求数据无效（invalid_agent）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 恢复记忆并保留原条目
+      tags:
+        - 记忆
+  /api/v1/memory/jobs/{job_id}/retry:
+    post:
+      operationId: retryMemoryJob
+      parameters:
+        - description: 记忆任务 ID
+          in: path
+          name: job_id
+          required: true
+          schema:
+            description: 记忆任务 ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 资源不存在（agent_not_found）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 重新入队已终止的记忆任务
+      tags:
+        - 记忆
+  /api/v1/memory/stats:
+    get:
+      operationId: getMemoryStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或记忆服务不可用（unauthenticated、agent_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 统计当前用户的记忆和任务
+      tags:
+        - 记忆
+  /api/v1/runs:
+    get:
+      operationId: listRuns
+      parameters:
+        - description: 按会话 ID 筛选
+          explode: false
+          in: query
+          name: conversation_id
+          schema:
+            description: 按会话 ID 筛选
+            type: string
+        - description: 按 Agent ID 筛选
+          explode: false
+          in: query
+          name: agent_id
+          schema:
+            description: 按 Agent ID 筛选
+            type: string
+        - description: 按运行状态筛选
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: 按运行状态筛选
+            enum:
+              - queued
+              - running
+              - waiting_approval
+              - completed
+              - failed
+              - cancelled
+              - budget_exhausted
+              - interrupted
+            type: string
+        - description: 按用户 ID 筛选，仅管理员可用
+          explode: false
+          in: query
+          name: user_id
+          schema:
+            description: 按用户 ID 筛选，仅管理员可用
+            type: string
+        - description: 上一页返回的 next_cursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: 上一页返回的 next_cursor
+            type: string
+        - description: 每页条数，范围 1 至 100，默认 20
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: 每页条数，范围 1 至 100，默认 20
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunList"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 筛选或分页参数无效（invalid_request、invalid_limit）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行查询不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 列出我的运行
+      tags:
+        - 运行
+  /api/v1/runs/{run_id}:
+    get:
+      operationId: getRun
+      parameters:
+        - description: 运行 ID
+          in: path
+          name: run_id
+          required: true
+          schema:
+            description: 运行 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行查询不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 获取运行详情
+      tags:
+        - 运行
+  /api/v1/runs/{run_id}/cancel:
+    post:
+      operationId: cancelRun
+      parameters:
+        - description: 运行 ID
+          in: path
+          name: run_id
+          required: true
+          schema:
+            description: 运行 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelResult"
+          description: OK
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelResult"
+          description: 取消请求已接受，运行正在停止
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行不存在（not_found）
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 审批已决定（run_not_waiting）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行服务不可用（run_unavailable、conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 取消运行
+      tags:
+        - 运行
+  /api/v1/runs/{run_id}/events:
+    get:
+      description: 使用 v2 事件信封。读取 after 与有效 Last-Event-ID 两者中较大的序号之后的事件，连接可收到 SSE 注释心跳。
+      operationId: subscribeRunEvents
+      parameters:
+        - description: 运行 ID
+          in: path
+          name: run_id
+          required: true
+          schema:
+            type: string
+        - description: 从此非负序号之后开始读取，默认 0
+          in: query
+          name: after
+          schema:
+            type: integer
+        - description: 客户端已收到的最后事件序号
+          in: header
+          name: Last-Event-ID
+          schema:
+            type: integer
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                oneOf:
+                  - additionalProperties: true
+                    properties:
+                      run_id:
+                        type: string
+                      seq:
+                        format: int64
+                        type: integer
+                      step:
+                        format: int64
+                        type: integer
+                      ts:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                      - seq
+                      - run_id
+                      - type
+                      - ts
+                    type: object
+                  - $ref: "#/components/schemas/StreamError"
+          description: SSE 事件流，Schema 描述每条事件的 data 字段
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 事件序号无效（invalid_after）
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行服务或流式响应不可用（run_unavailable、conversation_unavailable、stream_unsupported）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 订阅运行事件
+      tags:
+        - 运行
+  /api/v1/runs/{run_id}/spans:
+    get:
+      operationId: getRunSpans
+      parameters:
+        - description: 运行 ID
+          in: path
+          name: run_id
+          required: true
+          schema:
+            description: 运行 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: false
+                properties:
+                  run_id:
+                    type: string
+                  span:
+                    oneOf:
+                      - $ref: "#/components/schemas/SpanNode"
+                      - type: "null"
+                required:
+                  - run_id
+                  - span
+                type: object
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 执行树查询不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 获取运行执行树
+      tags:
+        - 运行
+  /api/v1/runs/{run_id}/tool-results/{call_id}:
+    get:
+      operationId: getToolResult
+      parameters:
+        - description: 运行 ID
+          in: path
+          name: run_id
+          required: true
+          schema:
+            description: 运行 ID
+            type: string
+        - description: 工具调用 ID
+          in: path
+          name: call_id
+          required: true
+          schema:
+            description: 工具调用 ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolResultDetail"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 运行或工具调用不存在（not_found）
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 工具结果查询不可用（conversation_unavailable）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证服务不可用（unauthenticated）
+      security:
+        - bearerAuth: []
+      summary: 获取工具调用结果
+      tags:
+        - 运行
+  /api/v1/tools:
+    get:
+      operationId: listTools
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCatalogResponse"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 会话无效（unauthenticated）
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: 认证或工具目录不可用（unauthenticated、tool_unavailable）
+      security:
+        - bearerAuth: []
+      summary: 获取平台工具目录
+      tags:
+        - 工具
+  /health/live:
+    get:
+      operationId: healthLive
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthLive"
+          description: OK
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+          description: Error
+      summary: 检查进程存活
+      tags:
+        - 健康检查
+  /health/ready:
+    get:
+      operationId: healthReady
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReady"
+          description: OK
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReady"
+          description: 依赖不可用
+      summary: 检查依赖就绪
+      tags:
+        - 健康检查
+servers:
+  - description: 本地 API 服务
+    url: http://localhost:18080

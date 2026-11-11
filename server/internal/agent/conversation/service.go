@@ -33,13 +33,13 @@ type Conversation struct {
 type Message struct {
 	ID               string        `json:"id"`
 	ConversationID   string        `json:"conversation_id"`
-	Role             string        `json:"role"`
+	Role             string        `json:"role" enum:"system,user,assistant"`
 	Content          string        `json:"content"`
 	Model            string        `json:"model"`
 	PromptTokens     int           `json:"prompt_tokens"`
 	CompletionTokens int           `json:"completion_tokens"`
 	LatencyMS        int64         `json:"latency_ms"`
-	Status           string        `json:"status"`
+	Status           string        `json:"status" enum:"pending,completed,failed"`
 	Error            string        `json:"error,omitempty"`
 	RunID            string        `json:"run_id,omitempty"`
 	Parts            []MessagePart `json:"parts,omitempty"`
@@ -110,14 +110,27 @@ type ActiveRun struct {
 }
 
 type MessagePage struct {
-	Messages  []Message  `json:"messages"`
+	Messages  []Message  `json:"messages" nullable:"false"`
 	HasMore   bool       `json:"has_more"`
 	Before    string     `json:"before,omitempty"`
 	ActiveRun *ActiveRun `json:"active_run,omitempty"`
 }
 
+// Summary 是会话摘要及其覆盖的消息范围。
+type Summary struct {
+	ID                   string  `json:"id"`
+	ConversationID       string  `json:"conversation_id"`
+	Content              string  `json:"content"`
+	CoversFromMessageID  *string `json:"covers_from_message_id"`
+	CoversUntilMessageID *string `json:"covers_until_message_id"`
+	MessageCount         int     `json:"message_count"`
+	EstimatedTokens      int     `json:"estimated_tokens"`
+	Version              int     `json:"version"`
+	CreatedAt            string  `json:"created_at" format:"date-time"`
+}
+
 // Summary 只向会话所有者返回最新摘要及覆盖范围。
-func (s *Service) Summary(ctx context.Context, p auth.Principal, id string) (map[string]any, error) {
+func (s *Service) Summary(ctx context.Context, p auth.Principal, id string) (*Summary, error) {
 	var exists bool
 	if err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversations WHERE id=$1 AND user_id=$2 AND workspace_id=$3)`, id, p.UserID, p.WorkspaceID).Scan(&exists); err != nil {
 		return nil, err
@@ -125,18 +138,18 @@ func (s *Service) Summary(ctx context.Context, p auth.Principal, id string) (map
 	if !exists {
 		return nil, definition.ErrNotFound
 	}
-	var out map[string]any
+	var out Summary
 	var raw []byte
 	if err := s.DB.QueryRow(ctx, `SELECT row_to_json(x) FROM (SELECT id,conversation_id,content,covers_from_message_id,covers_until_message_id,message_count,estimated_tokens,version,created_at FROM conversation_summaries WHERE conversation_id=$1 AND owner_user_id=$2 ORDER BY version DESC LIMIT 1) x`, id, p.UserID).Scan(&raw); err != nil {
 		if err == pgx.ErrNoRows {
-			return map[string]any{"summary": nil}, nil
+			return nil, nil
 		}
 		return nil, err
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return &out, nil
 }
 
 func (s *Service) Messages(ctx context.Context, p auth.Principal, id string, before string, limit int) (MessagePage, error) {

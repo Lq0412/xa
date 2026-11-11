@@ -100,7 +100,7 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	registerRoutes(mux, resolver, routeHandlers{
 		auth: authHandler, agents: agentHandler, library: libraryHandler, tools: toolsHandler,
 		memory: memoryHandler, conversations: conversationHandler, runs: runHandler,
-		health: frameworkhttp.HealthHandler(checks, s.config.HealthTimeout, s.logger),
+		checks: checks, healthTimeout: s.config.HealthTimeout, logger: s.logger,
 	})
 	handler := http.Handler(mux)
 	if raw := strings.TrimSpace(os.Getenv("XA_HTTP_CORS_ORIGINS")); raw != "" {
@@ -124,7 +124,9 @@ type routeHandlers struct {
 	memory        *agenthttp.MemoryHandler
 	conversations *agenthttp.ConversationHandler
 	runs          *agenthttp.RunHandler
-	health        http.Handler
+	checks        []frameworkhttp.Check
+	healthTimeout time.Duration
+	logger        *slog.Logger
 }
 
 // registerRoutes 只登记接口，不访问存储；生产与文档导出共用此入口。
@@ -132,42 +134,17 @@ func registerRoutes(mux routeMux, resolver auth.Resolver, handlers routeHandlers
 	api := frameworkhttp.NewAPI(mux)
 	handlers.auth.RegisterRoutes(api, resolver)
 	handlers.agents.RegisterRoutes(api, resolver)
-	memoryHandler, libraryHandler, toolsHandler := handlers.memory, handlers.library, handlers.tools
-	conversationHandler, runHandler := handlers.conversations, handlers.runs
-	mux.Handle("GET /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.List)))
-	mux.Handle("POST /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Add)))
-	mux.Handle("PUT /api/v1/memories/{memory_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Edit)))
-	mux.Handle("DELETE /api/v1/memories/{memory_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Delete)))
-	mux.Handle("POST /api/v1/memories/{memory_id}/restore", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Restore)))
-	mux.Handle("GET /api/v1/memories/{memory_id}/events", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Events)))
-	mux.Handle("GET /api/v1/agents/{agent_id}/memory", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Core)))
-	mux.Handle("PUT /api/v1/agents/{agent_id}/memory-policy", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Policy)))
-	mux.Handle("GET /api/v1/memory/stats", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Stats)))
-	mux.Handle("POST /api/v1/memory/jobs/{job_id}/retry", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Retry)))
-	mux.Handle("/health/", handlers.health)
-	mux.Handle("GET /api/v1/agent-library", frameworkhttp.Authenticate(resolver, http.HandlerFunc(libraryHandler.List)))
-	mux.Handle("PUT /api/v1/agent-library/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(libraryHandler.Add)))
-	mux.Handle("GET /api/v1/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.Catalog)))
-	mux.Handle("GET /api/v1/agents/{agent_id}/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.GetAgentTools)))
-	mux.Handle("PUT /api/v1/agents/{agent_id}/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.PutAgentTools)))
-	mux.Handle("POST /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Create)))
-	mux.Handle("GET /api/v1/conversations", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.List)))
-	mux.Handle("GET /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Messages)))
-	mux.Handle("GET /api/v1/conversations/{conversation_id}/summary", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Summary)))
-	mux.Handle("POST /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(conversationHandler.Send)))
-	mux.Handle("GET /api/v1/runs/{run_id}/events", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Events)))
-	mux.Handle("POST /api/v1/runs/{run_id}/cancel", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Cancel)))
-	mux.Handle("POST /api/v1/approvals/{approval_id}/decision", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Decision)))
-	mux.Handle("GET /api/v1/admin/approvals", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ApprovalRecords)))
-	mux.Handle("GET /api/v1/approvals", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.UserApprovals)))
-	mux.Handle("GET /api/v1/agents/{agent_id}/activity", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.AgentActivity)))
-	mux.Handle("GET /api/v1/runs", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ListRuns)))
-	mux.Handle("GET /api/v1/runs/{run_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.GetRun)))
-	mux.Handle("GET /api/v1/runs/{run_id}/spans", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Spans)))
-	mux.Handle("GET /api/v1/runs/{run_id}/tool-results/{call_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ToolResult)))
-	mux.Handle("GET /api/v1/admin/runs", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ListRuns)))
-	mux.Handle("GET /api/v1/admin/runs/{run_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.GetRun)))
-	mux.Handle("GET /api/v1/admin/runs/{run_id}/spans", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Spans)))
+	handlers.memory.RegisterRoutes(api, resolver)
+	handlers.library.RegisterRoutes(api, resolver)
+	handlers.tools.RegisterRoutes(api, resolver)
+	handlers.conversations.RegisterRoutes(api, resolver)
+	handlers.runs.RegisterRoutes(api, resolver)
+	frameworkhttp.RegisterHealthRoutes(api, handlers.checks, handlers.healthTimeout, handlers.logger)
+	handlers.conversations.RegisterStreams(api)
+	handlers.runs.RegisterStreams(api)
+	// SSE 保留原帧写入和 HTTP 错误边界，只将约定登记到 OpenAPI。
+	mux.Handle("POST /api/v1/conversations/{conversation_id}/messages", frameworkhttp.Authenticate(resolver, http.HandlerFunc(handlers.conversations.Send)))
+	mux.Handle("GET /api/v1/runs/{run_id}/events", frameworkhttp.Authenticate(resolver, http.HandlerFunc(handlers.runs.Events)))
 	return api
 }
 
@@ -181,6 +158,6 @@ func documentationHandlers() routeHandlers {
 		auth: &systemhttp.Handler{}, agents: &agenthttp.ManagementHandler{},
 		library: &agenthttp.LibraryHandler{}, tools: &agenthttp.ToolsHandler{},
 		memory: &agenthttp.MemoryHandler{}, conversations: &agenthttp.ConversationHandler{},
-		runs: &agenthttp.RunHandler{}, health: frameworkhttp.HealthHandler(nil, time.Second, slog.Default()),
+		runs: &agenthttp.RunHandler{}, healthTimeout: time.Second, logger: slog.Default(),
 	}
 }

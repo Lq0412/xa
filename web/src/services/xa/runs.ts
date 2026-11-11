@@ -1,86 +1,37 @@
-import { request } from './request';
+import * as runs from '../generated/runs';
 
 /** 管理端运行摘要仅包含本 workspace 的脱敏查询字段。 */
-export type RunSummary = {
-  id: string;
-  conversation_id: string;
-  agent_id: string;
-  agent_name: string;
-  user_email: string;
-  status: string;
-  model: string;
-  steps: number;
-  tool_calls: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  cached_tokens: number;
-  ttft_ms: number | null;
-  latency_ms: number;
-  active_ms: number;
-  error_code: string;
-  created_at: string;
-  started_at: string | null;
-  ended_at: string | null;
-};
+export type RunSummary = NonNullable<
+  Awaited<ReturnType<typeof runs.listAdminRuns>>['runs']
+>[number];
 
-/** 详情不请求 run_contexts 或工具的原始载荷。 */
-export type RunDetail = RunSummary & {
-  workspace_id: string;
-  owner_user_id: string;
-  agent_version_id: string;
-  user_message_id: string;
-  final_message_id: string;
-  provider: string;
-  stream_protocol: number;
-  limits: Record<string, unknown>;
-  toolset_hash: string;
-  toolset: string[];
-  error: string;
-  cancel_reason: string;
-};
+/** 详情保留服务端提供的脱敏字段。 */
+export type RunDetail = Awaited<ReturnType<typeof runs.getAdminRun>>;
 
-/** 服务端已按执行顺序组织树，前端保留原始顺序与脱敏 preview。 */
-export type SpanNode = {
-  id: string;
-  kind: string;
-  name: string;
-  status: string;
-  step: number | null;
-  call_id: string;
-  error_code: string;
-  attributes: Record<string, unknown>;
-  input_preview: string;
-  output_preview: string;
-  prompt_tokens: number | null;
-  completion_tokens: number | null;
-  cached_tokens: number | null;
-  estimated_tokens: number | null;
-  started_at: string;
-  ended_at: string | null;
-  duration_ms: number | null;
-  children: SpanNode[];
-};
+/** 服务端已按执行顺序组织树，前端保留顺序与脱敏 preview。 */
+export type SpanNode = NonNullable<
+  Awaited<ReturnType<typeof runs.getAdminRunSpans>>['span']
+>;
 
 /** 所有筛选均交给服务端，分页使用服务端返回的 keyset 游标。 */
 export function listRuns(filters: Record<string, string>, signal: AbortSignal) {
-  const query = new URLSearchParams({ limit: '20' });
-  for (const [key, value] of Object.entries(filters)) {
-    if (value) query.set(key, value);
-  }
-  return request<{ runs: RunSummary[]; next_cursor: string }>(
-    `/api/v1/admin/runs?${query}`,
+  return runs.listAdminRuns(
+    {
+      limit: '20',
+      ...Object.fromEntries(
+        Object.entries(filters).filter(([, value]) => value),
+      ),
+    },
     { signal },
   );
 }
 
 /** 运行摘要与树分别读取，旧运行可以合法返回空树。 */
 export async function getRun(id: string, signal: AbortSignal) {
-  const path = `/api/v1/admin/runs/${encodeURIComponent(id)}`;
+  const params = { run_id: encodeURIComponent(id) };
   const [run, trace] = await Promise.all([
-    request<RunDetail>(path, { signal }),
-    request<{ run_id: string; span: SpanNode | null }>(`${path}/spans`, {
-      signal,
-    }),
+    runs.getAdminRun(params, { signal }),
+    runs.getAdminRunSpans(params, { signal }),
   ]);
   return { run, span: trace.span };
 }

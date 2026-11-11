@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
-import { errorMessage, request } from '@/services/http';
+import { getAgentActivity } from '@/services/generated/runs';
+import { errorMessage } from '@/services/http';
 import { approvalCopy, type PendingApproval } from './approval-copy';
 
-type ActivityItem = {
-  id: string;
-  title: string;
-  result: string;
-  created_at: string;
-};
-
-type ActivityPage = { items: ActivityItem[]; next_cursor: string };
+type ActivityPage = Awaited<ReturnType<typeof getAgentActivity>>;
 
 /** 日期分组使用浏览器的本地日期，与聊天时间一致。 */
 export function panelTime(value: string) {
@@ -59,8 +53,8 @@ export function AgentActivity({
     const controller = new AbortController();
     setLoading(true);
     setError('');
-    request<ActivityPage>(
-      `/agents/${encodeURIComponent(agentId)}/activity?cursor=${encodeURIComponent(cursor)}`,
+    getAgentActivity(
+      { agent_id: encodeURIComponent(agentId), cursor },
       { signal: controller.signal },
     )
       .then((next) => {
