@@ -4,6 +4,8 @@ React 19、Umi Max 4、Tailwind CSS、shadcn/ui 和 Lucide 图标；用户端不
 
 ## 运行与验证
 
+使用 Node.js 24，在仓库根目录执行 `nvm use`。
+
 根目录先运行 `make migrate`、`make server`，再运行 `make web-user`，访问 `http://localhost:8002`。默认 API 代理为 `127.0.0.1:18080`，可用 `XA_API_PROXY` 覆盖。构建产物为本目录 `dist/`。
 
 本目录执行 `npm run lint`、`npm run build`。真实浏览器验收运行 `XA_BROWSER_INTEGRATION=1 make integration`，自动构建用户端，启动独立 server，注册独立账号，使用真实 PostgreSQL 与低成本 `qwen3.8-flash`，结束后清理本次数据。需要 Playwright Chromium；临时文件在根目录 `.output/`，不记录截图或视频。

@@ -4,7 +4,7 @@
 
 ## 启动
 
-需要 Node.js 22 或更新版本。先按 [启动说明](../docs/startup.md) 启动基础依赖和 server，再在仓库根目录运行：
+使用 Node.js 24，先在仓库根目录执行 `nvm use`。按 [启动说明](../docs/startup.md) 启动基础依赖和 server，再在仓库根目录运行：
 
 ```bash
 make web-install

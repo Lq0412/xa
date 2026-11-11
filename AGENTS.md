@@ -39,6 +39,16 @@
 
 ## 编码与测试
 
+### 接口约定
+
+- 接口说明从 Go 代码生成，提交文件为 `docs/api/openapi.yaml`。开工前先阅读对应 path，不只查看 handler 或前端 `services/`。
+- 改路径、字段、状态码、错误码或权限时，先修改 Go 输入输出结构体、handler 和 operation 声明，再运行 `make api`、`make api-client`。禁止手改生成的 YAML 或客户端文件。
+- JSON 错误统一为 `{code,message,request_id}`；等待审批的 409 保留 `{code,message,run_id}`。新增错误码必须写入代码中的接口说明，服务端内部错误不能对外泄漏。
+- 两个 SSE 接口保留标准库 handler 和现有帧格式，OpenAPI 声明与 handler 同步维护。
+- 提交前运行 `make check`，检查路由覆盖和生成物新鲜度。浏览接口说明运行 `make api-docs`。
+
+### 实现与验证
+
 - 采用 fast-fail：错误在发生位置直接抛出，禁止用 try-except 或 try-catch 吞掉错误，禁止添加静默 fallback。
 - 需要的库直接导入，不用 try-except 包裹 import。
 - 使用成熟库处理 JSON、YAML、TOML、CSV、HTML、XML、PDF 等格式，不手写解析器。
@@ -63,9 +73,9 @@
 
 ### 使用的技术
 
-Go、CloudWeGo Eino、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 19、Ant Design Pro v6、Ant Design 6、Umi Max 4、TypeScript、Tailwind、SSE 和 Docker Compose。
+Go、标准库 `net/http`、Huma v2、NativeEngine、PostgreSQL、pgvector、Redis、S3 兼容对象存储、React 19、Umi 4、TypeScript、Tailwind CSS 4、Radix UI、SSE 和 Docker Compose。
 
-Ant Design 仅用于管理端 `web/`。用户端 `web-user/` 使用 React、Tailwind CSS、shadcn/ui 和 Lucide；禁止引入 Ant Design 组件、样式或应用包装层。
+管理端 `web/` 使用普通 Umi 4 和 TanStack Table；用户端 `web-user/` 使用 Umi Max 4。两个前端使用 Tailwind CSS、Radix UI、shadcn 风格组件和 Lucide，禁止引入 Ant Design 组件、样式或应用包装层。
 
 暂不使用：Flutter、WebSocket、Realtime、MCP。
 
@@ -83,7 +93,7 @@ Ant Design 仅用于管理端 `web/`。用户端 `web-user/` 使用 React、Tail
 | `agent/definition` | Agent 定义、归属、配置版本和启停状态 |
 | `agent/prompt` | 管理 `soul.md` 等版本化人格提示词并生成运行快照 |
 | `agent/binding` | 保存 Agent 版本与工具、知识库、评价能力的绑定 |
-| `agent/runtime` | 通过 Eino 执行文本 Agent 循环、工具调用和委派入口 |
+| `agent/run` | 通过 NativeEngine 执行文本 Agent 循环和工具调用 |
 | `agent/conversation` | 会话、轮次、消息存储和 SSE 对话流程 |
 | `agent/memory` | 管理 `memory_items` 的作用域、候选和取代链 |
 | `tool/catalog` | 校验工具版本、参数 Schema 和调用权限，生成工具目录 |
@@ -145,7 +155,7 @@ git -c user.name="Lq0412" \
 
 - 终端使用 Bash，默认编码为 UTF-8；命令和路径按当前 WSL 环境执行。
 - Go 后端的工作目录是 `server/`。修改 Go 文件后运行 `gofmt`，提交前运行 `go test ./...`、`go vet ./...` 和 `go build ./...`。
-- `web/` 使用 Ant Design Pro v6；检查命令和页面约定见 `web/AGENTS.md`。`mobile/` 尚未建立工程，不执行 Flutter 构建命令。
+- 前端统一使用 Node.js 24，在仓库根目录运行 `nvm use` 读取 `.nvmrc`。`web/` 使用普通 Umi 4；检查命令见两个前端的 `package.json`。`mobile/` 尚未建立工程，不执行 Flutter 构建命令。
 - Docker 只用于仓库中已经声明的镜像、Dockerfile 或 Compose 配置；没有对应文件时，不假设存在固定的服务、端口或 Compose profile。
 - 启动服务前先确认属于本项目的旧进程，避免重复启动；服务端口和启动命令以项目实际配置为准。
 - 启停服务、初始化存储或排查运行问题前，先阅读 `docs/startup.md`；修改基础依赖接入时运行 `make integration`，使用实际容器验证。

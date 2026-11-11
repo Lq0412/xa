@@ -5,7 +5,7 @@
 ## 1. 环境
 
 - WSL / Linux、Bash、Go 1.26 或更新版本、Make、OpenSSL；race 检查需要 GCC 等 C 编译器。
-- Web 使用 Node.js 22 或更新版本和 npm；两个前端使用 React 19 与 Umi Max 4。管理端使用 Ant Design，用户端使用 Tailwind CSS、shadcn/ui 和 Lucide 图标。
+- Web 使用 Node.js 24 和 npm，在仓库根目录执行 `nvm use`。管理端使用普通 Umi 4，用户端使用 Umi Max 4；两端使用 React 19、Tailwind CSS、Radix UI 和 Lucide 图标。
 - Docker Engine 与 Compose。WSL 使用 `/usr/bin/docker` 原生客户端；其他安装路径通过 `make DOCKER=/path/to/docker ...` 指定。
 - Go module 位于 `server/`；下列 Make 命令均在仓库根目录运行。
 
