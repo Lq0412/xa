@@ -26,6 +26,12 @@ func (s *RunService) closePendingCalls(ctx context.Context, rc *RunContext, tx p
 		}
 		row.Status, row.ErrorCode, row.ErrorMessage = "cancelled", "cancelled", "操作未执行"
 		row.ModelContent = FormatRejectResult(row.ErrorCode, row.ErrorMessage)
+		if rc.Tracer != nil {
+			span := rc.Tracer.Start(rc.Tracer.RootID, "tool", "execute_tool "+row.ToolName, row.Step, row.CallID, time.Now().UTC())
+			span.InputPreview = TracePreview(row.RawArguments)
+			span.OutputPreview = row.ErrorMessage
+			rc.Tracer.End(span, "cancelled", row.ErrorCode, time.Now().UTC())
+		}
 		if err := s.Store.UpdateToolResult(ctx, tx, row); err != nil {
 			return nil, err
 		}
@@ -110,12 +116,20 @@ func (s *RunService) Cancel(ctx context.Context, p auth.Principal, id string) (s
 			return "", err
 		}
 		if aid != "" {
+			if rc.Tracer != nil {
+				rc.Tracer.closeApproval(pc.Call.ID, "cancelled", "", time.Now().UTC())
+			}
 			if err := writeEvent(EventApprovalResolved, map[string]any{"approval_id": aid, "call_id": pc.Call.ID, "decision": "cancelled"}); err != nil {
 				return "", err
 			}
 		}
 		row.Status, row.ErrorCode, row.ErrorMessage = "cancelled", "cancelled", "已停止生成"
 		row.ModelContent = FormatRejectResult("cancelled", "已停止生成")
+		if rc.Tracer != nil {
+			span := rc.Tracer.Start(rc.Tracer.RootID, "tool", "execute_tool "+row.ToolName, row.Step, row.CallID, time.Now().UTC())
+			span.InputPreview = row.RawArguments
+			rc.Tracer.End(span, "cancelled", "cancelled", time.Now().UTC())
+		}
 		if err := s.Store.UpdateToolResult(ctx, tx, row); err != nil {
 			return "", err
 		}
@@ -136,13 +150,29 @@ func (s *RunService) Cancel(ctx context.Context, p auth.Principal, id string) (s
 	if err := writeEvent(EventRunCancelled, map[string]any{"message_id": messageID, "status": "cancelled", "code": "approval_cancel", "message": "已停止生成"}); err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE runs SET status='cancelled',final_message_id=$2,ended_at=now(),last_event_seq=$3,lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND status='waiting_approval'`, id, messageID, seq); err != nil {
+	ended := time.Now().UTC()
+	if _, err := tx.Exec(ctx, `UPDATE runs SET status='cancelled',final_message_id=$2,ended_at=$4,last_event_seq=$3,latency_ms=$5,error_code='approval_cancel',error='已停止生成',lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND status='waiting_approval'`, id, messageID, seq, ended, max(0, ended.Sub(rc.Run.StartedAt).Milliseconds())); err != nil {
 		return "", err
+	}
+	if rc.Tracer != nil {
+		r := rc.Run
+		r.Status = "cancelled"
+		r.ErrorCode = "approval_cancel"
+		r.EndedAt = &ended
+		rc.Tracer.Finish(r)
+		if err := s.Store.UpsertSpans(ctx, tx, rc.Tracer.Spans()); err != nil {
+			return "", err
+		}
+	}
+	if s.SnapshotParts != nil {
+		if err := s.SnapshotParts(ctx, tx, id); err != nil {
+			return "", err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
-	bus := NewEventBus(id, s.Redis, s.RedisOK, s.Store)
+	bus := s.newEventBus(id)
 	for _, ev := range events {
 		bus.publishRedis(ctx, ev)
 	}

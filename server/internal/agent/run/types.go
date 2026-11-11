@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"linq-bs/server/internal/agent/definition"
+	"linq-bs/server/internal/agent/runtime"
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/infra/provider"
 	"linq-bs/server/internal/tool"
@@ -41,6 +42,7 @@ type Run struct {
 	PromptTokens     int
 	CompletionTokens int
 	CachedTokens     int
+	TTFTMS           *int64
 	LatencyMS        int64
 	ActiveMS         int64
 	ErrorCode        string
@@ -109,23 +111,33 @@ type VisibleMessage struct {
 
 // ChatStartInput 启动一次同步 chat run 的上下文。
 type ChatStartInput struct {
-	Principal       auth.Principal
-	Conversation    ConversationRef
-	Agent           definition.AgentDefinition
-	Version         definition.AgentVersion
-	UserContent     string
-	UserMessageID   string
-	PlatformRules   string
-	History         []VisibleMessage
-	SessionSummary  string
-	Segments        []byte
-	InitialMessages []provider.Message
-	Toolset         tool.Toolset
-	Limits          definition.RuntimeLimits
-	MemoryPolicy    definition.MemoryPolicy
-	MemoryEnabled   bool
-	AllowedModels   []string
-	EnableThinking  bool
+	ContextStartedAt time.Time
+	ContextEndedAt   time.Time
+	ContextTrace     []ContextObservation
+	Principal        auth.Principal
+	Conversation     ConversationRef
+	Agent            definition.AgentDefinition
+	Version          definition.AgentVersion
+	UserContent      string
+	UserMessageID    string
+	PlatformRules    string
+	History          []VisibleMessage
+	SessionSummary   string
+	Segments         []byte
+	InitialMessages  []provider.Message
+	Toolset          tool.Toolset
+	Limits           definition.RuntimeLimits
+	MemoryPolicy     definition.MemoryPolicy
+	MemoryEnabled    bool
+	AllowedModels    []string
+	EnableThinking   bool
+}
+
+// ContextObservation 保存准备阶段的计时，run 入库后再生成追踪节点。
+type ContextObservation struct {
+	Slot               string
+	Segment            runtime.Segment
+	StartedAt, EndedAt time.Time
 }
 
 // ConversationRef 避免 run 包依赖 conversation 的全部类型。

@@ -12,6 +12,8 @@ export default [
       { path: '/agents/new', component: './agents/AgentEditor' },
       { path: '/agents/:id', component: './agents/AgentEditor' },
       { path: '/approvals', component: './approvals' },
+      { path: '/runs', component: './runs' },
+      { path: '/runs/:id', component: './runs/detail' },
     ],
   },
   {

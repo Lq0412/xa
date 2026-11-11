@@ -48,6 +48,11 @@ func emitToolCompleted(ctx context.Context, rc *RunContext, row ToolResultRow, e
 	if rc.Emitter == nil {
 		return
 	}
+	_ = rc.Emitter.Emit(ctx, EventToolCompleted, toolCompletedPayload(row, entry, durationMS))
+}
+
+// toolCompletedPayload 供直播与终态事务复用相同的工具回执。
+func toolCompletedPayload(row ToolResultRow, entry tool.Entry, durationMS int64) map[string]any {
 	title := row.ToolName
 	if entry.Spec.Title != "" {
 		title = entry.Spec.Title
@@ -63,7 +68,7 @@ func emitToolCompleted(ctx context.Context, rc *RunContext, row ToolResultRow, e
 	if len(items) > 0 {
 		payload["items"] = items
 	}
-	_ = rc.Emitter.Emit(ctx, EventToolCompleted, payload)
+	return payload
 }
 
 // toolEventSummary 优先用展示摘要；失败且没有摘要时带上错误信息，供时间线直接显示。

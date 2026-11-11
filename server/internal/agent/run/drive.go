@@ -3,6 +3,8 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,9 @@ func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *
 	}()
 
 	sink := NewCombinedSink(v1, bus)
+	if s.Config.EventTTL > 0 {
+		bus.EventTTL = s.Config.EventTTL
+	}
 	if v1 == nil {
 		sink = &CombinedSink{Bus: bus}
 	}
@@ -73,6 +78,17 @@ func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *
 		rc = in.resume
 		rc.Emitter, rc.Bus = sink, bus
 		rc.WallStarted = time.Now().Add(-time.Duration(rc.Run.ActiveMS) * time.Millisecond)
+	}
+	if rc.Tracer == nil {
+		stored, err := s.Store.GetRun(runCtx, runID)
+		if err != nil {
+			return err
+		}
+		rc.Run = stored
+		rc.initTrace(in.ChatStartInput)
+		if err := rc.Tracer.FlushStep(runCtx); err != nil {
+			return err
+		}
 	}
 	bus.SetStepProvider(func() int { return rc.Step })
 
@@ -179,19 +195,41 @@ func (s *RunService) finalizeStreamingRun(ctx context.Context, rc *RunContext, o
 	run.Steps = rc.Step
 	run.ModelTurns = rc.Budget.Turns
 	run.ToolCalls = rc.Budget.ToolCalls
-	run.LatencyMS = latency
 	run.ActiveMS = ActiveMS(rc.WallStarted)
+	run.Error = errText
 	if outcome.Code != "" {
 		run.ErrorCode = outcome.Code
 	}
 	ended := time.Now().UTC()
 	run.EndedAt = &ended
+	run.LatencyMS = ended.Sub(run.StartedAt).Milliseconds()
+
+	// 先锁事件缓冲，再锁数据库行；后台 delta 刷写不能插入终态事务之间。
+	// 即使事务失败也关闭本地订阅，已保留的缓冲仍可由 Close 刷写供中断回收读取。
+	bus := rc.Bus
+	if bus != nil {
+		defer bus.Close()
+		bus.mu.Lock()
+		defer bus.mu.Unlock()
+		if bus.closed {
+			return fmt.Errorf("运行事件总线已关闭")
+		}
+		bus.flushDeltasLocked()
+	}
 
 	tx, err := s.Store.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var status, leaseOwner string
+	var lastSeq int64
+	if err := tx.QueryRow(ctx, `SELECT status,COALESCE(lease_owner,''),last_event_seq FROM runs WHERE id=$1 FOR UPDATE`, run.ID).Scan(&status, &leaseOwner, &lastSeq); err != nil {
+		return err
+	}
+	if status != "running" || (rc.LeaseOwner != "" && leaseOwner != rc.LeaseOwner) {
+		return fmt.Errorf("运行已结束或执行租约已转移")
+	}
 	var unexecuted []ToolResultRow
 	if in.StreamProtocol >= 2 && outcome.Kind != OutcomeCompleted {
 		unexecuted, err = s.closePendingCalls(ctx, rc, tx)
@@ -214,6 +252,12 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		return err
 	}
 	run.FinalMessageID = assistantID
+	if rc.Tracer != nil {
+		rc.Tracer.Finish(run)
+		if err := s.Store.UpsertSpans(ctx, tx, rc.Tracer.Spans()); err != nil {
+			return err
+		}
+	}
 	if err := s.Store.SaveRunContext(ctx, tx, RunContextSnapshot{
 		RunID: in.RunID, Messages: rc.Messages, Segments: in.Segments,
 	}); err != nil {
@@ -222,10 +266,6 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 	if err := s.Store.UpdateRun(ctx, tx, run); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-
 	termPayload := terminalPayload(assistantID, run, outcome, errText, usage, latency, rc)
 	typ := EventRunCompleted
 	if outcome.Kind == OutcomeCancelled {
@@ -233,15 +273,59 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 	} else if outcome.Kind == OutcomeFailed || outcome.Kind == OutcomeBudgetExhausted {
 		typ = EventRunFailed
 	}
-	if rc.Emitter != nil {
+	var committed []pendingEvent
+	if bus != nil {
+		committed = append(committed, bus.batch...)
+		committed = append(committed, bus.terminals...)
+		lastSeq = max(lastSeq, bus.seq)
+		appendEvent := func(eventType string, payload map[string]any) error {
+			lastSeq++
+			raw, err := MarshalEnvelope(lastSeq, run.ID, eventType, ended, rc.Step, payload)
+			if err != nil {
+				return err
+			}
+			committed = append(committed, pendingEvent{seq: lastSeq, typ: eventType, payload: raw, terminal: IsTerminalEvent(eventType)})
+			return nil
+		}
 		for _, row := range unexecuted {
 			entry, _ := rc.Toolset.EntryByName(row.ToolName)
-			emitToolCompleted(ctx, rc, row, entry, 0)
+			if err := appendEvent(EventToolCompleted, toolCompletedPayload(row, entry, 0)); err != nil {
+				return err
+			}
 		}
-		_ = rc.Emitter.Emit(ctx, typ, termPayload)
+		if err := appendEvent(typ, termPayload); err != nil {
+			return err
+		}
+		sort.Slice(committed, func(i, j int) bool { return committed[i].seq < committed[j].seq })
+		for _, event := range committed {
+			if _, err := tx.Exec(ctx, `INSERT INTO run_events(run_id,seq,type,payload) VALUES($1,$2,$3,$4) ON CONFLICT(run_id,seq) DO NOTHING`, run.ID, event.seq, event.typ, event.payload); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runs SET last_event_seq=$2 WHERE id=$1`, run.ID, lastSeq); err != nil {
+			return err
+		}
 	}
-	if rc.Bus != nil {
-		rc.Bus.Close()
+	if s.SnapshotParts != nil {
+		if err := s.SnapshotParts(ctx, tx, run.ID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// 先提交完整记录再发布终态，客户端看到完成时查询到的快照也已经完整。
+	if bus != nil {
+		bus.batch, bus.terminals = nil, nil
+		bus.seq, bus.lastFlushedSeq, bus.persistenceErr = lastSeq, lastSeq, nil
+		for _, event := range committed {
+			bus.publishRedis(ctx, event)
+			bus.notifySubscribers(event)
+		}
+	} else if rc.Emitter != nil {
+		if err := rc.Emitter.Emit(ctx, typ, termPayload); err != nil {
+			return err
+		}
 	}
 	if execErr != nil && outcome.Kind == OutcomeFailed {
 		return execErr

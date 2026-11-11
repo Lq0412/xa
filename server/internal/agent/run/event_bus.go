@@ -27,10 +27,12 @@ type StoredEvent struct {
 
 // EventBus 分配 seq、合并 delta、发布到 Redis 与 PG。
 type EventBus struct {
-	RunID    string
-	Redis    redisclient.Cmdable
-	RedisOK  func() bool
-	Recorder EventRecorder
+	EventTTL       time.Duration
+	persistenceErr error
+	RunID          string
+	Redis          redisclient.Cmdable
+	RedisOK        func() bool
+	Recorder       EventRecorder
 
 	mu                 sync.Mutex
 	seq                int64
@@ -69,6 +71,7 @@ func NewEventBus(runID string, redis redisclient.Cmdable, redisOK func() bool, r
 	}
 	return &EventBus{
 		RunID: runID, Redis: redis, RedisOK: ok, Recorder: rec,
+		EventTTL:        24 * time.Hour,
 		deltaCoalesceMS: 50, deltaCoalesceLen: 256,
 		subscribers: map[int]chan StoredEvent{},
 		stepFn:      func() int { return 0 },
@@ -132,12 +135,12 @@ func (b *EventBus) Emit(ctx context.Context, typ string, payload map[string]any)
 	if pe.terminal {
 		b.terminals = append(b.terminals, pe)
 		b.flushBatchLocked(true)
-		return nil
+		return b.persistenceErr
 	}
 	b.batch = append(b.batch, pe)
 	if strings.HasPrefix(typ, "tool.") {
 		b.flushBatchLocked(false)
-		return nil
+		return b.persistenceErr
 	}
 	if len(b.batch) >= 32 {
 		b.flushBatchLocked(false)
@@ -306,9 +309,18 @@ func (b *EventBus) flushBatchLocked(forceTerminal bool) {
 		return
 	}
 	var maxSeq int64
-	for _, pe := range toFlush {
+	for i, pe := range toFlush {
 		if err := b.persistOne(ctx, pe); err != nil {
-			continue
+			// 保留失败事件及后续事件，终态事务可以原序号补写，不能形成重放缺口。
+			for _, pending := range toFlush[i:] {
+				if pending.terminal {
+					b.terminals = append(b.terminals, pending)
+				} else {
+					b.batch = append(b.batch, pending)
+				}
+			}
+			b.persistenceErr = err
+			return
 		}
 		if pe.seq > maxSeq {
 			maxSeq = pe.seq
@@ -316,9 +328,13 @@ func (b *EventBus) flushBatchLocked(forceTerminal bool) {
 		b.notifySubscribers(pe)
 	}
 	if maxSeq > 0 && b.Recorder != nil {
-		_ = b.Recorder.UpdateLastEventSeq(ctx, b.RunID, maxSeq)
+		if err := b.Recorder.UpdateLastEventSeq(ctx, b.RunID, maxSeq); err != nil {
+			b.persistenceErr = err
+			return
+		}
 		b.lastFlushedSeq = maxSeq
 	}
+	b.persistenceErr = nil
 	if !forceTerminal && len(b.batch) == 0 && b.flushTimer == nil {
 		b.flushTimer = time.AfterFunc(500*time.Millisecond, func() {
 			b.mu.Lock()
@@ -352,7 +368,7 @@ func (b *EventBus) publishRedis(ctx context.Context, pe pendingEvent) {
 			Values: map[string]any{"e": string(pe.payload)},
 		}).Err()
 		if pe.terminal {
-			_ = b.Redis.Expire(ctx, key, 24*time.Hour).Err()
+			_ = b.Redis.Expire(ctx, key, b.EventTTL).Err()
 		}
 	}
 }

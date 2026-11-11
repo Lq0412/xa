@@ -21,9 +21,96 @@ test('管理端仅展示可用模块，已删除页面返回 404', async ({ page
   );
   try {
     const menu = page.getByRole('navigation', { name: '主导航' });
-    await expect(menu.getByRole('link')).toHaveCount(3);
+    await expect(menu.getByRole('link')).toHaveCount(4);
     await expect(menu.getByRole('link', { name: '今天' })).toBeVisible();
     await expect(menu.getByRole('link', { name: '确认记录' })).toBeVisible();
+    await menu.getByRole('link', { name: '运行追踪' }).click();
+    await expect(page).toHaveURL(/\/runs$/);
+    await expect(
+      page.getByRole('heading', { name: '运行追踪', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('table', { name: '运行列表' })).toHaveAttribute(
+      'aria-busy',
+      'false',
+    );
+    await expect(page.getByRole('group', { name: '运行状态' })).toBeVisible();
+    await expect(
+      page.getByRole('group', { name: '运行状态' }).getByRole('button'),
+    ).toHaveCount(9);
+    await expect(
+      page
+        .locator('.page-heading')
+        .getByRole('combobox', { name: 'Agent', exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole('group', { name: '运行状态' })
+      .getByRole('button', { name: '已完成', exact: true })
+      .click();
+    await expect(page).toHaveURL(/status=completed/);
+    await page
+      .getByRole('group', { name: '运行状态' })
+      .getByRole('button', { name: '全部', exact: true })
+      .click();
+    await page.reload();
+    await expect(page.getByRole('table', { name: '运行列表' })).toHaveAttribute(
+      'aria-busy',
+      'false',
+    );
+    const conversationLink = page
+      .getByRole('link', { name: /^筛选会话 / })
+      .first();
+    if (await conversationLink.count()) {
+      const conversationId = await conversationLink.getAttribute('title');
+      if (!conversationId) throw new Error('会话编号缺失');
+      await conversationLink.click();
+      await expect(page).toHaveURL(
+        new RegExp(`conversation_id=${encodeURIComponent(conversationId)}`),
+      );
+      await expect(
+        page.getByRole('table', { name: '运行列表' }),
+      ).toHaveAttribute('aria-busy', 'false');
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+    const runLink = page.getByRole('link', { name: /^查看运行 / }).first();
+    if (await runLink.count()) {
+      await runLink.click();
+      await expect(page).toHaveURL(/\/runs\/run_/);
+      await expect(page.getByText('运行信息', { exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+      const tree = page.getByRole('region', { name: '执行树' });
+      if (await tree.count()) {
+        await expect(
+          page.getByRole('article', { name: '节点详情' }),
+        ).toBeVisible();
+        const selected = tree.getByRole('button', { pressed: true });
+        await expect(selected).toHaveCount(1);
+        await selected.focus();
+        await selected.press('Enter');
+        await expect(page).toHaveURL(/span=spn_/);
+        const collapsed = tree.locator('button[aria-expanded="false"]').first();
+        if (await collapsed.count()) {
+          const childrenId = await collapsed.getAttribute('aria-controls');
+          if (!childrenId) throw new Error('执行节点折叠区域缺失');
+          await collapsed.focus();
+          await collapsed.press('Enter');
+          await expect(page.locator(`[id="${childrenId}"]`)).toBeVisible();
+        }
+        const child = tree.locator('.span-select').nth(1);
+        if (await child.count()) {
+          const name = await child.locator('[title]').getAttribute('title');
+          if (!name) throw new Error('执行节点名称缺失');
+          await child.focus();
+          await child.press('Enter');
+          await expect(
+            page
+              .getByRole('article', { name: '节点详情' })
+              .getByRole('heading', { name, exact: true }),
+          ).toBeVisible();
+        }
+      } else {
+        await expect(page.getByText(/没有执行树|尚无执行记录/)).toBeVisible();
+      }
+    }
     await menu.getByRole('link', { name: 'Agent', exact: true }).click();
     await expect(page).toHaveURL(/\/agents$/);
     await page.reload();

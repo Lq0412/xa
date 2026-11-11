@@ -23,6 +23,7 @@ type Engine interface {
 
 // RunContext 承载单次 run 的可变执行状态。
 type RunContext struct {
+	Tracer           *Tracer
 	mu               sync.Mutex
 	dbMu             sync.Mutex // 串行化同一对话事务内的 PG 写入，供并行只读工具批次使用
 	Tx               pgx.Tx     // Send 事务；非空时所有 run_messages / tool_results 须在同一事务内写入

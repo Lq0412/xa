@@ -6,7 +6,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useCallback } from 'react';
-import { useSearchParams } from 'umi';
+import { Link, useSearchParams } from 'umi';
 import {
   ApprovalStatus,
   approvalStatus,
@@ -304,18 +304,23 @@ export default function ApprovalsPage() {
                     {selected.conversation_id}
                   </dd>
                   <dt>轮次</dt>
-                  <dd className="font-mono text-xs">{selected.run_id}</dd>
+                  <dd className="font-mono text-xs">
+                    <Link
+                      to={`/runs/${encodeURIComponent(selected.run_id)}`}
+                      className="hover:underline"
+                    >
+                      {selected.run_id}
+                    </Link>
+                  </dd>
                 </dl>
               </details>
-              <button
-                type="button"
-                disabled
-                className="mt-6 flex items-center gap-2 text-xs text-zinc-400"
-                title="运行追踪即将上线"
+              <Link
+                to={`/runs/${encodeURIComponent(selected.run_id)}`}
+                className="mt-6 flex items-center gap-2 text-xs text-zinc-600 hover:text-zinc-950"
               >
                 查看这次运行
                 <ArrowUpRight size={14} />
-              </button>
+              </Link>
             </>
           ) : (
             <p className="empty-state">

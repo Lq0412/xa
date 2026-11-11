@@ -3,8 +3,10 @@ package runtime
 import (
 	"errors"
 	"linq-bs/server/internal/infra/provider"
+	"linq-bs/server/internal/tool"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 使用真实 Builder 校验顺序、空白跳过和历史原文保留，不替换任何依赖。
@@ -36,6 +38,31 @@ func TestBuilderOrderAndSkip(t *testing.T) {
 	}
 	if len(empty.Messages) != 1 || empty.Segments[0].Name != "current" {
 		t.Fatalf("空模块没有跳过: %+v", empty)
+	}
+}
+
+// Observer 检查观察分段与 Builder 的最终结果一致，空白段不触发回调。
+func TestBuilderObserver(t *testing.T) {
+	var observed []Segment
+	var slots []string
+	builder := Builder{Tools: Tools{Toolset: tool.Toolset{Entries: []tool.Entry{{Enabled: true, Spec: tool.Spec{Name: "current_time", Title: "当前时间", Available: true, Description: "查询当前时间。"}}}}}, Observer: func(slot string, segment Segment, elapsed time.Duration) {
+		if elapsed < 0 {
+			t.Fatal("耗时为负")
+		}
+		slots = append(slots, slot)
+		observed = append(observed, segment)
+	}}
+	result, err := builder.Build(t.Context(), Input{PlatformRules: "规则", SoulMD: " ", Current: "问题", History: []provider.Message{{Role: "assistant", Content: "历史"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != len(result.Segments) {
+		t.Fatal("观察数量不符", len(observed), len(result.Segments))
+	}
+	for i, segment := range observed {
+		if segment.Name != result.Segments[i].Name || segment.EstimatedTokens != result.Segments[i].EstimatedTokens || slots[i] != segment.Name {
+			t.Fatal("观察到非最终分段", segment)
+		}
 	}
 }
 
