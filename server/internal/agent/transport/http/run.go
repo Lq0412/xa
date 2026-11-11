@@ -38,6 +38,15 @@ func (h *RunHandler) Events(w http.ResponseWriter, r *http.Request) {
 			after = v
 		}
 	}
+	// 先校验所有者，再开始 SSE；没有新事件的审批连接也应立即确认已连接。
+	if h.Conversations == nil || h.Conversations.Runs == nil {
+		frameworkhttp.WriteError(w, r, 500, "run_unavailable", fmt.Errorf("RunService 未配置"))
+		return
+	}
+	if _, err := h.Conversations.Runs.QueryRun(r.Context(), p, runID, false); err != nil {
+		conversationError(w, r, err)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
@@ -45,6 +54,9 @@ func (h *RunHandler) Events(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		frameworkhttp.WriteError(w, r, 500, "stream_unsupported", fmt.Errorf("不支持流式响应"))
+		return
+	}
+	if err := run.WriteSSEPing(w, flusher); err != nil {
 		return
 	}
 	err := h.Conversations.SubscribeRun(r.Context(), p, runID, conversation.StreamSendOptions{

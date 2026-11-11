@@ -146,6 +146,21 @@ test('收据保留批准范围，拒绝、超时和取消各有文案', () => {
     );
 });
 
+test('历史审批没有展示条目时仍能渲染工具收据', () => {
+  const tool = {
+    ...forget,
+    name: 'current_time',
+    title: '当前时间',
+    approval: {
+      ...forget.approval,
+      items: null,
+      decision: 'approved' as const,
+    },
+  };
+  assert.equal(approvalReceipt(tool), '已允许本次');
+  assert.deepEqual(approvalCopy(tool).detailItems, []);
+});
+
 test('倒计时不足两分钟才显示，待确认按时间排队', () => {
   const expiresAt = forget.approval.expires_at;
   const expiry = Date.parse(expiresAt);

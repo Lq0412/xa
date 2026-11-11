@@ -1,5 +1,7 @@
-import { ParseError } from 'eventsource-parser';
-import { EventSourceParserStream } from 'eventsource-parser/stream';
+import {
+  type EventSourceMessage,
+  EventSourceParserStream,
+} from 'eventsource-parser/stream';
 import type { ApprovalInfo, MessagePart } from './chat-parts';
 import { applyRunEvent, type RunStreamEvent } from './chat-run';
 import { ApiError, fetchApi, request } from './http';
@@ -134,209 +136,243 @@ export const listMessages = (
   }>(
     `/conversations/${encodeURIComponent(id)}/messages?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
     { signal },
-  );
+  ).then((page) => ({
+    ...page,
+    // 持久化消息沿用 failed，主动取消在界面上显示为已停止。
+    messages: (page.messages ?? []).map((message) =>
+      message.status === 'failed' && message.error === '已停止生成'
+        ? { ...message, status: 'stopped' as const }
+        : message,
+    ),
+  }));
 
-/** 用标准 SSE 解析器处理分片；只有 done 事件代表完整成功。 */
-export async function streamMessage(
-  id: string,
-  content: string,
-  signal: AbortSignal,
-  onDelta: (value: string) => void,
-): Promise<string> {
-  const cleanup = new AbortController();
-  const response = await fetchApi(
-    `/conversations/${encodeURIComponent(id)}/messages`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ content }),
-      signal: AbortSignal.any([signal, cleanup.signal]),
-    },
-  );
+/** 事件去重后，分别通知消息内容、run 标识和记忆变更。 */
+export type StreamRunHandlers = {
+  onParts: (parts: MessagePart[], content: string) => void;
+  onRunID?: (runId: string, userMessageId?: string) => void;
+  onMemoryUpdated?: () => void;
+};
+
+/** 三类终态都已写入历史，可用消息 ID 合并服务端记录。 */
+export type StreamRunResult = {
+  runId: string;
+  messageId?: string;
+  status: 'completed' | 'failed' | 'stopped';
+  error?: string;
+};
+
+function readSseFrames(response: Response, onComment: () => void) {
   if (
     !response.body ||
     !response.headers.get('content-type')?.includes('text/event-stream')
   )
     throw new ApiError(502, '服务未返回有效的消息流');
-  const reader = response.body
+  return response.body
     .pipeThrough(new TextDecoderStream())
-    .pipeThrough(
-      new EventSourceParserStream({
-        onError: () => {
-          /* 分片中间态由解析器自行恢复 */
-        },
-      }),
-    )
+    .pipeThrough(new EventSourceParserStream({ onComment }))
     .getReader();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done)
-        throw new ApiError(502, '回复连接提前结束，请重新加载记录确认结果');
-      const data = JSON.parse(value.data);
-      if (value.event === 'error')
-        throw new ApiError(502, data.message || '生成回复失败');
-      if (value.event === 'delta') {
-        if (typeof data.delta !== 'string')
-          throw new ApiError(502, '回复内容格式无效');
-        onDelta(data.delta);
-      } else if (value.event === 'done') {
-        if (typeof data.message_id !== 'string')
-          throw new ApiError(502, '回复缺少消息标识');
-        return data.message_id;
-      }
-    }
-  } catch (cause) {
-    if (cause instanceof SyntaxError || cause instanceof ParseError)
-      throw new ApiError(502, '回复数据格式无效，请重新加载记录确认结果');
-    throw cause;
-  } finally {
-    cleanup.abort();
-    reader.releaseLock();
-  }
 }
 
-export type StreamRunHandlers = {
-  onParts: (parts: MessagePart[], content: string) => void;
-  onRunID?: (runId: string) => void;
-};
-
-type SseFrame = { event: string; data: string };
-
-async function* readSseFrames(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<SseFrame> {
-  const reader = (body as ReadableStream<Uint8Array<ArrayBuffer>>)
-    .pipeThrough(new TextDecoderStream())
-    .getReader();
-  let buf = '';
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += value;
-      for (;;) {
-        const sep = buf.indexOf('\n\n');
-        if (sep < 0) break;
-        const block = buf.slice(0, sep);
-        buf = buf.slice(sep + 2);
-        if (block.startsWith(':')) continue;
-        let event = '';
-        let data = '';
-        for (const line of block.split('\n')) {
-          if (line.startsWith('event:')) event = line.slice(6).trim();
-          else if (line.startsWith('data:')) data += line.slice(5).trim();
-        }
-        if (data) yield { event, data };
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-/** SSE v2：X-XA-Stream: 2，支持取消与续传由调用方处理 run_id。 */
-export async function streamRun(
+/** 首帧前断线使用相同的幂等键重试，收到 run ID 后只订阅已有 run。 */
+export function streamRun(
   conversationId: string,
   content: string,
   signal: AbortSignal,
   handlers: StreamRunHandlers,
-  opts?: { idempotencyKey?: string; afterSeq?: number },
-): Promise<{ messageId?: string; runId?: string }> {
-  const headers: Record<string, string> = { 'X-XA-Stream': '2' };
-  if (opts?.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
-  if (opts?.afterSeq != null && opts.afterSeq > 0)
-    headers['Last-Event-ID'] = String(opts.afterSeq);
-  const response = await fetchApi(
-    `/conversations/${encodeURIComponent(conversationId)}/messages`,
-    {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ content }),
-      signal,
-    },
+  idempotencyKey: string,
+) {
+  return followRun(signal, handlers, (runId, afterSeq, requestSignal) =>
+    runId
+      ? fetchRunEvents(runId, afterSeq, requestSignal)
+      : fetchApi(
+          `/conversations/${encodeURIComponent(conversationId)}/messages`,
+          {
+            method: 'POST',
+            headers: { 'X-XA-Stream': '2', 'Idempotency-Key': idempotencyKey },
+            body: JSON.stringify({ content }),
+            signal: requestSignal,
+          },
+        ),
   );
-  return followRun(response, signal, handlers);
 }
 
-/** 收到 run ID 后只续订事件，断线时保留已渲染的状态与事件序号。 */
+function waitForRetry(delay: number, signal: AbortSignal) {
+  signal.throwIfAborted();
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, delay);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function parseRunEvent(
+  data: string,
+  event?: string,
+): RunStreamEvent & { run_id: string } {
+  const invalid = '回复数据格式无效';
+  let value: Partial<RunStreamEvent> | null;
+  try {
+    value = JSON.parse(data);
+  } catch (cause) {
+    if (cause instanceof SyntaxError) throw new ApiError(502, invalid);
+    throw cause;
+  }
+  if (event === 'error') {
+    throw new ApiError(502, String(value?.message || '生成回复失败'));
+  }
+  if (
+    typeof value?.seq !== 'number' ||
+    !Number.isSafeInteger(value.seq) ||
+    value.seq <= 0 ||
+    typeof value.run_id !== 'string' ||
+    !value.run_id ||
+    typeof value.type !== 'string' ||
+    (event && value.type !== event)
+  )
+    throw new ApiError(502, invalid);
+  return { ...value, seq: value.seq, run_id: value.run_id, type: value.type };
+}
+
+/** 重放沿用已有 parts 和序号，连接恢复后才清除退避窗口。 */
 async function followRun(
-  firstResponse: Response,
   signal: AbortSignal,
   handlers: StreamRunHandlers,
+  open: (
+    runId: string,
+    afterSeq: number,
+    signal: AbortSignal,
+  ) => Promise<Response>,
   runId = '',
-  afterSeq = 0,
-): Promise<{ messageId?: string; runId?: string }> {
-  let response = firstResponse;
+): Promise<StreamRunResult> {
+  let afterSeq = 0;
   let parts: MessagePart[] = [];
-  let contentText = '';
-  let reconnectUntil = 0;
+  let content = '';
+  let retryUntil = 0;
+  let retryDelay = 1000;
   for (;;) {
-    if (
-      !response.body ||
-      !response.headers.get('content-type')?.includes('text/event-stream')
-    )
-      throw new ApiError(502, '服务未返回有效的消息流');
-    try {
-      for await (const frame of readSseFrames(response.body)) {
-        const ev = JSON.parse(frame.data) as RunStreamEvent;
-        if (frame.event === 'error')
-          throw new ApiError(502, String(ev.message ?? '生成失败'));
-        if (ev.seq <= afterSeq) continue;
-        afterSeq = ev.seq;
-        reconnectUntil = 0;
-        const typ = String(frame.event || ev.type || '');
-        if (!runId && typeof ev.run_id === 'string') {
-          runId = ev.run_id;
-          handlers.onRunID?.(runId);
-        }
-        if (typ === 'message.delta') contentText += String(ev.delta ?? '');
-        parts = applyRunEvent(parts, { ...ev, type: typ });
-        handlers.onParts(parts, contentText);
-        if (typ === 'run.completed')
-          return { messageId: String(ev.message_id ?? ''), runId };
-        if (typ === 'run.failed' || typ === 'run.cancelled')
-          throw new ApiError(502, String(ev.message ?? '生成失败'));
-      }
-    } catch (cause) {
-      if (!(cause instanceof TypeError) || signal.aborted || !runId)
-        throw cause;
-    }
-    if (!runId) throw new ApiError(502, '消息流提前结束，请重新加载会话');
-    reconnectUntil ||= Date.now() + 30000;
-    for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+    const connection = new AbortController();
+    const requestSignal = AbortSignal.any([signal, connection.signal]);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let stable: ReturnType<typeof setTimeout> | undefined;
+    let reader: ReadableStreamDefaultReader<EventSourceMessage> | undefined;
+    const connected = () => {
+      retryUntil = 0;
+      retryDelay = 1000;
+      clearTimeout(deadline);
+      clearTimeout(stable);
+    };
+    const onComment = () => {
+      if (!retryUntil) return;
+      // 审批等待期间可能只有 ping，连接保持一秒后才重置重连窗口。
+      clearTimeout(deadline);
+      stable ??= setTimeout(connected, 1000);
+    };
+    const checkAbort = () => {
       signal.throwIfAborted();
-      if (Date.now() >= reconnectUntil)
-        throw new ApiError(502, '无法恢复连接，请重新加载会话');
+      if (connection.signal.aborted) throw new ApiError(502, '连接中断');
+    };
+    try {
+      if (retryUntil) {
+        await waitForRetry(
+          Math.min(retryDelay, retryUntil - performance.now()),
+          signal,
+        );
+        const remaining = retryUntil - performance.now();
+        if (remaining <= 0) throw new ApiError(502, '连接中断');
+        deadline = setTimeout(() => connection.abort(), remaining);
+        retryDelay = Math.min(retryDelay * 2, 4000);
+      }
+      let response: Response;
       try {
-        response = await fetchRunEvents(runId, afterSeq, signal);
-        break;
+        response = await open(runId, afterSeq, requestSignal);
       } catch (cause) {
+        checkAbort();
         if (
           !(cause instanceof TypeError) &&
           !(cause instanceof ApiError && cause.status >= 500)
         )
           throw cause;
+        retryUntil ||= performance.now() + 30000;
+        continue;
       }
+      reader = readSseFrames(response, onComment);
+      for (;;) {
+        let frame: EventSourceMessage;
+        try {
+          const { value, done } = await reader.read();
+          if (done) break;
+          frame = value;
+        } catch (cause) {
+          checkAbort();
+          if (!(cause instanceof TypeError)) throw cause;
+          break;
+        }
+        const ev = parseRunEvent(frame.data, frame.event);
+        if (runId && ev.run_id !== runId)
+          throw new ApiError(502, '回复的运行标识不一致');
+        if (ev.seq <= afterSeq) continue;
+        afterSeq = ev.seq;
+        connected();
+        if (!runId) {
+          runId = ev.run_id;
+          const userMessageId =
+            typeof ev.user_message_id === 'string'
+              ? ev.user_message_id
+              : undefined;
+          handlers.onRunID?.(runId, userMessageId);
+        }
+        if (ev.type === 'memory.updated') handlers.onMemoryUpdated?.();
+        if (ev.type === 'message.delta') content += String(ev.delta ?? '');
+        parts = applyRunEvent(parts, ev);
+        handlers.onParts(parts, content);
+        const messageId =
+          typeof ev.message_id === 'string' ? ev.message_id : undefined;
+        if (ev.type === 'run.completed')
+          return { messageId, runId, status: 'completed' };
+        if (ev.type === 'run.cancelled')
+          return { messageId, runId, status: 'stopped' };
+        if (ev.type === 'run.failed')
+          return {
+            messageId,
+            runId,
+            status: 'failed',
+            error: String(ev.message || '生成回复失败'),
+          };
+      }
+    } finally {
+      clearTimeout(deadline);
+      clearTimeout(stable);
+      connection.abort();
+      reader?.releaseLock();
     }
+    retryUntil ||= performance.now() + 30000;
   }
 }
 
-export async function cancelRun(runId: string, signal?: AbortSignal) {
-  await fetchApi(`/runs/${encodeURIComponent(runId)}/cancel`, {
-    method: 'POST',
-    signal,
-  });
+/** 服务端已终止的 run 返回原终态，仍在执行的 run 返回 cancelling。 */
+export function cancelRun(runId: string, signal?: AbortSignal) {
+  return request<{ status: string }>(
+    `/runs/${encodeURIComponent(runId)}/cancel`,
+    {
+      method: 'POST',
+      signal,
+    },
+  );
 }
 
-export async function resumeRun(
+/** 刷新后从头重放，补齐尚未保存到历史的消息过程。 */
+export function resumeRun(
   runId: string,
-  afterSeq: number,
   signal: AbortSignal,
   handlers: StreamRunHandlers,
 ) {
-  const response = await fetchRunEvents(runId, afterSeq, signal);
-  return followRun(response, signal, handlers, runId, afterSeq);
+  return followRun(signal, handlers, fetchRunEvents, runId);
 }
 
 function fetchRunEvents(runId: string, afterSeq: number, signal: AbortSignal) {

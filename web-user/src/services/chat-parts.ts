@@ -10,6 +10,7 @@ export type ReasoningPart = {
 export type ToolPart = {
   type: 'tool';
   call_id?: string;
+  step?: number;
   index?: number;
   name: string;
   title: string;
@@ -36,7 +37,7 @@ export type ApprovalInfo = {
   approval_id: string;
   expires_at: string;
   summary?: string;
-  items?: { label: string; value: string }[];
+  items?: { label: string; value: string }[] | null;
   can_remember_agent?: boolean;
   decision?: 'approved' | 'rejected' | 'expired' | 'cancelled';
   remember?: 'once' | 'conversation' | 'agent';

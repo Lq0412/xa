@@ -21,9 +21,12 @@ func WriteSSEEnvelope(w http.ResponseWriter, flusher http.Flusher, ev StoredEven
 }
 
 // WriteSSEPing 发送心跳。
-func WriteSSEPing(w http.ResponseWriter, flusher http.Flusher) {
-	fmt.Fprintf(w, ": ping\n\n")
+func WriteSSEPing(w http.ResponseWriter, flusher http.Flusher) error {
+	if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+		return err
+	}
 	flusher.Flush()
+	return nil
 }
 
 // V1Project 将 v2 信封投影为 v1 SSE。

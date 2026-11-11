@@ -12,6 +12,7 @@ import {
   listMessages,
   mergeMessagePartsFromLocal,
   resumeRun,
+  type StreamRunResult,
   streamRun,
 } from '@/services/chat';
 import { applyRunEvent } from '@/services/chat-run';
@@ -49,6 +50,95 @@ const emptySession: Session = {
   olderError: '',
 };
 
+type ActiveTurn = {
+  controller: AbortController;
+  assistantId: string;
+  runId?: string;
+  stopRequested?: boolean;
+  finished?: boolean;
+};
+
+/** 停止时立即收起仍在进行的思考和工具，保留已有正文及执行结果。 */
+function stopMessage(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    status: 'stopped',
+    parts: message.parts?.map((part) => {
+      if (part.type === 'reasoning' && part.status === 'streaming')
+        return { ...part, status: 'stopped' };
+      if (
+        part.type === 'tool' &&
+        (part.status === 'preparing' ||
+          part.status === 'pending' ||
+          part.status === 'running' ||
+          part.status === 'awaiting_approval')
+      )
+        return {
+          ...part,
+          status: 'cancelled',
+          approval: part.approval
+            ? { ...part.approval, decision: 'cancelled' }
+            : undefined,
+        };
+      return part;
+    }),
+  };
+}
+
+/** 最新一页替换对应的本地消息，已加载的旧页和本轮思考正文继续保留。 */
+function mergeRunHistory(
+  state: Session,
+  page: Awaited<ReturnType<typeof listMessages>>,
+  localUserId?: string,
+): Partial<Session> {
+  const latest = page.messages.map((message) => {
+    const local = state.messages.find(
+      (item) =>
+        item.id === message.id ||
+        (message.role === 'assistant' &&
+          message.run_id &&
+          item.run_id === message.run_id &&
+          item.role === 'assistant'),
+    );
+    if (message.parts?.length)
+      return mergeMessagePartsFromLocal(message, local);
+    if (local?.parts?.length)
+      return {
+        ...message,
+        parts: local.parts,
+        content: message.content || local.content,
+      };
+    return message;
+  });
+  const ids = new Set(latest.map((message) => message.id));
+  const savedRuns = new Set(
+    latest
+      .filter((message) => message.role === 'assistant' && message.run_id)
+      .map((message) => message.run_id),
+  );
+  const keepLocal = (message: ChatMessage) =>
+    !ids.has(message.id) &&
+    message.id !== localUserId &&
+    !(
+      message.role === 'assistant' &&
+      message.run_id &&
+      savedRuns.has(message.run_id)
+    );
+  const firstLatest = state.messages.findIndex((message) =>
+    ids.has(message.id),
+  );
+  const split = firstLatest < 0 ? state.messages.length : firstLatest;
+  const older = state.messages.slice(0, split).filter(keepLocal);
+  // 进行中的本地回复还没有历史记录，重试最新页时保留它原来的末尾位置。
+  const local = state.messages.slice(split).filter(keepLocal);
+  const keepCursor = firstLatest > 0 && older.length > 0;
+  return {
+    messages: [...older, ...latest, ...local],
+    hasMore: keepCursor ? state.hasMore : page.has_more,
+    before: keepCursor ? state.before : page.before,
+  };
+}
+
 /** 状态层协调真实历史和生成过程，组件只消费当前会话的快照。 */
 export function useChatSession(search: string, defaultAgent?: Agent) {
   const params = new URLSearchParams(search);
@@ -69,7 +159,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     seq: 0,
   });
   const controllers = useRef(new Map<string, AbortController>());
-  const activeRuns = useRef(new Map<string, string>());
+  const turns = useRef(new Map<string, ActiveTurn>());
   const mounted = useRef(true);
 
   const update = useCallback(
@@ -90,6 +180,73 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     [],
   );
 
+  const emitMemoryCue = useCallback(
+    (agentId: string, reason: NonNullable<MemoryCue['reason']>) => {
+      if (!mounted.current) return;
+      setMemoryCue((cue) => {
+        const seq = cue.seq + 1;
+        return {
+          ...cue,
+          agentId,
+          seq,
+          reason,
+          ...(reason === 'memory_updated'
+            ? { memoryUpdateSeq: seq }
+            : { turnCompleted: { agentId, seq } }),
+        };
+      });
+    },
+    [],
+  );
+
+  const cancelTurn = useCallback(
+    async (targetKey: string, turn: ActiveTurn) => {
+      if (!turn.runId || turn.finished) return;
+      try {
+        // 202 只表示后端收到取消请求。继续订阅，等终态写入后再开放输入。
+        await cancelRun(turn.runId, turn.controller.signal);
+      } catch (cause) {
+        if (!turn.controller.signal.aborted && !turn.finished) {
+          turn.stopRequested = false;
+          update(targetKey, { sendError: errorMessage(cause) });
+        }
+      }
+    },
+    [update],
+  );
+
+  const finishTurn = useCallback(
+    async (
+      targetKey: string,
+      convId: string,
+      turn: ActiveTurn,
+      result: StreamRunResult,
+      agentId: string,
+      localUserId?: string,
+    ) => {
+      turn.finished = true;
+      if (result.status === 'completed')
+        emitMemoryCue(agentId, 'turn_completed');
+      update(targetKey, (state) => ({
+        sendError: result.error ?? '',
+        messages: state.messages.map((message) => {
+          if (message.id !== turn.assistantId) return message;
+          const saved = {
+            ...message,
+            id: result.messageId || message.id,
+            run_id: result.runId,
+            status: result.status,
+            error: result.error,
+          };
+          return result.status === 'stopped' ? stopMessage(saved) : saved;
+        }),
+      }));
+      const page = await listMessages(convId, turn.controller.signal);
+      update(targetKey, (state) => mergeRunHistory(state, page, localUserId));
+    },
+    [emitMemoryCue, update],
+  );
+
   const resumeActiveRun = useCallback(
     async (
       convId: string,
@@ -99,7 +256,18 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     ) => {
       if (active.status !== 'running' && active.status !== 'waiting_approval')
         return;
-      const assistantId = `resume-${active.id}`;
+      if (turns.current.has(targetKey)) return;
+      const messages = cache.current.get(targetKey)?.messages ?? [];
+      const existing = messages.find(
+        (message) =>
+          message.role === 'assistant' && message.run_id === active.id,
+      );
+      const last = messages.at(-1);
+      const pending =
+        last?.role === 'assistant' && last.status === 'pending' && !last.run_id
+          ? last
+          : undefined;
+      const assistantId = existing?.id ?? pending?.id ?? `resume-${active.id}`;
       const fallbackParts = (active.pending_approvals ?? []).reduce(
         (parts, approval) =>
           applyRunEvent(parts, {
@@ -110,44 +278,44 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         [] as NonNullable<ChatMessage['parts']>,
       );
       const controller = new AbortController();
-      controllers.current.set(`resume:${targetKey}`, controller);
-      update(targetKey, (state) => {
-        if (state.messages.some((m) => m.run_id === active.id)) {
-          return { messages: state.messages, sending: true };
-        }
-        const lastIdx = state.messages.length - 1;
-        const last = state.messages[lastIdx];
-        if (
-          last?.role === 'assistant' &&
-          last.status === 'pending' &&
-          !last.run_id
-        ) {
-          return {
-            messages: state.messages.map((m, i) =>
-              i === lastIdx ? { ...m, run_id: active.id } : m,
-            ),
-            sending: true,
-          };
-        }
-        return {
-          messages: [
-            ...state.messages,
-            {
-              id: assistantId,
-              conversation_id: convId,
-              role: 'assistant' as const,
-              content: '',
-              status: 'pending' as const,
-              run_id: active.id,
-              parts: fallbackParts,
-            },
-          ],
-          sending: true,
-        };
-      });
-      activeRuns.current.set(targetKey, active.id);
+      const turn = {
+        assistantId,
+        controller,
+        runId: active.id,
+      } satisfies ActiveTurn;
+      turns.current.set(targetKey, turn);
+      update(targetKey, (state) => ({
+        sending: true,
+        messages:
+          existing || pending
+            ? state.messages.map((message) =>
+                message.id === assistantId
+                  ? {
+                      ...message,
+                      status: 'pending',
+                      run_id: active.id,
+                      parts: fallbackParts.length
+                        ? fallbackParts
+                        : message.parts,
+                    }
+                  : message,
+              )
+            : [
+                ...state.messages,
+                {
+                  id: assistantId,
+                  conversation_id: convId,
+                  role: 'assistant',
+                  content: '',
+                  status: 'pending',
+                  run_id: active.id,
+                  parts: fallbackParts,
+                },
+              ],
+      }));
       try {
-        await resumeRun(active.id, 0, controller.signal, {
+        const result = await resumeRun(active.id, controller.signal, {
+          onMemoryUpdated: () => emitMemoryCue(agentId, 'memory_updated'),
           onParts: (parts, content) => {
             // 服务端快照可先显示按钮，重放事件仍按原始顺序构建时间线。
             const restored = (active.pending_approvals ?? []).reduce(
@@ -171,61 +339,46 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
             );
             update(targetKey, (state) => ({
               messages: state.messages.map((message) =>
-                message.id === assistantId ||
-                (message.role === 'assistant' && message.run_id === active.id)
+                message.id === assistantId
                   ? { ...message, content, parts: restored, run_id: active.id }
                   : message,
               ),
             }));
           },
         });
-        setMemoryCue((cue) => ({ agentId, seq: cue.seq + 1 }));
-        const historyPage = await listMessages(convId, controller.signal);
-        update(targetKey, (state) => {
-          const latest = (historyPage.messages ?? []).map((message) => {
-            const local = state.messages.find(
-              (item) =>
-                item.id === message.id ||
-                (message.role === 'assistant' &&
-                  message.run_id === active.id &&
-                  item.id === assistantId),
-            );
-            if (message.parts?.length)
-              return mergeMessagePartsFromLocal(message, local);
-            if (local?.parts?.length)
-              return {
-                ...message,
-                parts: local.parts,
-                content: message.content || local.content,
-              };
-            return message;
-          });
-          return {
-            messages: latest.length ? latest : state.messages,
-            hasMore: historyPage.has_more,
-            before: historyPage.before,
-          };
-        });
+        await finishTurn(targetKey, convId, turn, result, agentId);
       } catch (cause) {
         if (!controller.signal.aborted) {
-          update(targetKey, { sendError: errorMessage(cause) });
+          const error = errorMessage(cause);
+          update(targetKey, (state) => ({
+            sendError: error,
+            messages: state.messages.map((message) =>
+              message.id === assistantId && message.status === 'pending'
+                ? { ...message, status: 'failed', error }
+                : message,
+            ),
+          }));
         }
       } finally {
-        update(targetKey, { sending: false });
-        controllers.current.delete(`resume:${targetKey}`);
-        activeRuns.current.delete(targetKey);
+        if (turns.current.get(targetKey) === turn) {
+          turns.current.delete(targetKey);
+          update(targetKey, { sending: false });
+        }
       }
     },
-    [update],
+    [emitMemoryCue, finishTurn, update],
   );
 
   useEffect(() => {
     mounted.current = true;
     const requests = controllers.current;
+    const streams = turns.current;
     return () => {
       mounted.current = false;
       for (const request of requests.values()) request.abort();
       requests.clear();
+      for (const turn of streams.values()) turn.controller.abort();
+      streams.clear();
     };
   }, []);
 
@@ -292,7 +445,10 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     if (!targetAgent) return;
     const controller = new AbortController();
     controllers.current.set(`load:${key}`, controller);
-    update(key, { loading: true, loadError: '' });
+    // 最新一页会重算游标，上一页的在途请求不能再更新同一会话。
+    controllers.current.get(`older:${key}`)?.abort();
+    controllers.current.delete(`older:${key}`);
+    update(key, { loading: true, loadingOlder: false, loadError: '' });
     try {
       const [agent, result] = await Promise.all([
         getAgent(targetAgent, controller.signal),
@@ -305,15 +461,13 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
               active_run: undefined,
             }),
       ]);
-      update(key, {
+      update(key, (state) => ({
+        ...mergeRunHistory(state, result),
         agent,
-        messages: result.messages ?? [],
-        hasMore: Boolean(result.has_more),
-        before: result.before,
         olderError: '',
         loaded: true,
         sendError: '',
-      });
+      }));
       if (conversationID && result.active_run) {
         void resumeActiveRun(
           conversationID,
@@ -371,16 +525,21 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
       )
     )
       return;
+    // 浏览器已知离线时保留草稿，不创建会话或发起运行。
+    if (!navigator.onLine) {
+      update(key, { sendError: '无法连接服务，请检查网络后重试' });
+      return;
+    }
     const controller = new AbortController();
     const turnAgentID = current.agent.id;
     let targetKey = key;
-    controllers.current.set(`send:${key}`, controller);
+    const assistantID = `local-assistant-${crypto.randomUUID()}`;
+    const turn: ActiveTurn = { assistantId: assistantID, controller };
+    turns.current.set(key, turn);
     // 同步更新缓存，连续按 Enter 也只能发起一次请求。
     update(key, { sending: true, creating: !conversationID, sendError: '' });
-    const assistantID = `local-assistant-${crypto.randomUUID()}`;
     const localUserID = `local-user-${crypto.randomUUID()}`;
     let submitted = false;
-    let completed = false;
     try {
       let id = conversationID;
       if (!id) {
@@ -402,8 +561,8 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
           creating: false,
         });
         update(key, { sending: false, creating: false, draft: '' });
-        controllers.current.delete(`send:${key}`);
-        controllers.current.set(`send:${targetKey}`, controller);
+        turns.current.delete(key);
+        turns.current.set(targetKey, turn);
         setConversations((items) => [
           created,
           ...items.filter((item) => item.id !== created.id),
@@ -453,9 +612,20 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         text,
         controller.signal,
         {
-          onRunID: (runId) => {
-            activeRuns.current.set(targetKey, runId);
+          onRunID: (runId, userMessageId) => {
+            turn.runId = runId;
+            update(targetKey, (state) => ({
+              messages: state.messages.map((message) => {
+                if (message.id === assistantID)
+                  return { ...message, run_id: runId };
+                if (message.id === localUserID && userMessageId)
+                  return { ...message, id: userMessageId };
+                return message;
+              }),
+            }));
+            if (turn.stopRequested) void cancelTurn(targetKey, turn);
           },
+          onMemoryUpdated: () => emitMemoryCue(turnAgentID, 'memory_updated'),
           onParts: (parts, content) => {
             update(targetKey, (state) => ({
               messages: state.messages.map((message) =>
@@ -466,71 +636,30 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
             }));
           },
         },
-        { idempotencyKey },
+        idempotencyKey,
       );
-      const savedID = result.messageId ?? assistantID;
-      completed = true;
-      // 抽取在回复落库后异步进行，详情栏稍后自己刷新一次。
-      setMemoryCue((cue) => ({ agentId: turnAgentID, seq: cue.seq + 1 }));
-      update(targetKey, (state) => ({
-        messages: state.messages.map((message) =>
-          message.id === assistantID
-            ? { ...message, id: savedID, status: 'completed' }
-            : message,
-        ),
-      }));
-      const historyPage = await listMessages(id, controller.signal);
-      update(targetKey, (state) => {
-        const latest = (historyPage.messages ?? []).map((message) => {
-          const local = state.messages.find(
-            (item) =>
-              item.id === message.id ||
-              (message.id === savedID && item.id === assistantID),
-          );
-          if (message.parts?.length)
-            return mergeMessagePartsFromLocal(message, local);
-          if (local?.parts?.length)
-            return {
-              ...message,
-              parts: local.parts,
-              content: message.content || local.content,
-            };
-          return message;
-        });
-        const ids = new Set(latest.map((item) => item.id));
-        const older = state.messages.filter(
-          (item) =>
-            !ids.has(item.id) &&
-            item.id !== localUserID &&
-            item.id !== assistantID &&
-            item.id !== savedID,
-        );
-        return {
-          messages: [...older, ...latest],
-          hasMore: older.length ? state.hasMore : historyPage.has_more,
-          before: older.length ? state.before : historyPage.before,
-        };
-      });
+      await finishTurn(targetKey, id, turn, result, turnAgentID, localUserID);
     } catch (cause) {
-      const stopped = controller.signal.aborted;
-      const message = stopped ? '已停止生成' : errorMessage(cause);
+      if (controller.signal.aborted) return;
+      const message = errorMessage(cause);
       update(targetKey, (state) => ({
-        sendError: stopped ? '' : message,
+        sendError: message,
         draft: submitted ? state.draft : text,
         messages: state.messages.map((item) =>
-          item.id === assistantID && !completed
+          item.id === assistantID && item.status === 'pending'
             ? {
                 ...item,
-                status: stopped ? 'stopped' : 'failed',
+                status: 'failed',
                 error: message,
               }
             : item,
         ),
       }));
     } finally {
-      update(targetKey, { sending: false, creating: false });
-      controllers.current.delete(`send:${targetKey}`);
-      activeRuns.current.delete(targetKey);
+      if (turns.current.get(targetKey) === turn) {
+        turns.current.delete(targetKey);
+        update(targetKey, { sending: false, creating: false });
+      }
     }
   };
 
@@ -545,6 +674,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     if (
       !conversationID ||
       !state.hasMore ||
+      state.loading ||
       state.loadingOlder ||
       !state.before
     )
@@ -558,17 +688,26 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
         controller.signal,
         state.before,
       );
-      update(key, (latest) => ({
-        messages: [...(result.messages ?? []), ...latest.messages],
-        hasMore: Boolean(result.has_more),
-        before: result.before,
-      }));
+      if (controller.signal.aborted) return;
+      update(key, (latest) => {
+        const known = new Set(latest.messages.map((message) => message.id));
+        return {
+          messages: [
+            ...result.messages.filter((message) => !known.has(message.id)),
+            ...latest.messages,
+          ],
+          hasMore: Boolean(result.has_more),
+          before: result.before,
+        };
+      });
     } catch (cause) {
       if (!controller.signal.aborted)
         update(key, { olderError: errorMessage(cause) });
     } finally {
-      update(key, { loadingOlder: false });
-      controllers.current.delete(`older:${key}`);
+      if (controllers.current.get(`older:${key}`) === controller) {
+        controllers.current.delete(`older:${key}`);
+        update(key, { loadingOlder: false });
+      }
     }
   };
 
@@ -595,39 +734,11 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
     },
     send,
     stop: async () => {
-      const runId = activeRuns.current.get(key);
-      try {
-        if (runId) await cancelRun(runId);
-      } catch (cause) {
-        update(key, { sendError: errorMessage(cause) });
-        return;
-      }
-      controllers.current.get(`send:${key}`)?.abort();
-      controllers.current.get(`resume:${key}`)?.abort();
-      update(key, (state) => ({
-        sending: false,
-        messages: state.messages.map((message) =>
-          message.status === 'pending'
-            ? {
-                ...message,
-                status: 'stopped',
-                parts: message.parts?.map((part) =>
-                  part.type === 'tool' &&
-                  (part.status === 'awaiting_approval' ||
-                    part.status === 'pending')
-                    ? {
-                        ...part,
-                        status: 'cancelled',
-                        approval: part.approval
-                          ? { ...part.approval, decision: 'cancelled' }
-                          : undefined,
-                      }
-                    : part,
-                ),
-              }
-            : message,
-        ),
-      }));
+      const turn = turns.current.get(key);
+      if (!turn || turn.stopRequested || turn.finished) return;
+      // 首帧还未携带 run ID 时，保持订阅并在收到 ID 后取消。
+      turn.stopRequested = true;
+      await cancelTurn(key, turn);
     },
     setDraft: (draft: string) => update(key, { draft }),
     retry: () => void load(),

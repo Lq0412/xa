@@ -79,15 +79,28 @@ func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *
 		rc.Emitter, rc.Bus = sink, bus
 		rc.WallStarted = time.Now().Add(-time.Duration(rc.Run.ActiveMS) * time.Millisecond)
 	}
+	// run 已写入数据库，启动期间收到取消也需要初始化追踪后写入终态。
+	startupCtx, stopStartup := context.WithTimeout(context.WithoutCancel(runCtx), 10*time.Second)
+	defer stopStartup()
 	if rc.Tracer == nil {
-		stored, err := s.Store.GetRun(runCtx, runID)
+		stored, err := s.Store.GetRun(startupCtx, runID)
 		if err != nil {
 			return err
 		}
 		rc.Run = stored
 		rc.initTrace(in.ChatStartInput)
-		if err := rc.Tracer.FlushStep(runCtx); err != nil {
+		if err := rc.Tracer.FlushStep(startupCtx); err != nil {
 			return err
+		}
+	}
+	if s.DB != nil {
+		// 捕捉在本地登记取消函数之前已经提交的取消请求。
+		var requested bool
+		if err := s.DB.QueryRow(startupCtx, `SELECT cancel_requested_at IS NOT NULL FROM runs WHERE id=$1`, runID).Scan(&requested); err != nil {
+			return err
+		}
+		if requested {
+			cancel(errors.New("user_cancel"))
 		}
 	}
 	bus.SetStepProvider(func() int { return rc.Step })
@@ -99,14 +112,19 @@ func (s *RunService) DriveRun(parent context.Context, in StreamStartInput, bus *
 	defer stopLease()
 
 	if in.resume == nil {
-		emitRunStarted(runCtx, rc, in)
+		emitRunStarted(startupCtx, rc, in)
 	} else if cancelRequested(runCtx, s.Redis, runID) {
 		cancel(errors.New("user_cancel"))
 	}
+	stopStartup()
 	stopWatch := s.startRunWatchers(runCtx, runID, in.StreamProtocol >= 2 && in.resume == nil, cancel)
 	defer stopWatch()
 
-	outcome, execErr := engine.Execute(runCtx, rc)
+	var outcome Outcome
+	var execErr error
+	if !errors.Is(runCtx.Err(), context.Canceled) {
+		outcome, execErr = engine.Execute(runCtx, rc)
+	}
 	if outcome.Kind == OutcomeWaitingApproval {
 		return execErr
 	}

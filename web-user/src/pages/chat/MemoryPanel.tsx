@@ -115,7 +115,14 @@ const statusViews = [
 
 type StatusView = (typeof statusViews)[number]['id'];
 
-export type MemoryCue = { agentId: string; seq: number };
+/** 分别保留工具写入和回复结束，避免同一批 SSE 事件覆盖前一条刷新提示。 */
+export type MemoryCue = {
+  agentId: string;
+  seq: number;
+  reason?: 'memory_updated' | 'turn_completed';
+  memoryUpdateSeq?: number;
+  turnCompleted?: { agentId: string; seq: number };
+};
 
 function formatTime(value: string) {
   const date = new Date(value);
@@ -281,7 +288,7 @@ function Toast({ message }: { message: string }) {
 
 type MemoryController = ReturnType<typeof useAgentMemory>;
 
-/** 两层记忆一次分页读取；对话结束后延迟刷新一次。 */
+/** 两层记忆一次分页读取，工具写入立即刷新，回复结束后再读取异步抽取结果。 */
 export function useAgentMemory({
   agentId,
   version,
@@ -320,14 +327,17 @@ export function useAgentMemory({
   const [markdownLoading, setMarkdownLoading] = useState(false);
   const generation = useRef(0);
   const statsEpoch = useRef(0);
+  const completedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const memoryUpdateSeq =
+    cue.memoryUpdateSeq ?? (cue.reason === 'memory_updated' ? cue.seq : 0);
+  const seenMemoryUpdate = useRef(memoryUpdateSeq);
   const loadingMoreRef = useRef(false);
   const retryGate = useRef(createRetryGate());
   const statsRef = useRef(stats);
-  const statusRef = useRef(status);
   const agentRef = useRef(agentId);
   statsRef.current = stats;
-  statusRef.current = status;
-  agentRef.current = agentId;
   const onPolicySavedRef = useRef(onPolicySaved);
   const onConflictRef = useRef(onConflict);
   const versionRef = useRef(version);
@@ -346,16 +356,27 @@ export function useAgentMemory({
     return [...head, ...items.filter((item) => item.status === status)];
   }, [agentId, items, remembered, status]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: agentId 变化时要丢掉上一名 Agent 的列表，不能等下次刷新。
+  const requestRefresh = useCallback(() => {
+    generation.current += 1;
+    statsEpoch.current += 1;
+    setRevision((value) => value + 1);
+  }, []);
+
   useEffect(() => {
+    agentRef.current = agentId;
     setRemembered([]);
     setStatus('active');
     setActiveCount(null);
     setStats(null);
     setStatsStale(false);
+    setRetrying(false);
     setRetryNote('');
     setRetryAlert(false);
     setRetryNeedsReload(false);
+    return () => {
+      agentRef.current = '';
+      clearTimeout(completedTimer.current);
+    };
   }, [agentId]);
 
   useEffect(() => {
@@ -365,12 +386,22 @@ export function useAgentMemory({
   }, [notice]);
 
   useEffect(() => {
-    if (cue.seq === 0 || cue.agentId !== agentId) return;
-    const timer = setTimeout(() => {
-      setRevision((value) => value + 1);
-    }, REFRESH_AFTER_TURN_MS);
-    return () => clearTimeout(timer);
-  }, [agentId, cue.agentId, cue.seq]);
+    if (seenMemoryUpdate.current === memoryUpdateSeq) return;
+    seenMemoryUpdate.current = memoryUpdateSeq;
+    // 事件没有作用域，使用当前 Agent 重新读取共享层和专属层。旧的本地条目可能已被删除或取代。
+    setRemembered([]);
+    requestRefresh();
+  }, [memoryUpdateSeq, requestRefresh]);
+
+  const completedAgent = cue.turnCompleted?.agentId ?? cue.agentId;
+  const completedSeq =
+    cue.turnCompleted?.seq ?? (cue.reason === 'memory_updated' ? 0 : cue.seq);
+  useEffect(() => {
+    if (completedSeq === 0 || completedAgent !== agentId) return;
+    // 其他 Agent 的完成提示不影响当前 Agent 已经安排的读取。
+    clearTimeout(completedTimer.current);
+    completedTimer.current = setTimeout(requestRefresh, REFRESH_AFTER_TURN_MS);
+  }, [agentId, completedAgent, completedSeq, requestRefresh]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision 在对话结束和编辑后触发重新读取。重试自己刷新列表。
   useEffect(() => {
@@ -461,14 +492,16 @@ export function useAgentMemory({
     setRetryNote('');
     setRetryAlert(false);
     setRetryNeedsReload(false);
-    setRevision((value) => value + 1);
+    requestRefresh();
   };
   const reportConflict = () => {
     setNotice('该记忆已被更新，已刷新');
-    setRevision((value) => value + 1);
+    requestRefresh();
   };
   const notify = (message: string) => setNotice(message);
   const changeStatus = (next: StatusView) => {
+    if (next === status) return;
+    generation.current += 1;
     setStatus(next);
     setLoaded(false);
     setItems([]);
@@ -479,7 +512,7 @@ export function useAgentMemory({
       item,
       ...current.filter((entry) => entry.id !== item.id),
     ]);
-    setRevision((value) => value + 1);
+    requestRefresh();
   };
   const forget = (id: string) => {
     setRemembered((current) => current.filter((item) => item.id !== id));
@@ -589,8 +622,8 @@ export function useAgentMemory({
         return;
       }
       // 丢掉点击前还在飞的统计和列表，避免过期响应把刚重试过的 id 写回来。
-      generation.current += 1;
-      statsEpoch.current += 1;
+      const listGeneration = ++generation.current;
+      const retryStatsEpoch = ++statsEpoch.current;
       setRetrying(true);
       setRetryNote('');
       setRetryAlert(false);
@@ -607,20 +640,25 @@ export function useAgentMemory({
           refreshList: async () => {
             const page = await listMemories({
               scope: 'all_visible',
-              agent_id: agentRef.current,
-              status: statusRef.current,
+              agent_id: agentId,
+              status,
               limit: PAGE_SIZE,
               cursor: '',
             });
             const total = await countMemories({
               scope: 'all_visible',
-              agent_id: agentRef.current,
+              agent_id: agentId,
               status: 'active',
             });
             return { page, total };
           },
         });
-        if (outcome.ignored) return;
+        if (outcome.ignored || agentRef.current !== agentId) return;
+        if (statsEpoch.current !== retryStatsEpoch) {
+          // 有更新的读取时不覆盖它。重试已经结束，再读取一次以纳入刚提交的任务状态。
+          requestRefresh();
+          return;
+        }
         if (outcome.stats) {
           setStats(outcome.stats);
           setStatsStale(false);
@@ -637,18 +675,24 @@ export function useAgentMemory({
           setStatsStale(true);
         }
         if (outcome.list) {
-          setItems(outcome.list.page.items);
-          setNextCursor(outcome.list.page.nextCursor);
-          setLoaded(true);
+          if (generation.current === listGeneration) {
+            setItems(outcome.list.page.items);
+            setNextCursor(outcome.list.page.nextCursor);
+            setLoaded(true);
+          }
           setActiveCount(outcome.list.total);
         }
         setRetryNote(outcome.note);
         setRetryAlert(outcome.alert);
         setRetryNeedsReload(outcome.needsReload);
       } catch (cause) {
-        setError(errorMessage(cause));
+        if (
+          agentRef.current === agentId &&
+          statsEpoch.current === retryStatsEpoch
+        )
+          setError(errorMessage(cause));
       } finally {
-        setRetrying(false);
+        if (agentRef.current === agentId) setRetrying(false);
       }
     });
   };
