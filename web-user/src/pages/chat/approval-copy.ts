@@ -7,7 +7,8 @@ export type PendingApproval = ToolPart & {
 /** 预览优先说明实际对象，原始参数只供用户主动查看。 */
 export function approvalCopy(part: ToolPart) {
   const title = part.title || part.name;
-  const { items = [], summary } = part.approval ?? {};
+  const items = part.approval?.items ?? [];
+  const summary = part.approval?.summary;
   const forget = part.name === 'memory_forget';
   const subject = items.find((item) =>
     forget ? item.label === '内容' : !/id|编号|命名空间|原因/i.test(item.label),

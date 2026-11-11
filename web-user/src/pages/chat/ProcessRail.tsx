@@ -22,12 +22,14 @@ import {
   toolStatusText,
   visibleTimelineParts,
 } from './process-summary';
+import { ToolResultDetails } from './ToolResultDetails';
 
 type MessageStatus = 'pending' | 'completed' | 'failed' | 'stopped';
 
 type Props = {
   parts: MessagePart[];
   messageStatus: MessageStatus;
+  runId?: string;
 };
 
 function useClock(active: boolean) {
@@ -76,7 +78,7 @@ function chipStatus(part: ToolPart): string {
   return 'done';
 }
 
-function ToolTrace({ part }: { part: ToolPart }) {
+function ToolTrace({ part, runId }: { part: ToolPart; runId?: string }) {
   const detailsId = useId();
   const failed = isFailedToolStatus(part.status);
   const active = isActiveToolStatus(part.status);
@@ -88,10 +90,16 @@ function ToolTrace({ part }: { part: ToolPart }) {
   const status = toolStatusText(part.status);
   const title = part.title || part.name;
   const errorText = failed ? part.summary || part.error_code || '调用失败' : '';
+  const showArguments =
+    part.status !== 'rejected' && part.status !== 'cancelled';
+  const canReadResult = Boolean(
+    runId && part.call_id && !active && showArguments,
+  );
   const hasDetails =
     part.status !== 'awaiting_approval' &&
     Boolean(
-      errorText ||
+      canReadResult ||
+        errorText ||
         part.summary ||
         part.args_preview ||
         (part.items && part.items.length > 0),
@@ -161,7 +169,7 @@ function ToolTrace({ part }: { part: ToolPart }) {
           ) : part.summary ? (
             <p data-testid="tool-summary">{part.summary}</p>
           ) : null}
-          {part.args_preview ? (
+          {showArguments && part.args_preview ? (
             <pre className="max-w-full overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-zinc-500">
               {part.args_preview}
             </pre>
@@ -175,6 +183,13 @@ function ToolTrace({ part }: { part: ToolPart }) {
                 </li>
               ))}
             </ul>
+          ) : null}
+          {canReadResult && runId && part.call_id ? (
+            <ToolResultDetails
+              key={`${runId}-${part.call_id}`}
+              runId={runId}
+              callId={part.call_id}
+            />
           ) : null}
         </div>
       ) : null}
@@ -250,7 +265,7 @@ function ReasoningSegment({
 }
 
 /** 一次回复的思考和工具收成回答上方的一行，展开后是细竖线时间线。 */
-export function ProcessRail({ parts, messageStatus }: Props) {
+export function ProcessRail({ parts, messageStatus, runId }: Props) {
   const timelineId = useId();
   const streaming = parts.some(
     (part) =>
@@ -353,6 +368,7 @@ export function ProcessRail({ parts, messageStatus }: Props) {
                   <ToolTrace
                     key={`tool-${part.call_id ?? part.name}-${part.index ?? 0}`}
                     part={part}
+                    runId={runId}
                   />
                 );
               }

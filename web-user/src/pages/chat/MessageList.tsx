@@ -282,6 +282,7 @@ export function MessageList({
                               <ProcessRail
                                 parts={processParts}
                                 messageStatus={message.status}
+                                runId={message.run_id}
                               />
                             ) : null}
                             {showBubble ? (
@@ -319,7 +320,8 @@ export function MessageList({
                                 ) : null}
                                 {message.status === 'failed' ? (
                                   <span className="mt-2 block text-xs text-amber-700">
-                                    {message.error === '已停止生成'
+                                    {message.error === '已停止生成' ||
+                                    message.error === '连接中断'
                                       ? message.error
                                       : '回复未完成，请重新加载记录确认结果。'}
                                   </span>

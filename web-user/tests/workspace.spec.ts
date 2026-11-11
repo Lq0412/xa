@@ -274,6 +274,9 @@ test('原生四栏、SOUL 版本、唯一对话、历史分页、代码复制与
   await expect(details).toContainText('你是公共助手。');
   await expect(details.locator('textarea,select')).toHaveCount(0);
   await expect(details.getByRole('button', { name: /编辑/ })).toHaveCount(0);
+  await expect(details.getByRole('region', { name: '工具设置' })).toHaveCount(
+    0,
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(details).toBeHidden();
   await layout(page);

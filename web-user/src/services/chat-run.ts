@@ -3,23 +3,20 @@ import type { MessagePart } from './chat-parts';
 export type RunStreamEvent = {
   seq: number;
   type: string;
+  step?: number;
   [key: string]: unknown;
 };
 
-/** 将 v2 事件归约为 MessagePart 列表（幂等）。 */
+/** 将已按 seq 去重的 v2 事件归约为 MessagePart 列表。 */
 export function applyRunEvent(
   parts: MessagePart[],
   ev: RunStreamEvent,
 ): MessagePart[] {
-  const next = parts.map((p) =>
-    p.type === 'text' || p.type === 'reasoning'
-      ? { ...p, ...(p.type === 'text' ? { text: p.text } : { text: p.text }) }
-      : { ...p },
-  ) as MessagePart[];
+  const next = parts.map((part) => ({ ...part }));
   const pushText = (delta: string) => {
     const last = next[next.length - 1];
     if (last?.type === 'text') {
-      (last as { type: 'text'; text: string }).text += delta;
+      last.text += delta;
     } else {
       next.push({ type: 'text', text: delta });
     }
@@ -73,21 +70,27 @@ export function applyRunEvent(
     case 'tool.completed':
     case 'approval.required':
     case 'approval.resolved': {
-      const callId = ev.call_id as string | undefined;
-      const index = ev.index as number | undefined;
+      const callId = typeof ev.call_id === 'string' ? ev.call_id : undefined;
+      const index = typeof ev.index === 'number' ? ev.index : undefined;
       const name = String(ev.name ?? '');
-      let partIdx = next.findIndex((p) => {
-        if (p.type !== 'tool') return false;
-        const tool = p as Extract<MessagePart, { type: 'tool' }>;
-        if (callId && tool.call_id === callId) return true;
-        if (!callId && index != null && tool.index === index) return true;
-        if (name && tool.name === name && !tool.call_id) return true;
-        return false;
-      });
-      let part: Extract<MessagePart, { type: 'tool' }>;
-      if (partIdx >= 0) {
-        part = next[partIdx] as Extract<MessagePart, { type: 'tool' }>;
-      } else {
+      let part = callId
+        ? next.find(
+            (p): p is ToolPart => p.type === 'tool' && p.call_id === callId,
+          )
+        : undefined;
+      // call_id 在 tool.called 才出现，之前用该步骤内的 index 区分同名调用。
+      if (!part) {
+        part = next.find(
+          (p): p is ToolPart =>
+            p.type === 'tool' &&
+            !p.call_id &&
+            p.step === ev.step &&
+            (index != null
+              ? p.index === index
+              : Boolean(name) && p.name === name),
+        );
+      }
+      if (!part) {
         part = {
           type: 'tool',
           name,
@@ -95,21 +98,22 @@ export function applyRunEvent(
           status: 'preparing',
           call_id: callId,
           index,
+          step: ev.step,
         };
         next.push(part);
-        partIdx = next.length - 1;
       }
-      if (ev.type === 'tool.called' && callId) part.call_id = callId;
-      if (ev.type === 'tool.started' && callId) part.call_id = callId;
+      if (callId) part.call_id = callId;
+      if (name) part.name = name;
+      if (ev.title) part.title = String(ev.title);
       if (ev.type === 'tool.preparing') part.status = 'preparing';
       if (ev.type === 'tool.called') {
         part.status = String(ev.status) === 'rejected' ? 'rejected' : 'pending';
         if (ev.args_preview) part.args_preview = String(ev.args_preview);
+        if (ev.error_code) part.error_code = String(ev.error_code);
       }
       if (ev.type === 'tool.started') part.status = 'running';
       if (ev.type === 'approval.required') {
         part.status = 'awaiting_approval';
-        part.call_id = callId;
         part.approval = {
           approval_id: String(ev.approval_id),
           expires_at: String(ev.expires_at),
@@ -142,10 +146,10 @@ export function applyRunEvent(
         part.status = String(ev.status ?? 'succeeded') as ToolPartStatus;
         if (ev.summary) part.summary = String(ev.summary);
         if (Array.isArray(ev.items)) part.items = ev.items as ToolPart['items'];
-        if (ev.duration_ms) part.duration_ms = Number(ev.duration_ms);
+        if (typeof ev.duration_ms === 'number')
+          part.duration_ms = ev.duration_ms;
         if (ev.error_code) part.error_code = String(ev.error_code);
       }
-      next[partIdx] = part;
       break;
     }
   }

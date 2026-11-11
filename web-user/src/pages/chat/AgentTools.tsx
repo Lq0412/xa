@@ -1,23 +1,34 @@
-import { useEffect, useState } from 'react';
-import { type Agent, getAgent, getAgentConfig } from '@/services/api';
-import { errorMessage, request } from '@/services/http';
+import { useEffect, useRef, useState } from 'react';
+import { type Agent, getAgent } from '@/services/api';
+import { ApiError, errorMessage } from '@/services/http';
+import {
+  type AgentTool,
+  type AgentToolSettings,
+  getAgentTools,
+  getToolCatalog,
+  saveAgentTools,
+} from '@/services/tools';
+import { RuntimeLimitsDialog, ToolConfigDialog } from './ToolConfigDialog';
 
-type ToolSetting = {
-  name: string;
-  title: string;
-  enabled: boolean;
-  approval: 'always' | 'never';
-  available: boolean;
-  approval_overridable: boolean;
-};
-type ToolBinding = {
-  name: string;
-  enabled: boolean;
-  approval?: string;
-  [key: string]: unknown;
+const textButton = 'shrink-0 py-1 text-xs hover:underline disabled:opacity-45';
+const conflictMessage = '配置已被更新，请刷新';
+
+function unavailableReason(tool: AgentTool) {
+  if (!tool.available) return '即将上线';
+  if (tool.reason === 'memory_disabled') return '需开启记忆';
+  if (tool.reason === 'role_denied') return '无使用权限';
+  return undefined;
+}
+
+/** 编辑界面固定打开时的版本，刷新列表时也保留该版本用于冲突检查。 */
+type ToolEditor = {
+  versionId: string;
+  target:
+    | { tool: AgentTool; hasTimezone: boolean; description?: string }
+    | { limits: AgentToolSettings['runtime_limits'] };
 };
 
-/** 工具开关使用既有版本保存接口，保留未展示的绑定字段。 */
+/** 仅归属用户可查看和保存工具配置。 */
 export function AgentTools({
   agent,
   onSaved,
@@ -25,93 +36,232 @@ export function AgentTools({
   agent: Agent;
   onSaved: (agent: Agent) => void;
 }) {
-  const [tools, setTools] = useState<ToolSetting[]>([]);
+  const [settings, setSettings] = useState<AgentToolSettings>();
+  const [catalog, setCatalog] = useState<
+    Awaited<ReturnType<typeof getToolCatalog>>['tools']
+  >([]);
+  const [editor, setEditor] = useState<ToolEditor>();
   const [error, setError] = useState('');
+  const [editError, setEditError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
+  const savingRef = useRef(false);
+  const mounted = useRef(false);
+  const refresh = () => setRevision((value) => value + 1);
+
   useEffect(() => {
+    mounted.current = true;
     const changed = () => setRevision((value) => value + 1);
     window.addEventListener('xa:tools-updated', changed);
-    return () => window.removeEventListener('xa:tools-updated', changed);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener('xa:tools-updated', changed);
+    };
   }, []);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 外部保存后按版本或通知重新读取。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 版本和刷新请求都需要重新读取生效配置。
   useEffect(() => {
     const controller = new AbortController();
+    setLoading(true);
     setError('');
-    request<{ tools: ToolSetting[] }>(
-      `/agents/${encodeURIComponent(agent.id)}/tools`,
-      { signal: controller.signal },
-    )
-      .then((result) => {
-        if (!controller.signal.aborted) setTools(result.tools);
+    Promise.all([
+      getAgentTools(agent.id, controller.signal),
+      getToolCatalog(controller.signal),
+    ])
+      .then(([tools, specs]) => {
+        if (controller.signal.aborted) return;
+        setSettings(tools);
+        setCatalog(specs.tools);
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
+        if (controller.signal.aborted) return;
+        setSettings(undefined);
+        setError(errorMessage(cause));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
   }, [agent.id, agent.current_version_id, revision]);
-  const toggle = async (tool: ToolSetting) => {
+
+  const save = async (
+    versionId: string,
+    edit: Parameters<typeof saveAgentTools>[2],
+    inDialog = false,
+  ) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError('');
+    setEditError('');
     try {
-      const version = await getAgentConfig(agent.id);
-      const bindings = [
-        ...((version.configuration.tools ?? []) as ToolBinding[]),
-      ];
-      const index = bindings.findIndex((item) => item.name === tool.name);
-      const approval = tool.approval === 'always' ? 'never' : 'always';
-      if (index >= 0) bindings[index] = { ...bindings[index], approval };
-      else bindings.push({ name: tool.name, enabled: tool.enabled, approval });
-      await request(`/agents/${encodeURIComponent(agent.id)}/tools`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          expected_version_id: version.id,
-          tools: bindings,
-        }),
-      });
-      onSaved(await getAgent(agent.id));
+      await saveAgentTools(agent.id, versionId, edit);
+      // AgentDetails 按 Agent ID 重新挂载，已经离开的实例不再更新界面。
+      if (!mounted.current) return;
+      const updated = await getAgent(agent.id);
+      if (!mounted.current) return;
+      onSaved(updated);
+      setEditor(undefined);
+      setLoading(true);
+      refresh();
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (!mounted.current) return;
+      if (cause instanceof ApiError && cause.status === 409) {
+        setEditor(undefined);
+        setError(conflictMessage);
+      } else {
+        (inDialog ? setEditError : setError)(errorMessage(cause));
+      }
     } finally {
-      setSaving(false);
+      savingRef.current = false;
+      if (mounted.current) setSaving(false);
     }
   };
+  const closeEditor = () => {
+    setEditor(undefined);
+    setEditError('');
+  };
+  const editDisabled = saving || loading || error === conflictMessage;
+
   return (
     <section className="mt-[18px] text-left" aria-label="工具设置">
-      <h3 className="mb-2 text-sm font-semibold">工具</h3>
-      {tools
-        .filter((tool) => tool.enabled && tool.available)
-        .map((tool) => {
-          const requiresApproval = tool.approval === 'always';
-          const status = requiresApproval ? '需确认' : '自动运行';
-          const style = requiresApproval ? 'font-medium' : 'text-zinc-400';
-          return (
-            <div
-              key={tool.name}
-              className="flex min-h-9 items-center justify-between gap-3 text-[13px]"
-            >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">工具</h3>
+        {settings && (
+          <button
+            type="button"
+            className={`${textButton} text-zinc-600`}
+            disabled={editDisabled}
+            onClick={() =>
+              setEditor({
+                versionId: settings.current_version_id,
+                target: { limits: settings.runtime_limits },
+              })
+            }
+          >
+            运行限制
+          </button>
+        )}
+      </div>
+      {settings?.tools.map((tool) => {
+        const spec = catalog.find((item) => item.name === tool.name);
+        const reason = unavailableReason(tool);
+        const status = tool.approval === 'always' ? '需确认' : '自动运行';
+        const approvalStyle =
+          tool.approval === 'always' ? 'font-medium' : 'text-zinc-500';
+        return (
+          <div key={tool.name} className="py-1.5">
+            <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-3 text-[13px]">
               <span>{tool.title}</span>
-              {tool.approval_overridable ? (
+              <div className="ml-auto flex items-center gap-3">
+                {tool.enabled &&
+                  (tool.approval_overridable ? (
+                    <button
+                      type="button"
+                      className={`${textButton} ${approvalStyle}`}
+                      aria-label={`${tool.title}：${status}`}
+                      disabled={editDisabled}
+                      onClick={() =>
+                        void save(settings.current_version_id, {
+                          tool,
+                          changes: {
+                            approval:
+                              tool.approval === 'always' ? 'never' : 'always',
+                          },
+                        })
+                      }
+                    >
+                      {status}
+                    </button>
+                  ) : (
+                    <span className={`text-xs ${approvalStyle}`}>{status}</span>
+                  ))}
                 <button
                   type="button"
-                  className={`shrink-0 py-1 text-xs hover:underline ${style}`}
-                  aria-label={`${tool.title}：${status}`}
-                  disabled={saving}
-                  onClick={() => void toggle(tool)}
+                  className={`${textButton} ${tool.enabled ? 'font-medium' : 'text-zinc-500'}`}
+                  aria-label={`启用${tool.title}`}
+                  aria-pressed={tool.enabled}
+                  disabled={editDisabled || Boolean(reason)}
+                  onClick={() =>
+                    void save(settings.current_version_id, {
+                      tool,
+                      changes: { enabled: !tool.enabled },
+                    })
+                  }
                 >
-                  {status}
+                  {reason ?? (tool.enabled ? '已启用' : '已停用')}
                 </button>
-              ) : (
-                <span className={`text-xs ${style}`}>{status}</span>
-              )}
+                {!reason && (
+                  <button
+                    type="button"
+                    className={`${textButton} text-zinc-600`}
+                    aria-label={`配置${tool.title}`}
+                    disabled={editDisabled}
+                    onClick={() =>
+                      setEditor({
+                        versionId: settings.current_version_id,
+                        target: {
+                          tool,
+                          description: spec?.description,
+                          hasTimezone:
+                            spec?.config_schema.properties?.timezone?.type ===
+                            'string',
+                        },
+                      })
+                    }
+                  >
+                    配置
+                  </button>
+                )}
+              </div>
             </div>
-          );
-        })}
+          </div>
+        );
+      })}
       {error && (
-        <p role="alert" className="text-xs text-rose-600">
-          {error}
-        </p>
+        <div className="mt-1 flex items-center justify-between gap-3 text-xs text-rose-600">
+          <p role="alert">{error}</p>
+          <button
+            type="button"
+            className={textButton}
+            disabled={saving || loading}
+            onClick={refresh}
+          >
+            刷新
+          </button>
+        </div>
       )}
+      {editor &&
+        ('tool' in editor.target ? (
+          <ToolConfigDialog
+            tool={editor.target.tool}
+            description={editor.target.description}
+            hasTimezone={editor.target.hasTimezone}
+            error={editError}
+            busy={saving}
+            onClose={closeEditor}
+            onSave={(changes) => {
+              if (!('tool' in editor.target)) return;
+              if (Object.keys(changes).length === 0) closeEditor();
+              else
+                void save(
+                  editor.versionId,
+                  { tool: editor.target.tool, changes },
+                  true,
+                );
+            }}
+          />
+        ) : (
+          <RuntimeLimitsDialog
+            limits={editor.target.limits}
+            error={editError}
+            busy={saving}
+            onClose={closeEditor}
+            onSave={(runtimeLimits) =>
+              void save(editor.versionId, { runtimeLimits }, true)
+            }
+          />
+        ))}
     </section>
   );
 }

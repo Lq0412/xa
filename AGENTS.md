@@ -149,3 +149,27 @@ git -c user.name="Lq0412" \
 - Docker 只用于仓库中已经声明的镜像、Dockerfile 或 Compose 配置；没有对应文件时，不假设存在固定的服务、端口或 Compose profile。
 - 启动服务前先确认属于本项目的旧进程，避免重复启动；服务端口和启动命令以项目实际配置为准。
 - 启停服务、初始化存储或排查运行问题前，先阅读 `docs/startup.md`；修改基础依赖接入时运行 `make integration`，使用实际容器验证。
+
+## Code style: lean diffs, no speculative defense
+
+Follow existing repo patterns. Change only the lines needed for the requested behavior.
+
+### Defensive code
+
+- Validate unknown values once at the boundary that owns them. Pass typed values inward.
+- Do not defensively revalidate values already guaranteed by a schema, constructor, type, or earlier check.
+- Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost, and get buy-in. Do not silently expand scope for theoretical robustness.
+- No broad try/catch or success-shaped fallbacks. Propagate or surface errors; do not swallow them.
+- Do not add null checks, default values, or alternate paths "just in case."
+- Do not extract single-use helpers preemptively. Inline one-off logic unless it is reused or names a real boundary.
+
+### Tests
+
+- Do not write tests for reversible, low-impact changes that merely mirror the implementation.
+- If tests are needed, they must be meaningful and necessary to verify the behavior change.
+- Run only the checks appropriate to this change. After they pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it.
+- Never weaken or rewrite existing tests to make them pass. If a test fails, fix the implementation or stop and report.
+
+### After each change
+
+If the diff added guards, fallbacks, helpers, or tests that were not requested, remove them before finishing.
