@@ -12,6 +12,6 @@
     "types": ["node"],
     "paths": { "@/*": ["./src/*"], "@@/*": ["./src/.umi/*"] }
   },
-  "include": ["src", "config", "tests", "playwright.config.ts"],
+  "include": ["src", "config", "tests", "playwright.config.ts", "openapi.mts"],
   "exclude": ["node_modules", "dist", "src/.umi-production"]
 }

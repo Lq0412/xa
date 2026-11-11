@@ -4,28 +4,29 @@ import {
 } from 'eventsource-parser/stream';
 import type { ApprovalInfo, MessagePart } from './chat-parts';
 import { applyRunEvent, type RunStreamEvent } from './chat-run';
-import { ApiError, fetchApi, request } from './http';
+import * as conversations from './generated/conversations';
+import { cancelRun as cancelRunRequest } from './generated/runs';
+import { ApiError, fetchApi } from './http';
 
 /** 服务端保存的会话摘要，ID 同时用于路由和请求归属。 */
-export type Conversation = {
-  id: string;
-  agent_id: string;
-  title: string;
-  updated_at: string;
-};
+export type Conversation = Awaited<
+  ReturnType<typeof conversations.createConversation>
+>;
+
+type StoredMessagePage = Awaited<
+  ReturnType<typeof conversations.listConversationMessages>
+>;
+type StoredMessage = NonNullable<StoredMessagePage['messages']>[number];
 
 /** pending 是本地生成中状态；stopped 用于本次主动停止的显示。 */
-export type ChatMessage = {
-  id: string;
-  conversation_id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  status: 'pending' | 'completed' | 'failed' | 'stopped';
-  error?: string;
-  run_id?: string;
-  parts?: MessagePart[];
-  created_at?: string;
-};
+export type ChatMessage = Pick<
+  StoredMessage,
+  'id' | 'conversation_id' | 'role' | 'content'
+> &
+  Partial<Pick<StoredMessage, 'error' | 'run_id' | 'created_at'>> & {
+    status: StoredMessage['status'] | 'stopped';
+    parts?: MessagePart[];
+  };
 
 /** 历史 API 会剥离思考正文，流式态合并时保留本地已收到的 reasoning 文本。 */
 export function mergeMessagePartsFromLocal(
@@ -59,34 +60,21 @@ export function chatURL(agentId: string, conversationId?: string) {
 
 /** 列表只读取当前登录用户有权限访问的会话。 */
 export const listConversations = (signal?: AbortSignal) =>
-  request<{ conversations: Conversation[] | null }>('/conversations', {
-    signal,
-  });
+  conversations.listConversations({ signal });
 
 /** 首次发送前创建真实会话，空白页面不预先写入数据库。 */
 export const createConversation = (agent_id: string, signal?: AbortSignal) =>
-  request<Conversation>('/conversations', {
-    method: 'POST',
-    body: JSON.stringify({ agent_id }),
-    signal,
-  });
+  conversations.createConversation({ agent_id }, { signal });
 
 /** 会话滚动摘要。没有摘要时接口返回 summary: null，这里收成 null。 */
-export type ConversationSummary = {
-  id: string;
-  conversation_id: string;
-  content: string;
-  covers_from_message_id: string | null;
-  covers_until_message_id: string | null;
-  message_count: number;
-  estimated_tokens: number;
-  version: number;
-  created_at: string;
-};
+export type ConversationSummary = Exclude<
+  Awaited<ReturnType<typeof conversations.getConversationSummary>>,
+  { summary: null }
+>;
 
 export async function getConversationSummary(id: string, signal?: AbortSignal) {
-  const result = await request<ConversationSummary | { summary: null }>(
-    `/conversations/${encodeURIComponent(id)}/summary`,
+  const result = await conversations.getConversationSummary(
+    { conversation_id: encodeURIComponent(id) },
     { signal },
   );
   if (
@@ -111,10 +99,8 @@ export async function getConversationSummary(id: string, signal?: AbortSignal) {
 }
 
 /** 历史读取失败必须由页面显示，不能伪装为空会话。 */
-export type ActiveRun = {
-  id: string;
-  status: string;
-  last_event_seq: number;
+type StoredActiveRun = NonNullable<StoredMessagePage['active_run']>;
+export type ActiveRun = Omit<StoredActiveRun, 'pending_approvals'> & {
   pending_approvals?: (ApprovalInfo & {
     call_id: string;
     name: string;
@@ -122,29 +108,32 @@ export type ActiveRun = {
   })[];
 };
 
-export const listMessages = (
+export async function listMessages(
   id: string,
   signal?: AbortSignal,
   before?: string,
   limit = 20,
-) =>
-  request<{
-    messages: ChatMessage[];
-    has_more: boolean;
-    before?: string;
-    active_run?: ActiveRun | null;
-  }>(
-    `/conversations/${encodeURIComponent(id)}/messages?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+) {
+  const page = await conversations.listConversationMessages(
+    {
+      conversation_id: encodeURIComponent(id),
+      limit: String(limit),
+      before: before || undefined,
+    },
     { signal },
-  ).then((page) => ({
+  );
+  return {
     ...page,
+    // 历史和 SSE 共用按 type 区分的消息片段，生成类型是服务端的通用结构。
+    active_run: page.active_run as ActiveRun | null | undefined,
     // 持久化消息沿用 failed，主动取消在界面上显示为已停止。
-    messages: (page.messages ?? []).map((message) =>
+    messages: ((page.messages ?? []) as ChatMessage[]).map((message) =>
       message.status === 'failed' && message.error === '已停止生成'
         ? { ...message, status: 'stopped' as const }
         : message,
     ),
-  }));
+  };
+}
 
 /** 事件去重后，分别通知消息内容、run 标识和记忆变更。 */
 export type StreamRunHandlers = {
@@ -181,6 +170,7 @@ export function streamRun(
   handlers: StreamRunHandlers,
   idempotencyKey: string,
 ) {
+  const body: API.SendMessageBody = { content };
   return followRun(signal, handlers, (runId, afterSeq, requestSignal) =>
     runId
       ? fetchRunEvents(runId, afterSeq, requestSignal)
@@ -189,7 +179,7 @@ export function streamRun(
           {
             method: 'POST',
             headers: { 'X-XA-Stream': '2', 'Idempotency-Key': idempotencyKey },
-            body: JSON.stringify({ content }),
+            body: JSON.stringify(body),
             signal: requestSignal,
           },
         ),
@@ -357,13 +347,7 @@ async function followRun(
 
 /** 服务端已终止的 run 返回原终态，仍在执行的 run 返回 cancelling。 */
 export function cancelRun(runId: string, signal?: AbortSignal) {
-  return request<{ status: string }>(
-    `/runs/${encodeURIComponent(runId)}/cancel`,
-    {
-      method: 'POST',
-      signal,
-    },
-  );
+  return cancelRunRequest({ run_id: encodeURIComponent(runId) }, { signal });
 }
 
 /** 刷新后从头重放，补齐尚未保存到历史的消息过程。 */

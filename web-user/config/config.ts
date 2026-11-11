@@ -1,4 +1,12 @@
+import { join } from 'node:path';
 import { defineConfig } from '@umijs/max';
+import { parse } from 'yaml';
+
+const {
+  registerSchemaLoader,
+  serviceName,
+} = require('../../scripts/openapi-schema.cjs');
+registerSchemaLoader(parse);
 
 // 用户端独立构建和部署，只通过 HTTP 与公共 Go 后端交互。
 export default defineConfig({
@@ -11,6 +19,14 @@ export default defineConfig({
   initialState: {},
   antd: false,
   mock: false,
+  plugins: ['@umijs/max-plugin-openapi'],
+  openAPI: {
+    schemaPath: join(__dirname, '../../docs/api/openapi.yaml'),
+    projectName: 'generated',
+    requestLibPath: "import { request } from '@/services/openapi-request'",
+    mock: false,
+    hook: { customClassName: serviceName },
+  },
   tailwindcss: {},
   define: {
     'process.env.XA_ADMIN_WEB_URL':

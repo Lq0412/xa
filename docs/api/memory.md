@@ -1,5 +1,7 @@
 # 记忆系统 v2 API
 
+> 路径、字段和状态码以从 Go 代码生成的 [docs/api/openapi.yaml](openapi.yaml) 为准，禁止手改 YAML。本文保留去重、主题键生成、分页兼容等业务规则作为补充；运行 `make api-docs` 可浏览接口说明。
+
 所有接口均使用 `Authorization: Bearer <token>`。所有者从登录身份获取；不接受请求指定 owner_user_id。管理员不能读取或修改其他用户记忆。以下 JSON 为字段结构示例，ID 和时间由服务端生成。
 
 ## 新增接口

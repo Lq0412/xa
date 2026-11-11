@@ -1,17 +1,8 @@
-import { request } from './http';
+import { decideApproval as decideApprovalRequest } from './generated/approvals';
 
-export type RememberScope = 'once' | 'conversation' | 'agent';
+type Decision = Parameters<typeof decideApprovalRequest>[1];
+export type RememberScope = NonNullable<Decision['remember']>;
 
 /** 决定只提交给后端，授予和 Agent 版本由同一审批请求处理。 */
-export const decideApproval = (
-  id: string,
-  body: {
-    decision: 'approve' | 'reject';
-    remember: RememberScope;
-    reason?: string;
-  },
-) =>
-  request<{ status: string; warning?: string }>(
-    `/approvals/${encodeURIComponent(id)}/decision`,
-    { method: 'POST', body: JSON.stringify(body) },
-  );
+export const decideApproval = (id: string, body: Decision) =>
+  decideApprovalRequest({ approval_id: encodeURIComponent(id) }, body);

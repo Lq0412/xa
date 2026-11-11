@@ -7,6 +7,7 @@
     "dev": "cross-env HOST=127.0.0.1 PORT=8000 umi dev",
     "start": "npm run dev",
     "build": "umi build",
+    "openapi": "node openapi.mts",
     "prepare": "umi setup",
     "lint": "biome check && tsc --noEmit",
     "format": "biome check --write",
@@ -30,16 +31,18 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",
     "@playwright/test": "^1.64.1",
+    "@tailwindcss/webpack": "^4.3.4",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@tailwindcss/webpack": "^4.3.4",
+    "@umijs/openapi": "1.14.1",
     "cross-env": "^10.1.0",
     "tailwindcss": "^4.3.4",
     "typescript": "^7.0.2",
-    "umi": "4.7.3"
+    "umi": "4.7.3",
+    "yaml": "2.9.1"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=24.0.0"
   }
 }

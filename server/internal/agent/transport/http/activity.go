@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -8,63 +9,111 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	frameworkhttp "linq-bs/server/internal/framework/http"
 )
 
-type activityCursor struct {
+// ActivityCursor 是活动条目的排序位置，也是分页游标的内容。
+type ActivityCursor struct {
 	CreatedAt time.Time `json:"created_at"`
 	ID        string    `json:"id"`
 }
 
 type activityItem struct {
-	activityCursor
+	ActivityCursor
 	Title  string `json:"title"`
 	Result string `json:"result"`
 }
 
+// PanelPageInput 是审批和活动列表共用的分页参数。
+type PanelPageInput struct {
+	Limit  string `query:"limit" doc:"每页条数，范围 1 至 100，默认 20"`
+	Cursor string `query:"cursor" doc:"上一页返回的 next_cursor"`
+}
+
+type userApprovalsInput struct {
+	PanelPageInput
+	AgentID string `query:"agent_id" doc:"按 Agent ID 筛选"`
+}
+
+type agentActivityInput struct {
+	PanelPageInput
+	AgentID string `path:"agent_id" doc:"Agent ID"`
+}
+
+type userApproval struct {
+	ID             string  `json:"id"`
+	CreatedAt      string  `json:"created_at" format:"date-time"`
+	DecidedAt      *string `json:"decided_at" format:"date-time"`
+	ConversationID string  `json:"conversation_id"`
+	AgentID        string  `json:"agent_id"`
+	Agent          string  `json:"agent"`
+	RunID          string  `json:"run_id"`
+	ToolName       string  `json:"tool_name"`
+	Title          *string `json:"title"`
+	Summary        *string `json:"summary"`
+	Status         string  `json:"status"`
+	Remember       string  `json:"remember"`
+	WaitMS         int64   `json:"wait_ms"`
+}
+
+type userApprovalPage struct {
+	Approvals  []userApproval `json:"approvals" nullable:"false"`
+	NextCursor string         `json:"next_cursor"`
+}
+
+type activityPage struct {
+	Items      []activityItem `json:"items" nullable:"false"`
+	NextCursor string         `json:"next_cursor"`
+}
+
 // panelPage 校验两个列表共用的时间与 ID 游标。
-func panelPage(w http.ResponseWriter, r *http.Request) (int, activityCursor, bool) {
+func panelPage(ctx context.Context, input PanelPageInput) (int, ActivityCursor, huma.StatusError) {
 	limit := 20
-	query := r.URL.Query()
-	if raw := query.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
+	if input.Limit != "" {
+		n, err := strconv.Atoi(input.Limit)
 		if err != nil || n < 1 || n > 100 {
-			frameworkhttp.WriteError(w, r, 400, "invalid_limit", fmt.Errorf("limit 无效"))
-			return 0, activityCursor{}, false
+			return 0, ActivityCursor{}, frameworkhttp.APIError(ctx, 400, "invalid_limit", fmt.Errorf("limit 无效"))
 		}
 		limit = n
 	}
-	var cursor activityCursor
-	if value := query.Get("cursor"); value != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(value)
+	var cursor ActivityCursor
+	if input.Cursor != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(input.Cursor)
 		if err != nil || json.Unmarshal(raw, &cursor) != nil || cursor.ID == "" || cursor.CreatedAt.IsZero() {
-			frameworkhttp.WriteError(w, r, 400, "invalid_cursor", fmt.Errorf("cursor 无效"))
-			return 0, activityCursor{}, false
+			return 0, ActivityCursor{}, frameworkhttp.APIError(ctx, 400, "invalid_cursor", fmt.Errorf("cursor 无效"))
 		}
 	}
-	return limit, cursor, true
+	return limit, cursor, nil
 }
 
-func panelNext(w http.ResponseWriter, r *http.Request, cursor activityCursor) (string, bool) {
+func panelNext(ctx context.Context, cursor ActivityCursor) (string, huma.StatusError) {
 	raw, err := json.Marshal(cursor)
 	if err != nil {
-		frameworkhttp.WriteError(w, r, 500, "internal_error", err)
-		return "", false
+		return "", frameworkhttp.APIError(ctx, 500, "internal_error", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw), true
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 // UserApprovals 只投影当前用户的审批摘要，工具参数和决定者身份不出站。
 func (h *RunHandler) UserApprovals(w http.ResponseWriter, r *http.Request) {
-	p, ok := requirePrincipal(w, r)
-	if !ok {
-		return
+	query := r.URL.Query()
+	output, err := h.userApprovals(r.Context(), &userApprovalsInput{
+		PanelPageInput: PanelPageInput{Limit: query.Get("limit"), Cursor: query.Get("cursor")}, AgentID: query.Get("agent_id"),
+	})
+	writeLegacyJSON(w, http.StatusOK, output, err)
+}
+
+func (h *RunHandler) userApprovals(ctx context.Context, input *userApprovalsInput) (*routeOutput[userApprovalPage], error) {
+	p, err := routePrincipal(ctx)
+	if err != nil {
+		return nil, err
 	}
-	limit, cursor, ok := panelPage(w, r)
-	if !ok {
-		return
+	limit, cursor, pageErr := panelPage(ctx, input.PanelPageInput)
+	if pageErr != nil {
+		return nil, pageErr
 	}
-	rows, err := h.Runs.DB.Query(r.Context(), `
+	rows, err := h.Runs.DB.Query(ctx, `
 SELECT a.id,a.created_at,jsonb_build_object(
  'id',a.id,'created_at',a.created_at,'decided_at',a.decided_at,
  'conversation_id',r.conversation_id,'agent_id',r.agent_id,'agent',d.name,'run_id',r.id,
@@ -73,87 +122,91 @@ SELECT a.id,a.created_at,jsonb_build_object(
 FROM run_approvals a JOIN runs r ON r.id=a.run_id JOIN agent_definitions d ON d.id=r.agent_id
 WHERE r.workspace_id=$1 AND r.owner_user_id=$2 AND a.owner_user_id=$2 AND ($3='' OR r.agent_id=$3)
  AND ($4='' OR (a.created_at,a.id)<($5,$4))
-ORDER BY a.created_at DESC,a.id DESC LIMIT $6`, p.WorkspaceID, p.UserID, r.URL.Query().Get("agent_id"), cursor.ID, cursor.CreatedAt, limit+1)
+ORDER BY a.created_at DESC,a.id DESC LIMIT $6`, p.WorkspaceID, p.UserID, input.AgentID, cursor.ID, cursor.CreatedAt, limit+1)
 	if err != nil {
-		frameworkhttp.WriteError(w, r, 500, "approvals_unavailable", err)
-		return
+		return nil, frameworkhttp.APIError(ctx, 500, "approvals_unavailable", err)
 	}
 	defer rows.Close()
-	items := []json.RawMessage{}
-	var last activityCursor
+	items := []userApproval{}
+	var last ActivityCursor
 	next := ""
 	for rows.Next() {
 		if len(items) == limit {
-			next, ok = panelNext(w, r, last)
-			if !ok {
-				return
+			next, pageErr = panelNext(ctx, last)
+			if pageErr != nil {
+				return nil, pageErr
 			}
 			break
 		}
-		var item json.RawMessage
-		if err := rows.Scan(&last.ID, &last.CreatedAt, &item); err != nil {
-			frameworkhttp.WriteError(w, r, 500, "approvals_unavailable", err)
-			return
+		var raw []byte
+		if err := rows.Scan(&last.ID, &last.CreatedAt, &raw); err != nil {
+			return nil, frameworkhttp.APIError(ctx, 500, "approvals_unavailable", err)
+		}
+		// PostgreSQL 已投影允许返回的字段。保留数据库输出的时间字符串。
+		var item userApproval
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, frameworkhttp.APIError(ctx, 500, "approvals_unavailable", err)
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		frameworkhttp.WriteError(w, r, 500, "approvals_unavailable", err)
-		return
+		return nil, frameworkhttp.APIError(ctx, 500, "approvals_unavailable", err)
 	}
-	frameworkhttp.WriteJSON(w, 200, map[string]any{"approvals": items, "next_cursor": next})
+	return &routeOutput[userApprovalPage]{Body: userApprovalPage{Approvals: items, NextCursor: next}}, nil
 }
 
 // AgentActivity 只允许 Agent 所有者读取。确认和工具结果按同一次调用关联。
 func (h *RunHandler) AgentActivity(w http.ResponseWriter, r *http.Request) {
-	p, ok := requirePrincipal(w, r)
-	if !ok {
-		return
-	}
-	limit, cursor, ok := panelPage(w, r)
-	if !ok {
-		return
-	}
-	ctx := r.Context()
-	agentID := r.PathValue("agent_id")
-	var owned bool
-	err := h.Runs.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_definitions WHERE id=$1 AND workspace_id=$2 AND owner_type='user' AND owner_id=$3)`, agentID, p.WorkspaceID, p.UserID).Scan(&owned)
+	query := r.URL.Query()
+	output, err := h.agentActivity(r.Context(), &agentActivityInput{
+		PanelPageInput: PanelPageInput{Limit: query.Get("limit"), Cursor: query.Get("cursor")}, AgentID: r.PathValue("agent_id"),
+	})
+	writeLegacyJSON(w, http.StatusOK, output, err)
+}
+
+func (h *RunHandler) agentActivity(ctx context.Context, input *agentActivityInput) (*routeOutput[activityPage], error) {
+	p, err := routePrincipal(ctx)
 	if err != nil {
-		frameworkhttp.WriteError(w, r, 500, "activity_unavailable", err)
-		return
+		return nil, err
+	}
+	limit, cursor, pageErr := panelPage(ctx, input.PanelPageInput)
+	if pageErr != nil {
+		return nil, pageErr
+	}
+	agentID := input.AgentID
+	var owned bool
+	err = h.Runs.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_definitions WHERE id=$1 AND workspace_id=$2 AND owner_type='user' AND owner_id=$3)`, agentID, p.WorkspaceID, p.UserID).Scan(&owned)
+	if err != nil {
+		return nil, frameworkhttp.APIError(ctx, 500, "activity_unavailable", err)
 	}
 	if !owned {
-		frameworkhttp.WriteError(w, r, 404, "not_found", fmt.Errorf("未找到 Agent"))
-		return
+		return nil, frameworkhttp.APIError(ctx, 404, "not_found", fmt.Errorf("未找到 Agent"))
 	}
 	rows, err := h.Runs.DB.Query(ctx, agentActivitySQL, p.WorkspaceID, p.UserID, agentID, cursor.ID, cursor.CreatedAt, limit+1)
 	if err != nil {
-		frameworkhttp.WriteError(w, r, 500, "activity_unavailable", err)
-		return
+		return nil, frameworkhttp.APIError(ctx, 500, "activity_unavailable", err)
 	}
 	defer rows.Close()
 	items := []activityItem{}
 	next := ""
 	for rows.Next() {
 		if len(items) == limit {
-			next, ok = panelNext(w, r, items[len(items)-1].activityCursor)
-			if !ok {
-				return
+			next, pageErr = panelNext(ctx, items[len(items)-1].ActivityCursor)
+			if pageErr != nil {
+				return nil, pageErr
 			}
 			break
 		}
 		var item activityItem
 		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.Title, &item.Result); err != nil {
-			frameworkhttp.WriteError(w, r, 500, "activity_unavailable", err)
-			return
+			return nil, frameworkhttp.APIError(ctx, 500, "activity_unavailable", err)
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		frameworkhttp.WriteError(w, r, 500, "activity_unavailable", err)
-		return
+		return nil, frameworkhttp.APIError(ctx, 500, "activity_unavailable", err)
 	}
-	frameworkhttp.WriteJSON(w, 200, map[string]any{"items": items, "next_cursor": next})
+	return &routeOutput[activityPage]{Body: activityPage{Items: items, NextCursor: next}}, nil
 }
 
 // 记忆事件保留实际内容。成功删除用工具记录识别本次确认，避免同一个动作出现两次。

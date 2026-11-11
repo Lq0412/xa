@@ -1448,7 +1448,10 @@ function MemoryCreateForm({
             value={draft.kind}
             disabled={saving}
             onValueChange={(value) =>
-              setDraft((current) => ({ ...current, kind: value }))
+              setDraft((current) => ({
+                ...current,
+                kind: value as MemoryCreate['kind'],
+              }))
             }
           >
             <SelectTrigger className="mt-1" aria-label="类型">

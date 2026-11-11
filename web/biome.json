@@ -7,9 +7,11 @@
       "config/**",
       "tests/**",
       "*.ts",
+      "openapi.mts",
       "package.json",
       "!src/.umi",
-      "!src/.umi-production"
+      "!src/.umi-production",
+      "!src/services/generated"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space" },

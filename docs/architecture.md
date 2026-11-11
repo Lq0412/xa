@@ -198,11 +198,13 @@ server/
 │
 ├── migrations/
 ├── configs/
-├── api/
-│   └── openapi.yaml
 ├── docs/
 ├── go.mod
 └── go.sum
+
+docs/
+└── api/
+    └── openapi.yaml
 ~~~
 
 模块内部按实际复杂度组织：

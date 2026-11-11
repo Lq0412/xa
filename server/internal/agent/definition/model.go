@@ -36,7 +36,7 @@ type AgentDefinition struct {
 	Avatar           string     `json:"avatar"`
 	Description      string     `json:"description"`
 	Tags             []string   `json:"tags"`
-	Visibility       Visibility `json:"visibility"`
+	Visibility       Visibility `json:"visibility" enum:"public,private"`
 	Status           Status     `json:"status"`
 	IsDefault        bool       `json:"is_default"`
 	IsPrimary        bool       `json:"is_primary"`
