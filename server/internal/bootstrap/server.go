@@ -80,6 +80,7 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 		DB: db, Store: runStore, Registry: registry, Provider: chatProvider, Memory: memories, Agents: agents,
 		Engine: &agentrun.NativeEngine{}, Redis: cache, RedisOK: func() bool { return cache != nil },
 		Config: s.config.Run, Coord: agentrun.NewCoordinator(), InstanceID: "server",
+		SnapshotParts: conversation.SnapshotRunParts,
 	}
 	s.runs = runSvc
 	authHandler := &systemhttp.Handler{Users: userService, Sessions: sessions}
@@ -134,6 +135,13 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("POST /api/v1/runs/{run_id}/cancel", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Cancel)))
 	mux.Handle("POST /api/v1/approvals/{approval_id}/decision", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Decision)))
 	mux.Handle("GET /api/v1/admin/approvals", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ApprovalRecords)))
+	mux.Handle("GET /api/v1/runs", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ListRuns)))
+	mux.Handle("GET /api/v1/runs/{run_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.GetRun)))
+	mux.Handle("GET /api/v1/runs/{run_id}/spans", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Spans)))
+	mux.Handle("GET /api/v1/runs/{run_id}/tool-results/{call_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ToolResult)))
+	mux.Handle("GET /api/v1/admin/runs", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ListRuns)))
+	mux.Handle("GET /api/v1/admin/runs/{run_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.GetRun)))
+	mux.Handle("GET /api/v1/admin/runs/{run_id}/spans", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Spans)))
 	handler := http.Handler(mux)
 	if raw := strings.TrimSpace(os.Getenv("XA_HTTP_CORS_ORIGINS")); raw != "" {
 		handler = frameworkhttp.WithAllowOrigins(strings.Split(raw, ","), mux)

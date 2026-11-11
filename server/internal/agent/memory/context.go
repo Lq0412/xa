@@ -176,7 +176,7 @@ func (m Module) Context(ctx context.Context) ([]string, error) {
 	}
 	if len(recalled) > 0 {
 		parts = append(parts, prefix+strings.Join(recalled, "\n"))
-		details = append(details, runtime.Segment{Name: "memory_recall", ItemIDs: recallIDs, Scores: scores})
+		details = append(details, runtime.Segment{Name: "memory_recall", ItemIDs: recallIDs, Scores: scores, Attributes: map[string]any{"candidates": len(scored), "returned": len(recallIDs), "min_relevance": m.Policy.MinRelevance}})
 	}
 	if len(ids) > 0 {
 		if err = m.Service.RecallTouchIDs(ctx, m.Actor, ids); err != nil {

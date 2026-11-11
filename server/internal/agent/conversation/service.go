@@ -299,7 +299,9 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 	if err != nil {
 		return Message{}, provider.Usage{}, err
 	}
-	builder := runtime.Builder{}
+	contextStarted := time.Now()
+	var observations []run.ContextObservation
+	builder := runtime.Builder{Observer: observeContext(&observations)}
 	memoryDetails := []runtime.Segment{}
 	if s.Memory != nil {
 		builder.Memory = &memory.Module{Service: s.Memory, Actor: p, AgentID: a.ID, Current: content + "\n" + previousUser, Policy: policy, Details: &memoryDetails}
@@ -362,6 +364,7 @@ func (s *Service) Send(ctx context.Context, p auth.Principal, id, content string
 		return Message{}, provider.Usage{}, fmt.Errorf("RunService 未配置")
 	}
 	assistantID, usage, _, callErr := s.Runs.ExecuteChat(ctx, tx, run.ChatStartInput{
+		ContextStartedAt: contextStarted, ContextEndedAt: time.Now(), ContextTrace: contextObservations(contextResult.Segments, observations),
 		Principal: p, Conversation: run.ConversationRef{ID: id, Title: c.Title, AgentID: a.ID},
 		Agent: a, Version: version, UserContent: content, UserMessageID: userID,
 		InitialMessages: contextResult.Messages, Segments: segments, Toolset: toolset, Limits: limits,

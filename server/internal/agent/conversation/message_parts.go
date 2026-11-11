@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -255,8 +256,42 @@ func firstNonEmpty(vals ...any) string {
 }
 
 func attachPartsToMessages(ctx context.Context, db *pgxpool.Pool, messages []Message) error {
+	// 快照一旦存在便不再重放事件，保留清理前的完整过程顺序。
+	messageIDs := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.Role == "assistant" {
+			messageIDs = append(messageIDs, message.ID)
+		}
+	}
+	rows, err := db.Query(ctx, `SELECT id,parts FROM messages WHERE id=ANY($1) AND parts IS NOT NULL AND parts <> '[]'::jsonb`, messageIDs)
+	if err != nil {
+		return err
+	}
+	snapshots := map[string][]MessagePart{}
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var parts []MessagePart
+		if err := json.Unmarshal(raw, &parts); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshots[id] = parts
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	runIDs := make([]string, 0)
 	for i := range messages {
+		if parts := snapshots[messages[i].ID]; len(parts) > 0 {
+			messages[i].Parts = parts
+			continue
+		}
 		if messages[i].Role != "assistant" || messages[i].RunID == "" {
 			continue
 		}
@@ -283,6 +318,9 @@ func attachPartsToMessages(ctx context.Context, db *pgxpool.Pool, messages []Mes
 		partsByRun[runID] = buildPartsFromEvents(evs, partsReplayOpts{stripReasoningText: true})
 	}
 	for i := range messages {
+		if len(messages[i].Parts) > 0 {
+			continue
+		}
 		rid := messages[i].RunID
 		if rid == "" {
 			continue
@@ -303,6 +341,70 @@ func attachPartsToMessages(ctx context.Context, db *pgxpool.Pool, messages []Mes
 			parts = append(parts, MessagePart{"type": "text", "text": messages[i].Content})
 		}
 		messages[i].Parts = parts
+	}
+	return nil
+}
+
+// SnapshotRunParts 在终态事务中固化过程轨；清理器也在删除事件前调用，保证原子性。
+func SnapshotRunParts(ctx context.Context, tx pgx.Tx, runID string) error {
+	if tx == nil {
+		return fmt.Errorf("parts 快照必须在事务内写入")
+	}
+	rows, err := tx.Query(ctx, `SELECT seq,type,payload FROM run_events WHERE run_id=$1 ORDER BY seq`, runID)
+	if err != nil {
+		return err
+	}
+	var events []replayEvent
+	for rows.Next() {
+		var event replayEvent
+		if err := rows.Scan(&event.Seq, &event.Type, &event.Payload); err != nil {
+			rows.Close()
+			return err
+		}
+		events = append(events, event)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	parts := buildPartsFromEvents(events, partsReplayOpts{stripReasoningText: true})
+	// 无事件的同步路径仍保留可见正文，不能用空快照掩盖已有消息。
+	rows, err = tx.Query(ctx, `SELECT id,content FROM messages WHERE run_id=$1 AND role='assistant' AND (parts IS NULL OR parts='[]'::jsonb)`, runID)
+	if err != nil {
+		return err
+	}
+	type messageSnapshot struct{ id, content string }
+	var messages []messageSnapshot
+	for rows.Next() {
+		var message messageSnapshot
+		if err := rows.Scan(&message.id, &message.content); err != nil {
+			rows.Close()
+			return err
+		}
+		messages = append(messages, message)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, message := range messages {
+		value := append([]MessagePart{}, parts...)
+		hasText := false
+		for _, part := range value {
+			if part["type"] == "text" {
+				hasText = true
+			}
+		}
+		if !hasText && (message.content != "" || len(value) == 0) {
+			value = append(value, MessagePart{"type": "text", "text": message.content})
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE messages SET parts=$2 WHERE id=$1`, message.id, raw); err != nil {
+			return err
+		}
 	}
 	return nil
 }

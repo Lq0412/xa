@@ -69,6 +69,9 @@ func approvalGate(ctx context.Context, rc *RunContext, pc PlannedCall) (bool, er
 		return false, err
 	}
 	if a != nil {
+		if rc.Tracer != nil && a.Status != "pending" {
+			rc.Tracer.closeApproval(a.CallID, a.Status, a.Remember, time.Now().UTC())
+		}
 		if argsHash(row.ToolName, row.Arguments) != a.ArgsHash || argsHash(pc.Call.Name, []byte(pc.Call.Arguments)) != a.ArgsHash {
 			return false, completeApprovalError(ctx, rc, row, "args_mismatch", "审批参数已发生变化，操作未执行。")
 		}
@@ -139,6 +142,9 @@ func completeApprovalError(ctx context.Context, rc *RunContext, row ToolResultRo
 		return err
 	}
 	entry, _ := rc.Toolset.EntryByName(row.ToolName)
+	if err := rc.recordTool(row, time.Now()); err != nil {
+		return err
+	}
 	emitToolCompleted(ctx, rc, row, entry, 0)
 	return appendToolMessage(ctx, rc, PlannedCall{Call: toolCallFromRow(row)}, row.ModelContent)
 }
@@ -153,6 +159,9 @@ func approvalBoundary(ctx context.Context, rc *RunContext, a Approval, commit fu
 	defer bus.mu.Unlock()
 	bus.flushDeltasLocked()
 	bus.flushBatchLocked(false)
+	if bus.persistenceErr != nil {
+		return bus.persistenceErr
+	}
 	raw, err := json.Marshal(a)
 	if err != nil {
 		return err

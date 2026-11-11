@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"linq-bs/server/internal/agent/definition"
@@ -90,9 +91,12 @@ func (s *Service) prepareSend(ctx context.Context, tx pgx.Tx, p auth.Principal, 
 	if err != nil {
 		return preparedSend{}, err
 	}
-	builder := runtime.Builder{}
+	contextStarted := time.Now()
+	var observations []run.ContextObservation
+	builder := runtime.Builder{Observer: observeContext(&observations)}
+	var memoryDetails []runtime.Segment
 	if s.Memory != nil {
-		builder.Memory = &memory.Module{Service: s.Memory, Actor: p, AgentID: a.ID, Current: content + "\n" + previousUser, Policy: policy}
+		builder.Memory = &memory.Module{Service: s.Memory, Actor: p, AgentID: a.ID, Current: content + "\n" + previousUser, Policy: policy, Details: &memoryDetails}
 	}
 	if len(toolset.Entries) > 0 {
 		builder.Tools = runtime.Tools{Toolset: toolset}
@@ -144,6 +148,7 @@ func (s *Service) prepareSend(ctx context.Context, tx pgx.Tx, p auth.Principal, 
 		return preparedSend{}, err
 	}
 	start := run.ChatStartInput{
+		ContextStartedAt: contextStarted, ContextEndedAt: time.Now(), ContextTrace: contextObservations(contextResult.Segments, observations),
 		Principal: p, Conversation: run.ConversationRef{ID: id, Title: c.Title, AgentID: a.ID},
 		Agent: a, Version: version, UserContent: content,
 		InitialMessages: contextResult.Messages, Segments: segments, Toolset: toolset, Limits: limits,

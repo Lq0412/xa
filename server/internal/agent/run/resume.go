@@ -77,6 +77,11 @@ func (s *RunService) restoreContext(ctx context.Context, id string, sink EventSi
 		rc.Env.Principal.Roles = []string{role}
 	}
 	rc.VisibleText.WriteString(state.VisibleText)
+	spans, err := s.Store.ListSpans(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	rc.Tracer = NewTracer(r, PGSpanSink{Store: s.Store}, spans)
 	return rc, nil
 }
 
@@ -193,11 +198,17 @@ func (s *RunService) decide(ctx context.Context, p auth.Principal, id string, in
 	if _, err := tx.Exec(ctx, `UPDATE runs SET last_event_seq=$2 WHERE id=$1`, rid, seq+1); err != nil {
 		return result, err
 	}
+	if rc.Tracer != nil {
+		rc.Tracer.closeApproval(callID, want, in.Remember, time.Now().UTC())
+		if err := s.Store.UpsertSpans(ctx, tx, rc.Tracer.Spans()); err != nil {
+			return result, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return result, err
 	}
 	committed = true
-	bus := NewEventBus(rid, s.Redis, s.RedisOK, s.Store)
+	bus := s.newEventBus(rid)
 	bus.seq = seq + 1
 	bus.publishRedis(ctx, pendingEvent{seq: bus.seq, typ: EventApprovalResolved, payload: raw})
 	s.StartDrive(context.WithoutCancel(ctx), StreamStartInput{RunID: rid, StreamProtocol: rc.Run.StreamProtocol, resume: rc, writerToken: token, ChatStartInput: ChatStartInput{

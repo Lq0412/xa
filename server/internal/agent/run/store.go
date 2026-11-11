@@ -8,6 +8,8 @@ import (
 
 // Store 抽象 run 相关持久化；测试使用内存实现，生产使用 PG。
 type Store interface {
+	UpsertSpans(ctx context.Context, tx pgx.Tx, spans []Span) error
+	ListSpans(ctx context.Context, runID string) ([]Span, error)
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 
 	InsertRun(ctx context.Context, tx pgx.Tx, run Run) error

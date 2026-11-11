@@ -36,6 +36,7 @@ const navigation = [
   { path: '/overview', label: '今天', Icon: LayoutGrid },
   { path: '/agents', label: 'Agent', Icon: Bot },
   { path: '/approvals', label: '确认记录', Icon: Inbox },
+  { path: '/runs', label: '运行追踪', Icon: Activity },
 ];
 type Session = { user: XA.User } | { error: string };
 
@@ -108,10 +109,6 @@ function AdminShell({ user }: { user: XA.User }) {
           {label}
         </NavLink>
       ))}
-      <button type="button" disabled>
-        <Activity size={18} aria-hidden="true" />
-        运行追踪<span className="ml-auto text-[10px]">即将上线</span>
-      </button>
     </nav>
   );
   const brand = (

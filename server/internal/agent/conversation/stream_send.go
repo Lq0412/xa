@@ -143,6 +143,10 @@ func (s *Service) SendStream(ctx context.Context, p auth.Principal, conversation
 		UserMessageID: userID, Provider: s.Runs.Provider.Name(), Model: prep.Version.Configuration.Model,
 		StreamProtocol: protocol, Status: "running", Limits: prep.Start.Limits, Toolset: prep.Start.Toolset, StartedAt: now,
 	}
+	// 追踪从上下文组装开始计时，摘要总耗时与执行树根节点使用同一起点。
+	if !prep.Start.ContextStartedAt.IsZero() {
+		runRow.StartedAt = prep.Start.ContextStartedAt
+	}
 	if err := run.InsertRunRow(ctx, tx, s.Runs.Store, runRow, run.RunContextSnapshot{
 		RunID: runID, Messages: prep.Start.InitialMessages, Segments: prep.Segments,
 	}, opts.IdempotencyKey, reqHash, s.Runs.InstanceID); err != nil {

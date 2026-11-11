@@ -7,24 +7,26 @@ import (
 	"fmt"
 	"linq-bs/server/internal/infra/provider"
 	"strings"
+	"time"
 	"unicode"
 )
 
 // Segment 记录每一段来源与估算成本，估算值不替代供应商实际计费 token。
 type Segment struct {
-	Name                string    `json:"name"`
-	Role                string    `json:"role"`
-	EstimatedTokens     int       `json:"estimated_tokens"`
-	ItemIDs             []string  `json:"item_ids,omitempty"`
-	Scores              []float64 `json:"scores,omitempty"`
-	SummaryID           string    `json:"summary_id,omitempty"`
-	SummaryVersion      int       `json:"summary_version,omitempty"`
-	FromMessageID       string    `json:"from_message_id,omitempty"`
-	UntilMessageID      string    `json:"until_message_id,omitempty"`
-	OverBudget          bool      `json:"over_budget,omitempty"`
-	Truncated           bool      `json:"truncated,omitempty"`
-	DroppedRounds       int       `json:"dropped_rounds,omitempty"`
-	TruncatedMessageIDs []string  `json:"truncated_message_ids,omitempty"`
+	Attributes          map[string]any `json:"attributes,omitempty"`
+	Name                string         `json:"name"`
+	Role                string         `json:"role"`
+	EstimatedTokens     int            `json:"estimated_tokens"`
+	ItemIDs             []string       `json:"item_ids,omitempty"`
+	Scores              []float64      `json:"scores,omitempty"`
+	SummaryID           string         `json:"summary_id,omitempty"`
+	SummaryVersion      int            `json:"summary_version,omitempty"`
+	FromMessageID       string         `json:"from_message_id,omitempty"`
+	UntilMessageID      string         `json:"until_message_id,omitempty"`
+	OverBudget          bool           `json:"over_budget,omitempty"`
+	Truncated           bool           `json:"truncated,omitempty"`
+	DroppedRounds       int            `json:"dropped_rounds,omitempty"`
+	TruncatedMessageIDs []string       `json:"truncated_message_ids,omitempty"`
 }
 
 // TruncateTokens 按 Unicode 边界截断，并把提示本身计入预算。
@@ -87,6 +89,8 @@ type Result struct {
 
 // Builder 的插槽顺序固定；nil 或未启用的模块直接跳过。
 type Builder struct {
+	// Observer 只接收最终分段元数据，不接收提示词正文；关闭模块不触发观察。
+	Observer  func(slot string, seg Segment, d time.Duration)
 	Memory    ContextModule
 	Knowledge ContextModule
 	Tools     ContextModule
@@ -99,6 +103,7 @@ func (b Builder) Build(ctx context.Context, input Input) (Result, error) {
 	}
 	result := Result{Segments: []Segment{}, Messages: []provider.Message{}}
 	add := func(name, role, content string) {
+		started := time.Now()
 		if strings.TrimSpace(content) == "" {
 			return
 		}
@@ -106,6 +111,9 @@ func (b Builder) Build(ctx context.Context, input Input) (Result, error) {
 		result.Segments = append(result.Segments, segment)
 		result.Messages = append(result.Messages, provider.Message{Role: role, Content: content})
 		result.TotalEstimatedTokens += segment.EstimatedTokens
+		if b.Observer != nil && name != "memory" && name != "knowledge" && name != "tools" {
+			b.Observer(name, segment, time.Since(started))
+		}
 	}
 	add("platform", "system", input.PlatformRules)
 	add("soul", "system", input.SoulMD)
@@ -116,6 +124,7 @@ func (b Builder) Build(ctx context.Context, input Input) (Result, error) {
 		if slot.module == nil || !slot.module.Enabled() {
 			continue
 		}
+		started := time.Now()
 		parts, err := slot.module.Context(ctx)
 		if err != nil {
 			return Result{}, fmt.Errorf("读取 %s 上下文: %w", slot.name, err)
@@ -131,6 +140,9 @@ func (b Builder) Build(ctx context.Context, input Input) (Result, error) {
 				segment.Role = "system"
 				segment.EstimatedTokens = EstimateTokens(part)
 				result.Segments[len(result.Segments)-1] = segment
+			}
+			if strings.TrimSpace(part) != "" && b.Observer != nil {
+				b.Observer(slot.name, result.Segments[len(result.Segments)-1], time.Since(started))
 			}
 		}
 	}

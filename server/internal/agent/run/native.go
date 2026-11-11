@@ -20,6 +20,9 @@ var _ Engine = (*NativeEngine)(nil)
 
 // Execute 从 rc 当前状态推进到终态。
 func (e *NativeEngine) Execute(ctx context.Context, rc *RunContext) (Outcome, error) {
+	if rc.Tracer == nil {
+		rc.initTrace(ChatStartInput{})
+	}
 	if rc.Budget == nil {
 		rc.Budget = NewBudget(rc.Limits)
 	}
@@ -190,6 +193,9 @@ func insertRejectedResults(ctx context.Context, rc *RunContext, plan CallPlan) e
 			return err
 		}
 		entry, _ := rc.Toolset.EntryByName(pc.Call.Name)
+		if err := rc.recordTool(row, time.Now()); err != nil {
+			return err
+		}
 		emitToolCompleted(ctx, rc, row, entry, 0)
 	}
 	return nil

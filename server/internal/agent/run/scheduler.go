@@ -270,7 +270,13 @@ func executeOne(ctx context.Context, rc *RunContext, pc PlannedCall) error {
 	}
 	if execErr != nil {
 		err := persistToolFailure(ctx, rc, &row, execErr)
+		if traceErr := rc.recordTool(row, started); traceErr != nil {
+			return traceErr
+		}
 		emitToolCompleted(ctx, rc, row, entry, time.Since(started).Milliseconds())
+		return err
+	}
+	if err := rc.recordTool(row, started, res.Effects...); err != nil {
 		return err
 	}
 	emitToolCompleted(ctx, rc, row, entry, time.Since(started).Milliseconds())

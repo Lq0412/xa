@@ -23,19 +23,30 @@ import (
 
 // RunService 装配并执行 chat run（含流式推送与并发控制）。
 type RunService struct {
-	DB         *pgxpool.Pool
-	Store      Store
-	Engine     Engine
-	Registry   *tool.Registry
-	Provider   provider.ChatProvider
-	Memory     *memory.Service
-	Agents     definition.Service
-	Redis      redisclient.Cmdable
-	RedisOK    func() bool
-	Config     config.RunConfig
-	Coord      *Coordinator
-	InstanceID string
-	wg         sync.WaitGroup
+	// SnapshotParts 在所有事件落盘后保存历史过程轨。
+	SnapshotParts func(context.Context, pgx.Tx, string) error
+	DB            *pgxpool.Pool
+	Store         Store
+	Engine        Engine
+	Registry      *tool.Registry
+	Provider      provider.ChatProvider
+	Memory        *memory.Service
+	Agents        definition.Service
+	Redis         redisclient.Cmdable
+	RedisOK       func() bool
+	Config        config.RunConfig
+	Coord         *Coordinator
+	InstanceID    string
+	wg            sync.WaitGroup
+}
+
+// newEventBus 用同一配置发布恢复、取消和中断后已经落盘的事件。
+func (s *RunService) newEventBus(id string) *EventBus {
+	bus := NewEventBus(id, s.Redis, s.RedisOK, s.Store)
+	if s.Config.EventTTL > 0 {
+		bus.EventTTL = s.Config.EventTTL
+	}
+	return bus
 }
 
 // StartDrive 在后台执行 run。
@@ -73,6 +84,9 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 		Model: in.Version.Configuration.Model, StreamProtocol: 1, Status: "running",
 		Limits: in.Limits, Toolset: toolset, StartedAt: now,
 	}
+	if !in.ContextStartedAt.IsZero() {
+		run.StartedAt = in.ContextStartedAt
+	}
 	if err := s.Store.InsertRun(ctx, tx, run); err != nil {
 		return "", usage, outcome, err
 	}
@@ -97,6 +111,7 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 		EnableThinking: in.EnableThinking,
 		CallHashes:     map[string]int{}, PerToolCalls: map[string]int{},
 	}
+	rc.initTrace(in)
 	began := time.Now()
 	outcome, execErr := s.Engine.Execute(ctx, rc)
 	if execErr != nil {
@@ -139,6 +154,8 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 		assistantStatus = "completed"
 		errText = ""
 	}
+	run.PromptTokens, run.CompletionTokens, run.CachedTokens = rc.Run.PromptTokens, rc.Run.CompletionTokens, rc.Run.CachedTokens
+	run.TTFTMS = rc.Run.TTFTMS
 	run.Steps = rc.Step
 	run.ModelTurns = rc.Budget.Turns
 	run.ToolCalls = rc.Budget.ToolCalls
@@ -152,6 +169,7 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 	run.Error = errText
 	ended := time.Now().UTC()
 	run.EndedAt = &ended
+	run.LatencyMS = ended.Sub(run.StartedAt).Milliseconds()
 	assistantID = "msg_" + uuid.NewString()
 	_, err = tx.Exec(ctx, `
 INSERT INTO messages(id,conversation_id,role,content,model,prompt_tokens,completion_tokens,latency_ms,status,error,created_at,context_segments,agent_version_id,run_id)
@@ -163,6 +181,10 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		return "", usage, outcome, err
 	}
 	run.FinalMessageID = assistantID
+	rc.Tracer.Finish(run)
+	if err := rc.Tracer.FlushStep(ctx); err != nil {
+		return "", usage, outcome, err
+	}
 	if err := s.Store.SaveRunContext(ctx, tx, RunContextSnapshot{
 		RunID: runID, Messages: rc.Messages, Segments: in.Segments,
 	}); err != nil {
@@ -170,6 +192,11 @@ VALUES($1,$2,'assistant',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 	}
 	if err := s.Store.UpdateRun(ctx, tx, run); err != nil {
 		return "", usage, outcome, err
+	}
+	if s.SnapshotParts != nil {
+		if err := s.SnapshotParts(ctx, tx, runID); err != nil {
+			return "", usage, outcome, err
+		}
 	}
 	if execErr != nil && outcome.Kind == OutcomeFailed {
 		return assistantID, usage, outcome, execErr

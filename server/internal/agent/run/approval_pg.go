@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -74,7 +75,15 @@ func (s *PGStore) SuspendApproval(ctx context.Context, rc *RunContext, row ToolR
 		if err := s.SaveRunContext(ctx, tx, rc.checkpoint()); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE runs SET status='waiting_approval',steps=$2,model_turns=$3,tool_calls=$4,prompt_tokens=$5,completion_tokens=$6,active_ms=$7,cached_tokens=$8,lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND status='running'`, rc.Run.ID, rc.Step, rc.Budget.Turns, rc.Budget.ToolCalls, rc.Run.PromptTokens, rc.Run.CompletionTokens, ActiveMS(rc.WallStarted), rc.Run.CachedTokens)
+		if rc.Tracer != nil {
+			span := rc.Tracer.Start(rc.Tracer.RootID, "approval", "approval "+a.Name, rc.Step, a.CallID, time.Now().UTC())
+			span.Attributes = map[string]any{"approval_id": a.ID, "tool_name": a.Name, "decision": "pending"}
+			rc.Tracer.Put(span)
+			if err := s.UpsertSpans(ctx, tx, rc.Tracer.Spans()); err != nil {
+				return err
+			}
+		}
+		_, err = tx.Exec(ctx, `UPDATE runs SET status='waiting_approval',steps=$2,model_turns=$3,tool_calls=$4,prompt_tokens=$5,completion_tokens=$6,active_ms=$7,cached_tokens=$8,ttft_ms=$9,lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND status='running'`, rc.Run.ID, rc.Step, rc.Budget.Turns, rc.Budget.ToolCalls, rc.Run.PromptTokens, rc.Run.CompletionTokens, ActiveMS(rc.WallStarted), rc.Run.CachedTokens, rc.Run.TTFTMS)
 		if err != nil {
 			return err
 		}

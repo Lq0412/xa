@@ -15,6 +15,7 @@ import (
 
 // MemStore 是 Store 的内存实现，仅供单元测试。
 type MemStore struct {
+	spans     map[string]Span
 	mu        sync.Mutex
 	runs      map[string]Run
 	messages  map[string][]RunMessage
@@ -244,6 +245,14 @@ func (m *MemStore) ConversationAllows(ctx context.Context, conversationID, owner
 }
 
 func (m *MemStore) SuspendApproval(ctx context.Context, rc *RunContext, row ToolResultRow, a Approval) error {
+	if rc.Tracer != nil {
+		span := rc.Tracer.Start(rc.Tracer.RootID, "approval", "approval "+a.Name, rc.Step, a.CallID, time.Now().UTC())
+		span.Attributes = map[string]any{"approval_id": a.ID, "decision": "pending"}
+		rc.Tracer.Put(span)
+		if err := m.UpsertSpans(ctx, nil, rc.Tracer.Spans()); err != nil {
+			return err
+		}
+	}
 	return approvalBoundary(ctx, rc, a, func(events []StoredEvent) error {
 		m.mu.Lock()
 		defer m.mu.Unlock()

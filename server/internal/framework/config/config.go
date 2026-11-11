@@ -33,11 +33,15 @@ type Config struct {
 
 // RunConfig 定义 run 引擎与流式推送相关配置。
 type RunConfig struct {
-	MaxModelTurnsCap int `env:"MAX_MODEL_TURNS_CAP" envDefault:"20"`
-	MaxToolCallsCap  int `env:"MAX_TOOL_CALLS_CAP" envDefault:"64"`
-	MaxParallelCap   int `env:"MAX_PARALLEL_CAP" envDefault:"8"`
-	MaxWallCapSec    int `env:"MAX_WALL_CAP" envDefault:"600"`
-	MaxTokensCap     int `env:"MAX_TOKENS_CAP" envDefault:"400000"`
+	EventTTL         time.Duration `env:"EVENT_TTL" envDefault:"24h"`
+	EventRetention   time.Duration `env:"EVENT_RETENTION" envDefault:"168h"`
+	ContextRetention time.Duration `env:"CONTEXT_RETENTION" envDefault:"168h"`
+	TraceRetention   time.Duration `env:"TRACE_RETENTION" envDefault:"720h"`
+	MaxModelTurnsCap int           `env:"MAX_MODEL_TURNS_CAP" envDefault:"20"`
+	MaxToolCallsCap  int           `env:"MAX_TOOL_CALLS_CAP" envDefault:"64"`
+	MaxParallelCap   int           `env:"MAX_PARALLEL_CAP" envDefault:"8"`
+	MaxWallCapSec    int           `env:"MAX_WALL_CAP" envDefault:"600"`
+	MaxTokensCap     int           `env:"MAX_TOKENS_CAP" envDefault:"400000"`
 
 	ReconnectGraceSec int `env:"RECONNECT_GRACE" envDefault:"30"`
 	ApprovalTTLSec    int `env:"APPROVAL_TTL" envDefault:"600"`
@@ -135,6 +139,9 @@ func (c Config) Validate() error {
 	}
 	if c.StartupTimeout <= 0 || c.ShutdownTimeout <= 0 || c.HealthTimeout <= 0 {
 		return fmt.Errorf("启动、关闭和健康检查超时必须大于零")
+	}
+	if c.Run.EventTTL <= 0 || c.Run.EventRetention <= 0 || c.Run.ContextRetention <= 0 || c.Run.TraceRetention <= 0 {
+		return fmt.Errorf("运行事件与追踪保留时间必须大于零")
 	}
 	if c.Postgres.Host == "" || c.Postgres.Port == 0 || c.Postgres.Database == "" || c.Postgres.User == "" || c.Postgres.Password == "" {
 		return fmt.Errorf("PostgreSQL 连接参数不完整")

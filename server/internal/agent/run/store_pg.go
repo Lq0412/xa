@@ -44,10 +44,10 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now()+
 func (s *PGStore) UpdateRun(ctx context.Context, tx pgx.Tx, run Run) error {
 	tag, err := tx.Exec(ctx, `
 UPDATE runs SET status=$2,steps=$3,model_turns=$4,tool_calls=$5,prompt_tokens=$6,completion_tokens=$7,
-cached_tokens=$8,latency_ms=$9,active_ms=$10,error_code=$11,error=$12,final_message_id=$13,ended_at=$14,updated_at=now()
+cached_tokens=$8,latency_ms=$9,active_ms=$10,error_code=$11,error=$12,final_message_id=$13,ended_at=$14,ttft_ms=$15,updated_at=now()
 WHERE id=$1 AND status='running'`,
 		run.ID, run.Status, run.Steps, run.ModelTurns, run.ToolCalls, run.PromptTokens, run.CompletionTokens,
-		run.CachedTokens, run.LatencyMS, run.ActiveMS, run.ErrorCode, run.Error, run.FinalMessageID, run.EndedAt)
+		run.CachedTokens, run.LatencyMS, run.ActiveMS, run.ErrorCode, run.Error, run.FinalMessageID, run.EndedAt, run.TTFTMS)
 	if err != nil {
 		return err
 	}
@@ -64,12 +64,12 @@ func (s *PGStore) GetRun(ctx context.Context, id string) (Run, error) {
 	err := s.DB.QueryRow(ctx, `
 SELECT id,workspace_id,owner_user_id,conversation_id,agent_id,agent_version_id,root_run_id,status,user_message_id,
 COALESCE(final_message_id,''),provider,model,stream_protocol,limits,toolset,steps,model_turns,tool_calls,prompt_tokens,completion_tokens,
-cached_tokens,latency_ms,active_ms,error_code,error,started_at,ended_at
+cached_tokens,latency_ms,active_ms,error_code,error,started_at,ended_at,ttft_ms
 FROM runs WHERE id=$1`, id).Scan(
 		&run.ID, &run.WorkspaceID, &run.OwnerUserID, &run.ConversationID, &run.AgentID, &run.AgentVersionID,
 		&run.RootRunID, &run.Status, &run.UserMessageID, &run.FinalMessageID, &run.Provider, &run.Model, &run.StreamProtocol,
 		&limitsRaw, &toolsetRaw, &run.Steps, &run.ModelTurns, &run.ToolCalls, &run.PromptTokens, &run.CompletionTokens,
-		&run.CachedTokens, &run.LatencyMS, &run.ActiveMS, &run.ErrorCode, &run.Error, &run.StartedAt, &ended,
+		&run.CachedTokens, &run.LatencyMS, &run.ActiveMS, &run.ErrorCode, &run.Error, &run.StartedAt, &ended, &run.TTFTMS,
 	)
 	if err != nil {
 		return Run{}, err
