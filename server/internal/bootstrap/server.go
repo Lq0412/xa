@@ -135,6 +135,8 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("POST /api/v1/runs/{run_id}/cancel", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Cancel)))
 	mux.Handle("POST /api/v1/approvals/{approval_id}/decision", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Decision)))
 	mux.Handle("GET /api/v1/admin/approvals", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ApprovalRecords)))
+	mux.Handle("GET /api/v1/approvals", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.UserApprovals)))
+	mux.Handle("GET /api/v1/agents/{agent_id}/activity", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.AgentActivity)))
 	mux.Handle("GET /api/v1/runs", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ListRuns)))
 	mux.Handle("GET /api/v1/runs/{run_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.GetRun)))
 	mux.Handle("GET /api/v1/runs/{run_id}/spans", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Spans)))

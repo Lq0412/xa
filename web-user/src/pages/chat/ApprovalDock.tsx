@@ -133,6 +133,8 @@ export function ApprovalDock({
   return (
     <section
       ref={dock}
+      id="chat-approval"
+      tabIndex={-1}
       aria-label={`需要确认${title}`}
       aria-busy={busy}
       className="approval-dock"

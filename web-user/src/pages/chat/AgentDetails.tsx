@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import * as Tabs from '@radix-ui/react-tabs';
+import { useEffect, useEffectEvent, useState } from 'react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { Icon } from '@/components/Icon';
 import { Markdown } from '@/components/Markdown';
@@ -11,7 +12,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   type Agent,
   type AgentVersion,
@@ -19,16 +19,13 @@ import {
   getAgentConfig,
   saveAgent,
 } from '@/services/api';
-import {
-  type ConversationSummary,
-  getConversationSummary,
-} from '@/services/chat';
-import type { MemoryPolicyResult } from '@/services/memory';
+import { AgentActivity } from './AgentActivity';
 import { AgentTools } from './AgentTools';
+import type { PendingApproval } from './approval-copy';
 import {
-  MemoryCard,
   type MemoryCue,
   MemoryDetail,
+  MemoryRows,
   useAgentMemory,
 } from './MemoryPanel';
 
@@ -36,168 +33,75 @@ type Props = {
   agent: Agent;
   userID?: string;
   memoryCue: MemoryCue;
-  conversationId?: string;
+  approvals: PendingApproval[];
+  onShowApproval: () => void;
   onEdit: () => void;
   onClose?: () => void;
   onSaved: (agent: Agent) => void;
 };
 
-/** 详情页里的当前对话摘要。没有会话或尚未生成时使用同一句说明。 */
-function ConversationSummaryBlock({
-  conversationId,
-}: {
-  conversationId?: string;
-}) {
-  const [summary, setSummary] = useState<
-    ConversationSummary | null | undefined
-  >(conversationId ? undefined : null);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (!conversationId) {
-      setSummary(null);
-      setError('');
-      return;
-    }
-    const controller = new AbortController();
-    setSummary(undefined);
-    setError('');
-    getConversationSummary(conversationId, controller.signal)
-      .then((value) => {
-        if (!controller.signal.aborted) setSummary(value);
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
-      });
-    return () => controller.abort();
-  }, [conversationId]);
-  return (
-    <div>
-      <p className="text-xs text-zinc-400">对话摘要</p>
-      {error && (
-        <p className="mt-1 text-sm text-rose-700" role="alert">
-          {error}
-        </p>
-      )}
-      {!error && summary === undefined && <Skeleton className="mt-2 h-12" />}
-      {!error && summary === null && (
-        <p className="mt-1 text-sm leading-6 text-zinc-500">
-          对话变长后会自动生成摘要
-        </p>
-      )}
-      {summary && (
-        <>
-          <p className="mt-1 leading-6 whitespace-pre-wrap text-zinc-700">
-            {summary.content}
-          </p>
-          <p className="mt-1 text-xs text-zinc-400">
-            覆盖 {summary.message_count} 条消息 · v{summary.version}
-          </p>
-        </>
-      )}
-    </div>
-  );
-}
-
-function cardDate(value?: string) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (item: number) => String(item).padStart(2, '0');
-  return `${pad(date.getMonth() + 1)}.${pad(date.getDate())}.${String(date.getFullYear()).slice(2)}`;
-}
-
-function statusText(agent: Agent) {
-  const role = agent.is_primary
-    ? '主 Agent'
-    : agent.visibility === 'public'
-      ? '公共 Agent'
-      : '私有 Agent';
-  return agent.status === 'active' ? role : `${role} · 已停用`;
-}
-
-/** 默认阅读配置。SOUL 编辑占满整个配置栏；保存使用不可变版本与乐观锁。 */
+/** 对话侧栏显示 Agent 动态、记忆与设置。配置保存沿用版本校验。 */
 export function AgentDetails({
   agent,
   userID,
   memoryCue,
-  conversationId,
+  approvals,
+  onShowApproval,
   onEdit,
   onClose,
   onSaved,
 }: Props) {
+  const [tab, setTab] = useState('activity');
   const [version, setVersion] = useState<AgentVersion>();
   const [error, setError] = useState('');
+  const [description, setDescription] = useState(agent.description);
   const [soul, setSoul] = useState('');
   const [model, setModel] = useState('');
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
-  const savedSoul = useRef(false);
   const editable = agent.owner_type === 'user' && agent.owner_id === userID;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 版本指针和 revision 驱动外部编辑及重试后的读取。
+  const current = version?.id === agent.current_version_id;
+  const applyVersion = useEffectEvent((result: AgentVersion) => {
+    setVersion(result);
+    setSoul(result.configuration.soul_md);
+    setModel(result.configuration.model);
+    if (result.id !== agent.current_version_id) {
+      onSaved({ ...agent, current_version_id: result.id });
+    }
+  });
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Agent 版本变化及冲突后重新读取配置。
   useEffect(() => {
     const controller = new AbortController();
-    setError('');
-    setEditing(false);
     getAgentConfig(agent.id, controller.signal)
       .then((result) => {
-        if (!controller.signal.aborted) {
-          setVersion(result);
-          setSoul(result.configuration.soul_md);
-          setModel(result.configuration.model);
-          if (savedSoul.current) {
-            savedSoul.current = false;
-            setNotice(`已保存为 v${result.version_number}`);
-          }
-        }
+        if (controller.signal.aborted) return;
+        applyVersion(result);
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) {
-          savedSoul.current = false;
-          setError(errorMessage(cause));
-        }
+        if (!controller.signal.aborted) setError(errorMessage(cause));
       });
     return () => controller.abort();
   }, [agent.id, agent.current_version_id, revision]);
-  const applyPolicy = (result: MemoryPolicyResult) => {
-    setVersion((current) =>
-      current
-        ? {
-            ...current,
-            id: result.current_version_id,
-            version_number: result.version_number,
-            configuration: {
-              ...current.configuration,
-              memory_policy: result.memory_policy,
-            },
-          }
-        : current,
-    );
-    onSaved({ ...agent, current_version_id: result.current_version_id });
-  };
+  useEffect(() => setDescription(agent.description), [agent.description]);
+
   const memory = useAgentMemory({
     agentId: agent.id,
-    version,
-    editable,
+    version: current ? version : undefined,
+    editable: editable && current,
     cue: memoryCue,
-    onPolicySaved: applyPolicy,
+    onPolicySaved: (result) =>
+      onSaved({ ...agent, current_version_id: result.current_version_id }),
     onConflict: () => setRevision((value) => value + 1),
   });
-  const save = async (field: 'soul_md' | 'model') => {
-    if (!version || !editable || saving) return;
+  const save = async (values: Parameters<typeof saveAgent>[2]) => {
+    if (!version || !current || !editable || saving) return;
     setSaving(true);
     setError('');
-    setNotice('');
     try {
-      const result = await saveAgent(
-        agent,
-        version,
-        field === 'soul_md' ? { soul_md: soul } : { model },
-      );
-      if (field === 'soul_md') savedSoul.current = true;
-      else setNotice('已保存');
+      const result = await saveAgent(agent, version, values);
       setEditing(false);
       onSaved(result.agent);
     } catch (cause) {
@@ -206,27 +110,22 @@ export function AgentDetails({
       setSaving(false);
     }
   };
-  const openSoul = () => {
-    setEditing(true);
-    setPreview(false);
-    setNotice('');
-  };
-  const closeSoul = () => {
-    if (version) setSoul(version.configuration.soul_md);
-    setPreview(false);
-    setEditing(false);
-  };
-  const date = cardDate(agent.created_at);
-  const soulCard = (
-    <>
-      <span className="text-[11px] text-zinc-600">SOUL</span>
-      <span className="version-label mt-1 text-[13px] font-semibold text-zinc-900">{`v${version?.version_number ?? ''}`}</span>
-      <span className="mt-auto pt-2 text-[11px] text-zinc-600">{date}</span>
-    </>
+  const alert = error && (
+    <p role="alert" className="mx-4 my-2 text-xs text-rose-700">
+      {error}{' '}
+      <button
+        type="button"
+        className="underline"
+        onClick={() => {
+          setError('');
+          setRevision((value) => value + 1);
+        }}
+      >
+        重新读取
+      </button>
+    </p>
   );
-  const soulStyle = {
-    background: '#f7e8a3',
-  };
+
   if (memory.detailOpen) {
     return (
       <MemoryDetail
@@ -236,6 +135,7 @@ export function AgentDetails({
       />
     );
   }
+
   if (editing && version) {
     return (
       <section
@@ -246,56 +146,35 @@ export function AgentDetails({
           <button
             type="button"
             className="inline-flex items-center gap-1 text-sm text-zinc-600"
-            onClick={closeSoul}
+            onClick={() => {
+              setSoul(version.configuration.soul_md);
+              setEditing(false);
+            }}
           >
             <Icon name="arrow-left" size={16} />
             返回
           </button>
           <h2 className="text-sm font-medium">SOUL</h2>
           <div className="ml-auto flex items-center gap-2">
-            <div className="flex rounded-full bg-zinc-100 p-0.5 text-xs">
-              <button
-                type="button"
-                className={`rounded-full px-2.5 py-1 ${preview ? 'text-zinc-500' : 'bg-white text-zinc-900 shadow-sm'}`}
-                aria-pressed={!preview}
-                onClick={() => setPreview(false)}
-              >
-                编辑
-              </button>
-              <button
-                type="button"
-                className={`rounded-full px-2.5 py-1 ${preview ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
-                aria-pressed={preview}
-                onClick={() => setPreview(true)}
-              >
-                预览
-              </button>
-            </div>
+            <button
+              type="button"
+              className="text-xs text-zinc-600 hover:underline"
+              onClick={() => setPreview(!preview)}
+            >
+              {preview ? '编辑' : '预览'}
+            </button>
             <Button
               size="sm"
-              disabled={saving || soul === version.configuration.soul_md}
-              onClick={() => void save('soul_md')}
+              disabled={
+                saving || !current || soul === version.configuration.soul_md
+              }
+              onClick={() => void save({ soul_md: soul })}
             >
               {saving ? '保存中…' : '保存'}
             </Button>
           </div>
         </header>
-        {error && (
-          <div
-            className="mx-4 mb-2 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800"
-            role="alert"
-          >
-            {error}
-            <button
-              type="button"
-              className="shrink-0 text-xs underline"
-              disabled={saving}
-              onClick={() => setRevision((value) => value + 1)}
-            >
-              重新读取
-            </button>
-          </div>
-        )}
+        {alert}
         <div className="min-h-0 flex-1 bg-zinc-100">
           {preview ? (
             <div className="soul-preview h-full overflow-auto px-5 py-4 text-sm text-zinc-800">
@@ -315,225 +194,181 @@ export function AgentDetails({
       </section>
     );
   }
+
   return (
     <section
-      className="relative flex h-full min-h-0 flex-col"
-      aria-label="Agent 配置"
+      className="relative flex h-full min-h-0 flex-col bg-white text-sm"
+      aria-label="Agent 面板"
     >
-      {(memory.notice || notice) && (
-        <p
-          role="status"
-          className="absolute top-14 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900 px-3 py-1.5 text-xs whitespace-nowrap text-white shadow-sm"
-        >
-          {memory.notice || notice}
-        </p>
-      )}
       {onClose && (
         <button
           type="button"
-          className="absolute top-3 right-3 z-10 flex size-8 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-100"
+          className="absolute top-3 right-3 flex size-8 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-100"
           onClick={onClose}
           aria-label="收起 Agent 配置"
         >
           <Icon name="close" size={18} />
         </button>
       )}
-      <div className="min-h-0 flex-1 overflow-auto px-5 pt-6 pb-5">
-        <div className="flex flex-col items-center text-center">
-          <div className="relative">
-            <AgentAvatar size={88} />
-            {editable && (
-              <button
-                type="button"
-                className="absolute -right-1 -bottom-1 flex size-8 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"
-                aria-label="编辑基本信息"
-                onClick={onEdit}
-              >
-                <Icon name="edit" size={14} />
-              </button>
-            )}
-          </div>
-          <h2 className="mt-2 text-base font-semibold">{agent.name}</h2>
-          {agent.description.trim() && (
-            <p className="mt-1 line-clamp-2 max-w-full px-2 text-xs leading-5 text-zinc-500">
-              {agent.description}
-            </p>
-          )}
-        </div>
-        {error && (
-          <div
-            className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800"
-            role="alert"
-          >
-            {error}
+      <header className="flex shrink-0 flex-col items-center px-12 pt-6 pb-4 text-center">
+        <div className="relative">
+          <AgentAvatar size={56} />
+          {editable && (
             <button
               type="button"
-              className="shrink-0 text-xs underline"
-              disabled={saving}
-              onClick={() => setRevision((value) => value + 1)}
+              className="absolute -right-1 -bottom-1 flex size-6 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"
+              aria-label="编辑基本信息"
+              onClick={onEdit}
             >
-              重新读取
+              <Icon name="edit" size={12} />
             </button>
-          </div>
-        )}
-        {!version ? (
-          !error && (
-            <div className="mt-6 space-y-3" role="status">
-              <span className="sr-only">正在读取配置</span>
-              <Skeleton className="h-24 w-full" />
-              <div className="grid grid-cols-2 gap-3">
-                <Skeleton className="h-36" />
-                <Skeleton className="h-36" />
-              </div>
-            </div>
-          )
-        ) : (
-          <Tabs defaultValue="modules" className="mt-4">
-            <TabsList>
-              <TabsTrigger value="modules">模块</TabsTrigger>
-              <TabsTrigger value="about">详情</TabsTrigger>
-            </TabsList>
-            <TabsContent value="modules" className="mt-5">
-              {memory.error && (
-                <div
-                  className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800"
-                  role="alert"
-                >
-                  {memory.error}
-                  <button
-                    type="button"
-                    className="shrink-0 text-xs underline"
-                    onClick={memory.refresh}
-                  >
-                    重新读取
-                  </button>
-                </div>
-              )}
-              <div className="rounded-[14px] border border-zinc-200 bg-white px-3.5 py-3 text-left">
-                <p className="line-clamp-4 text-xs leading-[1.65] whitespace-pre-wrap text-zinc-600">
-                  {soul || '未设置'}
-                </p>
-                {editable && (
-                  <button
-                    type="button"
-                    className="mt-1.5 text-xs font-medium text-zinc-800 hover:underline"
-                    aria-label="编辑 SOUL.md"
-                    onClick={openSoul}
-                  >
-                    编辑
-                  </button>
-                )}
-              </div>
-              <div className="mt-3 grid grid-cols-2 items-stretch gap-2.5">
-                {editable ? (
-                  <button
-                    type="button"
-                    className="flex min-h-[88px] flex-col rounded-2xl p-3 text-left"
-                    style={soulStyle}
-                    onClick={openSoul}
-                    disabled={saving}
-                  >
-                    {soulCard}
-                  </button>
-                ) : (
-                  <div
-                    className="flex min-h-[88px] flex-col rounded-2xl p-3 text-left"
-                    style={soulStyle}
-                  >
-                    {soulCard}
-                  </div>
-                )}
-                <div className="flex min-h-[88px] min-w-0 flex-col rounded-2xl bg-[#dbe7fb] py-3 pr-1.5 pl-3 text-left text-zinc-900">
-                  <span className="text-[11px] text-zinc-600">模型</span>
-                  {editable ? (
-                    <Select
-                      value={model}
-                      disabled={saving}
-                      onValueChange={(value) => {
-                        setModel(value);
-                        setNotice('');
-                      }}
-                    >
-                      <SelectTrigger
-                        className="mt-1 h-auto min-h-6 min-w-0 justify-start gap-0.5 rounded-sm border-0 bg-transparent p-0 text-[13px] font-semibold focus-visible:ring-2 [&>span]:truncate [&>svg]:size-3 [&>svg]:shrink-0"
-                        aria-label="模型"
-                        title={model}
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {version.available_models.map((name) => (
-                          <SelectItem key={name} value={name}>
-                            {name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <span
-                      className="mt-1 truncate text-[13px] font-semibold"
-                      title={model}
-                    >
-                      {model}
-                    </span>
-                  )}
-                  <span className="mt-auto pt-2 text-[11px] text-zinc-600">
-                    {date}
-                  </span>
-                  {editable && model !== version.configuration.model && (
-                    <Button
-                      className="mt-2"
-                      size="sm"
-                      disabled={saving}
-                      onClick={() => void save('model')}
-                    >
-                      保存
-                    </Button>
-                  )}
-                </div>
-                <MemoryCard memory={memory} date={date} />
-              </div>
-              {editable && <AgentTools agent={agent} onSaved={onSaved} />}
-            </TabsContent>
-            <TabsContent
-              value="about"
-              className="mt-4 space-y-4 text-left text-sm"
+          )}
+        </div>
+        <h2 className="mt-2 break-all text-base font-semibold">{agent.name}</h2>
+        <p
+          role="status"
+          className={
+            approvals.length
+              ? 'mt-0.5 text-xs text-amber-800'
+              : 'mt-0.5 text-xs text-zinc-500'
+          }
+        >
+          {approvals.length
+            ? `有 ${approvals.length} 项待你确认`
+            : agent.status === 'active'
+              ? '在线'
+              : '已停用'}
+        </p>
+      </header>
+      <Tabs.Root
+        value={tab}
+        onValueChange={setTab}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <Tabs.List
+          aria-label="Agent 面板"
+          className="flex shrink-0 gap-6 border-b border-zinc-200 px-4"
+        >
+          {(['动态', '记忆', '设置'] as const).map((label, index) => (
+            <Tabs.Trigger
+              key={label}
+              value={['activity', 'memory', 'settings'][index]}
+              className="border-b-2 border-transparent py-3 text-zinc-500 data-[state=active]:border-zinc-900 data-[state=active]:text-zinc-900"
             >
-              <div>
-                <p className="text-xs text-zinc-400">简介</p>
-                <p className="mt-1 leading-6 text-zinc-700">
-                  {agent.description || '未填写'}
-                </p>
-              </div>
-              <ConversationSummaryBlock conversationId={conversationId} />
-              <div>
-                <p className="text-xs text-zinc-400">状态</p>
-                <p className="mt-1 text-zinc-700">{statusText(agent)}</p>
-              </div>
-              {agent.created_at && (
-                <p className="text-xs text-zinc-400">
-                  创建于{' '}
-                  <time dateTime={agent.created_at}>
-                    {new Date(agent.created_at).toLocaleDateString('zh-CN')}
-                  </time>
-                </p>
-              )}
-              {(agent.tags ?? []).length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {(agent.tags ?? []).map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </TabsContent>
-          </Tabs>
-        )}
-      </div>
+              {label}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+        <Tabs.Content value="activity" className="min-h-0 flex-1 overflow-auto">
+          <AgentActivity
+            agentId={agent.id}
+            approvals={approvals}
+            onShowApproval={onShowApproval}
+            owned={editable}
+          />
+        </Tabs.Content>
+        <Tabs.Content
+          value="memory"
+          className="min-h-0 flex-1 overflow-auto px-4 pb-4"
+        >
+          {alert}
+          <MemoryRows memory={memory} />
+        </Tabs.Content>
+        <Tabs.Content
+          value="settings"
+          className="min-h-0 flex-1 overflow-auto px-4 pt-4 pb-5"
+        >
+          {alert}
+          <textarea
+            aria-label="简介"
+            placeholder="填写简介"
+            value={description}
+            readOnly={!editable}
+            disabled={saving}
+            onChange={(event) => setDescription(event.target.value)}
+            className="block min-h-16 w-full resize-y rounded-xl bg-zinc-50 px-3 py-2.5 leading-5"
+          />
+          {editable && description !== agent.description && (
+            <Button
+              className="mt-2"
+              size="sm"
+              disabled={!current || saving}
+              onClick={() => void save({ description })}
+            >
+              保存简介
+            </Button>
+          )}
+          <AgentTools
+            agent={agent}
+            onSaved={onSaved}
+            editable={editable}
+            advanced={
+              <>
+                {!version && !error && <Skeleton className="h-20" />}
+                {version && (
+                  <>
+                    <div className="flex min-h-10 items-center justify-between gap-2">
+                      <span className="text-zinc-500">模型</span>
+                      {editable ? (
+                        <Select
+                          value={model}
+                          disabled={!current || saving}
+                          onValueChange={setModel}
+                        >
+                          <SelectTrigger
+                            className="h-auto w-auto border-0 bg-transparent p-0 text-sm"
+                            aria-label="模型"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {version.available_models.map((name) => (
+                              <SelectItem key={name} value={name}>
+                                {name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span>{model}</span>
+                      )}
+                    </div>
+                    {editable && model !== version.configuration.model && (
+                      <Button
+                        size="sm"
+                        disabled={!current || saving}
+                        onClick={() => void save({ model })}
+                      >
+                        保存模型
+                      </Button>
+                    )}
+                    <div className="flex min-h-10 items-center justify-between gap-2">
+                      <span className="text-zinc-500">SOUL</span>
+                      <span className="flex items-center gap-3">
+                        v{version.version_number}
+                        {editable && (
+                          <button
+                            type="button"
+                            className="text-zinc-500 hover:underline"
+                            aria-label="编辑 SOUL.md"
+                            disabled={!current || saving}
+                            onClick={() => {
+                              setPreview(false);
+                              setEditing(true);
+                            }}
+                          >
+                            编辑
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </>
+            }
+          />
+        </Tabs.Content>
+      </Tabs.Root>
     </section>
   );
 }
