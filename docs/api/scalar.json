@@ -1,0 +1,8 @@
+{
+  "localization": { "locale": "zh-CN" },
+  "agent": { "disabled": true },
+  "hideClientButton": true,
+  "hideTestRequestButton": true,
+  "modelsSectionLabel": "数据结构",
+  "withDefaultFonts": false
+}

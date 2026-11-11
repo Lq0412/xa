@@ -1,4 +1,36 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { defineConfig } from '@umijs/max';
+import { parse } from 'yaml';
+
+// Umi 能读取 anyOf，但无法识别 OpenAPI 3.1 的数组形式 type。
+function normalizeUnionTypes(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeUnionTypes);
+  if (value === null || typeof value !== 'object') return value;
+  const schema = Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      normalizeUnionTypes(item),
+    ]),
+  );
+  if (!Array.isArray(schema.type)) return schema;
+  const { type, ...fields } = schema;
+  return {
+    ...fields,
+    anyOf: type.map((member: unknown) => ({ ...fields, type: member })),
+  };
+}
+
+// Umi OpenAPI 用 CommonJS 加载本地 schema，仓库契约使用 YAML。
+require.extensions['.yaml'] = (module, filename) => {
+  module.exports = normalizeUnionTypes(parse(readFileSync(filename, 'utf8')));
+};
+
+// Umi 先把中文标签转为拼音，再调用文件名映射。
+const serviceNames: Record<string, string> = {
+  renzheng: 'auth',
+  agentguanli: 'agents',
+};
 
 // 用户端独立构建和部署，只通过 HTTP 与公共 Go 后端交互。
 export default defineConfig({
@@ -11,6 +43,14 @@ export default defineConfig({
   initialState: {},
   antd: false,
   mock: false,
+  plugins: ['@umijs/max-plugin-openapi'],
+  openAPI: {
+    schemaPath: join(__dirname, '../../docs/api/openapi.yaml'),
+    projectName: 'generated',
+    requestLibPath: "import { request } from '@/services/openapi-request'",
+    mock: false,
+    hook: { customClassName: (tag = '') => serviceNames[tag] ?? tag },
+  },
   tailwindcss: {},
   define: {
     'process.env.XA_ADMIN_WEB_URL':

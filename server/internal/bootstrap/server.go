@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisclient "github.com/redis/go-redis/v9"
 	"linq-bs/server/internal/agent/conversation"
@@ -96,6 +97,43 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	runHandler := &agenthttp.RunHandler{Conversations: convSvc, Runs: runSvc}
 
 	mux := http.NewServeMux()
+	registerRoutes(mux, resolver, routeHandlers{
+		auth: authHandler, agents: agentHandler, library: libraryHandler, tools: toolsHandler,
+		memory: memoryHandler, conversations: conversationHandler, runs: runHandler,
+		health: frameworkhttp.HealthHandler(checks, s.config.HealthTimeout, s.logger),
+	})
+	handler := http.Handler(mux)
+	if raw := strings.TrimSpace(os.Getenv("XA_HTTP_CORS_ORIGINS")); raw != "" {
+		handler = frameworkhttp.WithAllowOrigins(strings.Split(raw, ","), mux)
+	}
+	return handler, nil
+}
+
+// routeMux 保留标准库路由注册边界，也让覆盖测试记录实际注册的方法和路径。
+type routeMux interface {
+	http.Handler
+	Handle(string, http.Handler)
+	HandleFunc(string, func(http.ResponseWriter, *http.Request))
+}
+
+type routeHandlers struct {
+	auth          *systemhttp.Handler
+	agents        *agenthttp.ManagementHandler
+	library       *agenthttp.LibraryHandler
+	tools         *agenthttp.ToolsHandler
+	memory        *agenthttp.MemoryHandler
+	conversations *agenthttp.ConversationHandler
+	runs          *agenthttp.RunHandler
+	health        http.Handler
+}
+
+// registerRoutes 只登记接口，不访问存储；生产与文档导出共用此入口。
+func registerRoutes(mux routeMux, resolver auth.Resolver, handlers routeHandlers) huma.API {
+	api := frameworkhttp.NewAPI(mux)
+	handlers.auth.RegisterRoutes(api, resolver)
+	handlers.agents.RegisterRoutes(api, resolver)
+	memoryHandler, libraryHandler, toolsHandler := handlers.memory, handlers.library, handlers.tools
+	conversationHandler, runHandler := handlers.conversations, handlers.runs
 	mux.Handle("GET /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.List)))
 	mux.Handle("POST /api/v1/memories", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Add)))
 	mux.Handle("PUT /api/v1/memories/{memory_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Edit)))
@@ -106,23 +144,9 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("PUT /api/v1/agents/{agent_id}/memory-policy", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Policy)))
 	mux.Handle("GET /api/v1/memory/stats", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Stats)))
 	mux.Handle("POST /api/v1/memory/jobs/{job_id}/retry", frameworkhttp.Authenticate(resolver, http.HandlerFunc(memoryHandler.Retry)))
-	health := frameworkhttp.HealthHandler(checks, s.config.HealthTimeout, s.logger)
-	mux.Handle("/health/", health)
-	mux.HandleFunc("POST /api/v1/auth/register", authHandler.Register)
-	mux.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
-	mux.Handle("POST /api/v1/auth/logout", frameworkhttp.Authenticate(resolver, http.HandlerFunc(authHandler.Logout)))
-	mux.Handle("GET /api/v1/auth/me", frameworkhttp.Authenticate(resolver, http.HandlerFunc(authHandler.Me)))
-	mux.Handle("GET /api/v1/available-agents", frameworkhttp.OptionalPrincipal(resolver, http.HandlerFunc(agentHandler.Available)))
-	mux.Handle("GET /api/v1/agents", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.List)))
+	mux.Handle("/health/", handlers.health)
 	mux.Handle("GET /api/v1/agent-library", frameworkhttp.Authenticate(resolver, http.HandlerFunc(libraryHandler.List)))
 	mux.Handle("PUT /api/v1/agent-library/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(libraryHandler.Add)))
-	mux.Handle("POST /api/v1/agents", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Create)))
-	mux.Handle("GET /api/v1/agents/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Get)))
-	mux.Handle("GET /api/v1/agents/{agent_id}/config", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.GetConfig)))
-	mux.Handle("PUT /api/v1/agents/{agent_id}/config", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Save)))
-	mux.Handle("POST /api/v1/agents/{agent_id}/enable", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Enable)))
-	mux.Handle("POST /api/v1/agents/{agent_id}/offline", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Disable)))
-	mux.Handle("DELETE /api/v1/agents/{agent_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(agentHandler.Delete)))
 	mux.Handle("GET /api/v1/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.Catalog)))
 	mux.Handle("GET /api/v1/agents/{agent_id}/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.GetAgentTools)))
 	mux.Handle("PUT /api/v1/agents/{agent_id}/tools", frameworkhttp.Authenticate(resolver, http.HandlerFunc(toolsHandler.PutAgentTools)))
@@ -144,9 +168,19 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	mux.Handle("GET /api/v1/admin/runs", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.ListRuns)))
 	mux.Handle("GET /api/v1/admin/runs/{run_id}", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.GetRun)))
 	mux.Handle("GET /api/v1/admin/runs/{run_id}/spans", frameworkhttp.Authenticate(resolver, http.HandlerFunc(runHandler.Spans)))
-	handler := http.Handler(mux)
-	if raw := strings.TrimSpace(os.Getenv("XA_HTTP_CORS_ORIGINS")); raw != "" {
-		handler = frameworkhttp.WithAllowOrigins(strings.Split(raw, ","), mux)
+	return api
+}
+
+// OpenAPI 从同一注册入口导出约定，不加载配置、不连接数据库，也不启动监听器。
+func OpenAPI() *huma.OpenAPI {
+	return registerRoutes(http.NewServeMux(), nil, documentationHandlers()).OpenAPI()
+}
+
+func documentationHandlers() routeHandlers {
+	return routeHandlers{
+		auth: &systemhttp.Handler{}, agents: &agenthttp.ManagementHandler{},
+		library: &agenthttp.LibraryHandler{}, tools: &agenthttp.ToolsHandler{},
+		memory: &agenthttp.MemoryHandler{}, conversations: &agenthttp.ConversationHandler{},
+		runs: &agenthttp.RunHandler{}, health: frameworkhttp.HealthHandler(nil, time.Second, slog.Default()),
 	}
-	return handler, nil
 }

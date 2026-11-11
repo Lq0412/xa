@@ -8,6 +8,8 @@ React 19、Umi Max 4、Tailwind CSS、shadcn/ui 和 Lucide 图标；用户端不
 
 本目录执行 `npm run lint`、`npm run build`。真实浏览器验收运行 `XA_BROWSER_INTEGRATION=1 make integration`，自动构建用户端，启动独立 server，注册独立账号，使用真实 PostgreSQL 与低成本 `qwen3.8-flash`，结束后清理本次数据。需要 Playwright Chromium；临时文件在根目录 `.output/`，不记录截图或视频。
 
+根目录的 `docs/api/openapi.yaml` 更新后，在本目录执行 `npm run openapi`，并提交 `src/services/generated/` 的生成结果。
+
 ## 页面边界
 
 左侧图标栏只有对话、发现 Agent、我的 Agent；设置、账号、退出在底部。第二栏按名称搜索，分成「我的 Agent」和「已添加」，主 Agent 根据后端 `is_primary` 置顶，每项显示最近一条消息，不显示会话树。
