@@ -49,6 +49,14 @@ export default function ChatPage() {
     [...session.messages].reverse().find((item) => item.content.trim())
       ?.content || '',
   );
+  const showApproval = () => {
+    if (!detailsInline) details.setOpen(false);
+    requestAnimationFrame(() => {
+      const dock = document.getElementById('chat-approval');
+      dock?.scrollIntoView({ block: 'nearest' });
+      dock?.focus({ preventScroll: true });
+    });
+  };
   const sidebar = (
     <AgentSidebar
       agents={library.agents}
@@ -80,7 +88,8 @@ export default function ChatPage() {
         setEditor({ agent: session.agent });
       }}
       memoryCue={session.memoryCue}
-      conversationId={session.conversationID || undefined}
+      approvals={session.pendingApprovals}
+      onShowApproval={showApproval}
       onClose={detailsInline ? () => details.setOpen(false) : undefined}
       onSaved={saved}
     />
@@ -229,7 +238,7 @@ export default function ChatPage() {
         details.open &&
         (detailsInline ? (
           <aside
-            className="agent-details-panel h-full w-[300px] shrink-0 border-l border-zinc-200 bg-white"
+            className="agent-details-panel h-full w-[360px] shrink-0 border-l border-zinc-200 bg-white"
             aria-label="Agent 配置栏"
           >
             {panel}

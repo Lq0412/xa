@@ -664,7 +664,7 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
   };
 
   const current = sessions.get(key) || emptySession;
-  const [pendingApproval] = pendingApprovals(
+  const approvals = pendingApprovals(
     current.messages.flatMap((message) =>
       message.status === 'pending' ? (message.parts ?? []) : [],
     ),
@@ -713,7 +713,8 @@ export function useChatSession(search: string, defaultAgent?: Agent) {
 
   return {
     ...current,
-    pendingApproval,
+    pendingApproval: approvals[0],
+    pendingApprovals: approvals,
     key,
     agentID,
     conversationID,

@@ -39,6 +39,7 @@ import {
   runDeadRetry,
   withRetryGate,
 } from '@/services/memoryRetry';
+import { panelTime } from './AgentActivity';
 
 /** 回复结束后抽取是异步的，稍等再读一次列表。 */
 const REFRESH_AFTER_TURN_MS = 3000;
@@ -217,7 +218,8 @@ function belongsToAgent(item: MemoryItem, agentId: string) {
   );
 }
 
-function Switch({
+/** 设置与记忆共用的二态开关。 */
+export function Switch({
   checked,
   disabled,
   label,
@@ -734,18 +736,32 @@ export function useAgentMemory({
   };
 }
 
-/** 模块页上的记忆卡片。只显示条数，开关不进入详情。 */
-export function MemoryCard({
-  memory,
-  date,
-}: {
-  memory: MemoryController;
-  date: string;
-}) {
+/** 侧栏记忆页优先展示内容，完整管理仍可从此处进入。 */
+export function MemoryRows({ memory }: { memory: MemoryController }) {
+  const [expanded, setExpanded] = useState('');
+  const [deleting, setDeleting] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const remove = async (id: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await deleteMemory(id);
+      memory.forget(id);
+      setDeleting('');
+      memory.refresh();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="col-span-2 flex min-h-[88px] flex-col rounded-2xl bg-[#e4d7f8] px-3.5 py-3 text-left text-zinc-900">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[11px] text-zinc-600">记忆</span>
+    <>
+      <div className="flex min-h-12 items-center justify-between gap-3">
+        <span>
+          {memory.count === null ? '记忆' : `记住了 ${memory.count} 件`}
+        </span>
         <Switch
           checked={memory.policy.enabled}
           disabled={!memory.editable || memory.policySaving}
@@ -753,18 +769,99 @@ export function MemoryCard({
           onChange={() => void memory.toggle()}
         />
       </div>
+      {memory.error && (
+        <Alert message={memory.error} onRetry={memory.refresh} />
+      )}
+      {error && (
+        <p role="alert" className="py-2 text-rose-700">
+          {error}
+        </p>
+      )}
+      {!memory.loaded && !memory.error && <Skeleton className="h-20" />}
+      {memory.loaded && !memory.items.length && (
+        <p className="py-3 text-zinc-500">暂无记忆</p>
+      )}
+      {memory.items.map((item) => {
+        const open = expanded === item.id;
+        const { group, time } = panelTime(item.created_at);
+        return (
+          <div key={item.id} className="py-2.5">
+            <div className="flex items-start gap-2">
+              <button
+                type="button"
+                aria-expanded={open}
+                className="min-w-0 flex-1 text-left"
+                onClick={() => setExpanded(open ? '' : item.id)}
+              >
+                <span
+                  className={
+                    open
+                      ? 'block whitespace-pre-wrap break-words'
+                      : 'block truncate'
+                  }
+                >
+                  {item.content}
+                </span>
+                <time
+                  dateTime={item.created_at}
+                  className="mt-0.5 block text-xs text-zinc-500"
+                >
+                  {group === '更早' ? time : `${group} ${time}`}
+                </time>
+              </button>
+              <button
+                type="button"
+                aria-label="删除记忆"
+                disabled={busy}
+                className="flex size-7 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-100"
+                onClick={() => setDeleting(item.id)}
+              >
+                <Icon name="trash" size={15} />
+              </button>
+            </div>
+            {deleting === item.id && (
+              <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                <span>删除这条记忆？</span>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setDeleting('')}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="text-rose-700"
+                    onClick={() => void remove(item.id)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {memory.hasMore && (
+        <button
+          type="button"
+          className="my-2 block text-xs text-zinc-500 hover:underline"
+          disabled={memory.loadingMore}
+          onClick={() => void memory.loadMore()}
+        >
+          {memory.loadingMore ? '加载中…' : '加载更多'}
+        </button>
+      )}
       <button
         type="button"
-        className="flex flex-1 flex-col text-left"
-        aria-label="查看记忆"
+        className="mt-3 text-xs text-zinc-500 hover:underline"
         onClick={() => memory.setDetailOpen(true)}
       >
-        <span className="text-base font-semibold">
-          {memory.count == null ? '…' : `${memory.count} 条`}
-        </span>
-        <span className="mt-auto pt-2 text-[11px] text-zinc-600">{date}</span>
+        管理记忆
       </button>
-    </div>
+    </>
   );
 }
 
