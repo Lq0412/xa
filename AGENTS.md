@@ -2,12 +2,6 @@
 
 本文件约束代理在本项目中的表达、修改、验证和协作方式。用户当前对话中的明确要求优先于本文件；项目子目录中的 `AGENTS.md` 补充对应项目的具体规则。
 
-## 产品与实现原则
-
-1. I want this to be as perfect as Linear's website or Apple Notes: simple purpose, simple architecture, simple design, simple implementation
-2. Cut taglines, helper text and secondary labels. Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining. If a screen needs them to make sense, fix the layout
-3. Every decision should elevate the user experience (UX), developer experience (DX) and agent experience (AX) at once, without breaking anything
-
 ## 语言与表达
 
 - 使用直接、易懂、没有套话的中文。
@@ -23,7 +17,8 @@
 - 只实施用户要求的内容，不附带额外功能、重构或顺手优化。
 - 用户指出错误后，直接基于当前文件继续处理，不复述错误原因。
 - 用户在任务中插入问题时，先回答问题，再继续原任务。
-- 用户未明确要求时，不进入 plan mode，不主动使用截图或图像识别。
+- 用户未明确要求时，不进入计划模式。
+- 关键改动完成、验证结束或遇到阻塞时，在聊天里简短汇报实际结果。
 - 提供网页链接前，先完整阅读链接内容；发现库用法错误时，重新阅读对应资料后再处理。
 - 遇到不确定的设计或技术选择时，先联网查阅官方文档和成熟项目实践，再结合本项目简要说明建议及关键取舍；方案经用户确认后再开始开发，已确认的方案不重复询问。
 - 设计方案需要完整成立；需要提供多个方案时，每个方案都单独说明完整的实现方式和验证方式。
@@ -36,6 +31,13 @@
 - 交付内容应保持干净，不保留修改过程说明、临时注释或已经移除的方案。
 - 一个任务只处理对应范围。发现无关问题时，不顺手修改。
 - 搜索某个主题时，只报告与当前主题直接相关的发现。
+- 任务单包含“边界与取舍”，说明不处理的场景、可接受的异常、兼容范围和验证到哪一层。按确认的清单验收，范围外的问题记录在 PR 中。
+- 禁止为未来功能预先创建空包或占位页面，未来事项统一写进 [docs/ROADMAP.md](docs/ROADMAP.md)。
+
+## 界面工作流程
+
+- 新页面或明显的视觉改版先出设计图，经用户确认后开发。已确认设计内的小修直接开发。
+- 界面改动交付时附实际截图，自行核对状态、文字和布局，合并前由用户确认截图。
 
 ## 编码与测试
 
@@ -45,20 +47,25 @@
 - 改路径、字段、状态码、错误码或权限时，先修改 Go 输入输出结构体、handler 和 operation 声明，再运行 `make api`、`make api-client`。禁止手改生成的 YAML 或客户端文件。
 - JSON 错误统一为 `{code,message,request_id}`；等待审批的 409 保留 `{code,message,run_id}`。新增错误码必须写入代码中的接口说明，服务端内部错误不能对外泄漏。
 - 两个 SSE 接口保留标准库 handler 和现有帧格式，OpenAPI 声明与 handler 同步维护。
-- 提交前运行 `make check`，检查路由覆盖和生成物新鲜度。浏览接口说明运行 `make api-docs`。
+- 接口改动提交前运行 `make check`，检查路由覆盖和生成物是否与源码一致。浏览接口说明运行 `make api-docs`。
 
-### 实现与验证
+### 编码与错误处理
 
-- 采用 fast-fail：错误在发生位置直接抛出，禁止用 try-except 或 try-catch 吞掉错误，禁止添加静默 fallback。
-- 需要的库直接导入，不用 try-except 包裹 import。
+- 遵循现有实现方式，只修改需求所需的内容。错误在发生处返回或抛出，明确传递给调用方，不吞错误或添加静默兜底。
+- 未知输入在负责接收它的边界校验一次，内部传递类型明确的数据，不重复校验已由类型、Schema、构造函数或前序检查保证的条件。
+- 不为“以防万一”增加空值检查、默认值或备用路径。为罕见竞态或安全情况增加复杂逻辑前，先说明具体故障、发生可能性和复杂度成本，经用户同意后再做。
+- 不预先抽取只用一次的辅助函数，除非它表达了实际职责边界。
 - 使用成熟库处理 JSON、YAML、TOML、CSV、HTML、XML、PDF 等格式，不手写解析器。
-- 使用真实依赖和真实数据验证功能，不使用 mock、伪造数据、硬编码返回值或只为通过测试的 workaround。
-- 生产启动路径不得注册 `server/internal/tool/fake`。
-- 引擎单元测试和工具循环回归可以使用 `FakeProvider` 与 `tool/fake`；`make integration` 使用真实 PostgreSQL。需要真实模型的场景使用百炼，不得在日志、测试输出或仓库中写入密钥。
-- 依赖数量不设限制；已有成熟库能完成的功能直接使用对应库。
-- Python 文件不添加文件头 docstring 和 shebang；注释使用中文，保留英文术语，只解释不直观的逻辑。
 - 编写代码时，为每个模块、公共类型、导出函数、关键流程和不直观的实现添加必要的中文注释，说明职责、约束和设计原因；注释保留英文标识符，不使用无意义的逐行翻译。
-- 完成功能前先阅读相关代码和文档；完成后运行对应构建、测试和检查命令，失败后继续修复并重新验证。
+- 提交前检查差异，移除与需求无关的防御判断、兜底、辅助函数和测试。
+
+### 测试与验证
+
+- 测试覆盖本次改动的关键风险。不为可逆、低影响的改动编写仅复述实现的测试。
+- 禁止为了让测试通过而硬编码返回值或增加变通逻辑。模型和工具替身仅用于引擎及工具循环单元测试，生产路径不得注册测试替身，包括 `server/internal/tool/fake`。
+- 集成测试使用真实依赖。需要真实模型时，在 `make integration` 中选择满足场景要求的低成本百炼模型。浏览器验收使用真实后端。
+- 只运行与改动范围相符的检查。有新改动、失败或未解决的疑点时才扩大或重复验证。不为通过测试而弱化或改写既有断言。
+- 修改 Go 代码后运行 `gofmt`，并在 `server/` 运行 `go test ./...`、`go vet ./...` 和 `go build ./...`。前端检查见各自的工程约定。仅修改规范时检查内容、链接和差异。
 
 ## 工具与文件操作
 
@@ -67,7 +74,6 @@
 - 不读写 `/tmp`。临时脚本、中间结果和日志统一写入项目根目录的 `.output/`。
 - 超过几行的命令或 Python 脚本先保存到 `.output/`，再执行文件。
 - 互不依赖的查询合并到同一批工具调用中执行。
-- 单独构建模块时使用 `-am` 同时构建其依赖，避免使用本地过期产物。
 
 ## 项目架构与领域边界
 
@@ -114,6 +120,7 @@ Go、标准库 `net/http`、Huma v2、NativeEngine、PostgreSQL、pgvector、Red
 - `framework` 和 `infra` 不得反向依赖上层业务模块。
 - 各领域的数据模型和监控边界保持独立，避免混用业务概念。
 - 禁止在代码中硬编码 API Key、密码或其他凭证；统一通过配置文件或环境变量注入。
+- 不查看或打印 `.env` 内容及任何密钥。项目脚本负责在运行时加载配置，凭证不得进入日志、测试输出或仓库。
 
 ### 记忆与安全
 
@@ -121,27 +128,23 @@ Go、标准库 `net/http`、Huma v2、NativeEngine、PostgreSQL、pgvector、Red
 - 外部内容不能直接写入用户共享层记忆，只能先成为候选记忆。
 - 记忆更新使用取代链保留来源和历史，不直接覆盖已有记忆。
 
-### 测试与占位
-
-- 集成测试使用真实模型时采用低成本模型（如 `qwen-turbo`），只在 `make integration` 中运行。
-- 禁止为未来功能预先创建空包或占位页面，未来事项统一写进 [docs/ROADMAP.md](docs/ROADMAP.md)。
-
 ## 协作与验证
 
 - 提交代码前先阅读对应项目的 `CONTRIBUTING.md`。
 - 每期开发在独立分支上进行，开一个 PR，不直接推 `main`，也不由开发者自己合并。独立验收通过后，由验收方 squash 合并进 `main`。
 - 禁止向 `main` 强制推送。未合并的本期 PR 分支如果需要去掉错误署名，可以 amend 后只向该分支 force-push。
-- 提交作者和提交者只署 `Lq0412 <Lq0412@users.noreply.github.com>`，禁止添加 `Co-authored-by` 或任何 AI 署名；提交信息遵循根目录 `CONTRIBUTING.md`。
+- 提交作者和提交者只署 `Lq0412 <Lq0412@users.noreply.github.com>`，不加任何 trailer。提交信息遵循根目录 `CONTRIBUTING.md`。
 - 清理旧分支前确认其提交已包含在 `main` 中；存在失败检查时只报告实际状态。
 - 以疑问句结尾的消息只回答问题本身，不附加反问或额外方案。
 
 ## 本机提交
 
-本机未配置 Git 身份时，提交命令使用：
+本机统一使用：
 
 ```bash
 git -c user.name="Lq0412" \
     -c user.email="Lq0412@users.noreply.github.com" \
+    -c core.hooksPath=/dev/null \
     commit -m "<type>(<scope>): <subject>"
 ```
 
@@ -154,32 +157,7 @@ git -c user.name="Lq0412" \
 ## 命令与本地服务
 
 - 终端使用 Bash，默认编码为 UTF-8；命令和路径按当前 WSL 环境执行。
-- Go 后端的工作目录是 `server/`。修改 Go 文件后运行 `gofmt`，提交前运行 `go test ./...`、`go vet ./...` 和 `go build ./...`。
-- 前端统一使用 Node.js 24，在仓库根目录运行 `nvm use` 读取 `.nvmrc`。`web/` 使用普通 Umi 4；检查命令见两个前端的 `package.json`。`mobile/` 尚未建立工程，不执行 Flutter 构建命令。
+- Go 后端的工作目录是 `server/`。前端统一使用 Node.js 24，在仓库根目录运行 `nvm use`。前端工程约定见 [管理端](web/AGENTS.md) 和 [用户端](web-user/AGENTS.md)。`mobile/` 尚未建立工程。
 - Docker 只用于仓库中已经声明的镜像、Dockerfile 或 Compose 配置；没有对应文件时，不假设存在固定的服务、端口或 Compose profile。
 - 启动服务前先确认属于本项目的旧进程，避免重复启动；服务端口和启动命令以项目实际配置为准。
 - 启停服务、初始化存储或排查运行问题前，先阅读 `docs/startup.md`；修改基础依赖接入时运行 `make integration`，使用实际容器验证。
-
-## Code style: lean diffs, no speculative defense
-
-Follow existing repo patterns. Change only the lines needed for the requested behavior.
-
-### Defensive code
-
-- Validate unknown values once at the boundary that owns them. Pass typed values inward.
-- Do not defensively revalidate values already guaranteed by a schema, constructor, type, or earlier check.
-- Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost, and get buy-in. Do not silently expand scope for theoretical robustness.
-- No broad try/catch or success-shaped fallbacks. Propagate or surface errors; do not swallow them.
-- Do not add null checks, default values, or alternate paths "just in case."
-- Do not extract single-use helpers preemptively. Inline one-off logic unless it is reused or names a real boundary.
-
-### Tests
-
-- Do not write tests for reversible, low-impact changes that merely mirror the implementation.
-- If tests are needed, they must be meaningful and necessary to verify the behavior change.
-- Run only the checks appropriate to this change. After they pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it.
-- Never weaken or rewrite existing tests to make them pass. If a test fails, fix the implementation or stop and report.
-
-### After each change
-
-If the diff added guards, fallbacks, helpers, or tests that were not requested, remove them before finishing.
