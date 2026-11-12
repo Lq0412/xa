@@ -82,32 +82,36 @@ export function AgentTools({
   return (
     <>
       {editable && (
-        <div className="mt-4 divide-y divide-zinc-100">
-          {['memory_forget', 'memory_write'].map((name) => {
-            const tool = settings?.tools.find((item) => item.name === name);
-            if (!tool?.available || !tool.approval_overridable) return null;
-            const checked = tool.approval === 'always';
-            return (
-              <div
-                key={name}
-                className="flex min-h-12 items-center justify-between"
-              >
-                <span>{tool.title}</span>
-                <Switch
-                  checked={checked}
-                  disabled={busy || stale}
-                  label={`${tool.title}：${checked ? '先问我' : '直接执行'}`}
-                  onChange={(enabled) =>
-                    void save({
-                      tool,
-                      changes: { approval: enabled ? 'always' : 'never' },
-                    })
-                  }
-                />
-              </div>
-            );
-          })}
-        </div>
+        <section className="mt-6" aria-label="操作前确认">
+          <h3 className="mb-1 text-xs text-zinc-500">操作前确认</h3>
+          <div className="divide-y divide-zinc-100">
+            {['memory_forget', 'memory_write'].map((name) => {
+              const tool = settings?.tools.find((item) => item.name === name);
+              if (!tool?.available || !tool.approval_overridable) return null;
+              const checked = tool.approval === 'always';
+              const title = name === 'memory_forget' ? '删除记忆' : '保存记忆';
+              return (
+                <div
+                  key={name}
+                  className="flex min-h-12 items-center justify-between"
+                >
+                  <span>{title}</span>
+                  <Switch
+                    checked={checked}
+                    disabled={busy || stale}
+                    label={`${title}：${checked ? '先问我' : '直接执行'}`}
+                    onChange={(enabled) =>
+                      void save({
+                        tool,
+                        changes: { approval: enabled ? 'always' : 'never' },
+                      })
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
       {!dialog && error && (
         <p role="alert" className="my-2 text-xs text-rose-700">
