@@ -1,9 +1,8 @@
 # xa 工具调用 Agent Runtime（工具循环）详细设计
 
-> 版本：v1.0（2026-11-06，Asia/Shanghai）　读者：codex-cli（实现者）、lqlq（评审）
-> 基线代码：`Lq0412/xa` main **c45d50b**，已包含记忆迁移 009、010。task11-r1 保留未提交的 P0/P1 成果，只修订依赖缺陷，不进入 P2，不代表 §20 全部验收完成。
-> 前置文档：`research-agent-loop.md`（调研与百炼实测）、`memory-v2-spec.md`、`blueprint.md`、仓库内 `docs/memory-v2.md`、`docs/api/memory.md`。
-> 标记约定：**【必须】** 表示验收硬约束；**【建议】** 表示实现可以调整，但须在 PR 中说明；**【待定】** 表示需要 lqlq 拍板，实现时按文中默认值先做；**【未验证】** 表示尚无实测或一手证据；**【已实测】** 表示本次或调研时用真实百炼验证过。
+> 工具循环机制与验收要求。P0–P7 已实现，本轮验收于 2026-11-12 经用户确认完成；后续开发顺序见 [路线图](ROADMAP.md)。文中的伪代码表达职责和约束，实际类型、字段和接口以代码及 [生成接口](api/openapi.yaml) 为准。
+> 相关文档：[蓝图](blueprint.md)、[记忆 v2](memory-v2.md)、[记忆 API](api/memory.md)。
+> 标记约定：**【必须】** 表示验收硬约束；**【建议】** 表示实现可以调整，但须在 PR 中说明；**【待定】** 表示后续变更需确认方案，不要求重新确认已实现的默认行为；**【未验证】** 表示尚无实测或一手证据；**【已实测】** 表示调研时用真实百炼验证过。
 > 安全红线：任何代码、日志、fixture、测试输出、文档都**不得包含百炼 API Key**；fixture 只录响应体，不录请求头。
 
 ---
@@ -52,9 +51,9 @@
 - 不做 MCP 接入（Tool 接口、ACL、审批、超时已能覆盖）。
 - 不做 ask_agent 子代理的执行（接口、表字段、span 类型已预留）。
 - 不做 kb_search 的真实检索（知识库模块尚未上线，只做占位工具，`available=false`）。
-- 不接 Eino ADK 内核、不开思考模式，不保证 prefix cache 收益（只做稳定排序）。
+- 不接 Eino ADK 内核，不保证 prefix cache 收益（只做稳定排序）。当前已接入思考事件展示，是否产生思考内容由模型配置与响应决定。
 - 不做后台 run（`mode=background`），不做定时触发。
-- 不做管理端 runs UI（后端 API 先就绪）。
+- 管理端已提供 `/runs` 与 `/runs/:id`，查询仍限制当前用户归属。
 - 不做工具参数的 token 级流式展示（只展示“正在准备调用 X”）。
 - 不做模型输出中途断流后的“续写重试”（已向用户输出文字的步不重试，见 §8）。
 
@@ -629,7 +628,7 @@ type ToolBinding struct {
     Configuration json.RawMessage `json:"configuration,omitempty"`   // 由 []byte 改为 RawMessage，避免 base64
 }
 ```
-- 兼容说明：task11-r1 对当前开发库只读核查，56 个版本的 `tools` 均缺省或为 null，非空数组和其他形态均为 0；该结论只适用于本次核查的库。新绑定拒绝只有旧 `tool_version_id` 的条目及 base64 字符串配置。接入其他已有库前必须再次盘点；若存在旧绑定，先确定显式版本转换策略，不静默改写旧版本，也不直接注入 strict 校验阻断其他配置保存。
+- 新绑定拒绝只有旧 `tool_version_id` 的条目及 base64 字符串配置。接入其他已有库前应盘点已有绑定；若存在旧绑定，先确定显式版本转换策略，不静默改写旧版本，也不直接注入 strict 校验阻断其他配置保存。
 - 迁移 011、012 **不**改写已有版本：版本快照不可变。
 - 前端 `saveAgent` 会原样回传 `...version.configuration`，所以 `tools`、`runtime_limits` 必须能“读出来再写回去”而不变形。RawMessage 满足这一点。
 
@@ -851,7 +850,7 @@ if cur: batches.append(Parallel(cur))
 ```
 - 批次严格按顺序执行，前一批全部完成后才开始下一批，因此“先搜索后删除”这类依赖关系天然成立。
 - **并行批**：信号量为 `max_parallel_tools`，每个调用有独立的超时 ctx。某个调用失败不会取消同批其他调用。全部完成后，**按调用原始顺序**追加 tool 消息，与完成先后无关，从而保证模型输入是确定的。
-- **P3 取舍（v1 / `conversation.Send`）**：整轮对话共用调用方开启的一条 `pgx.Tx` 时，`RunContext.Tx` 非空，调度层对并行批**退化为串行** `executeOne`（模型请求仍可使用 `parallel_tool_calls`）。`tool_results.call_index` 仍按模型调用顺序写入。待工具结果落库与对话事务解耦（后续里程碑）后再恢复批内并行；验收见 `TestAcceptanceParallelReadonlyTools`、`TestSchedulerTxPathSerializesParallelDelays`。
+- 运行与工具结果使用短事务持久化，只读批次通过 `runParallelBatch` 执行；结果按调用顺序进入模型历史，写操作与审批按屏障处理。
 - **串行批**：只有一个调用。如果 `Approval==always`：
   - 查 `run_approvals(run_id, call_id)`；
   - 不存在：创建 pending 审批，发出 `approval.required`，把 tool_results 状态设为 `awaiting_approval`，runs 状态设为 `waiting_approval`，返回 `Suspended`。后续批次留待恢复后执行；
@@ -1424,7 +1423,7 @@ Sweeper 发现 `status=running AND lease_expires_at < now() - XA_RUN_STALE_AFTER
 9. **数据访问**：
    - run_contexts 不对外开放；
    - `tool-results` 的完整数据只有 owner 能读；
-   - 【待定】管理员能否查看他人的 trace（对应 blueprint §8 #10）。本期**不开放**，`/runs` 一律只返回本人的数据。
+   - 管理员不因角色获得他人的 trace，`/runs` 一律只返回本人的数据。
 10. **资源**：
     - 每个用户同时活跃的 run 不超过 `XA_RUN_MAX_ACTIVE_PER_USER`（默认 3，【待定】），超过返回 429 `too_many_active_runs`；
     - 工具超时上限 60s；
@@ -1530,10 +1529,10 @@ run (invoke_agent <agent_name>)                        attributes: run_id, agent
 - 认证凭据通过 vault 或 secret 引用，不存进 agent 配置。
 
 ### 18.5 新厂商、新模型
-新增 `ChatProvider` 实现，配上能力表、fixture，在 Router 中注册。循环不需要改动。要支持思考模式，就在中立 Response 中新增 `Reasoning` 字段（只用于观测，不下发、不回传），并在能力表里声明。
+新增供应商时实现 `ChatProvider`，配上能力表和 fixture，在 Router 中注册。当前已有思考内容的流事件与前端展示，扩展时应沿用现有协议，不把思考内容混入最终回复正文。
 
-### 18.6 Eino ADK 作为内核
-实现 `run.Engine` 的 `EinoEngine`：把中立类型映射为 `schema.Message`，Tool 包装成 Eino 的 `tool.InvokableTool`，事件通过 callback 转发给 Emitter。持久化、锁、审批、SSE、trace 都在 Engine 之外，可以复用。用 `XA_RUN_ENGINE=native|eino` 切换。【待定】是否需要。
+### 18.6 可替换内核
+当前只装配 NativeEngine。其他内核尚未实现，不提供 `XA_RUN_ENGINE=native|eino` 切换；是否扩展按 [路线图](ROADMAP.md) 的 Icebox 条件评估。
 
 ### 18.7 钩子
 `NativeEngine` 提供可选的 `Hooks{BeforeModel(ctx, *ChatRequest) error; AfterModel(ctx, *Response); BeforeTool(ctx, *Call, *Entry) error; AfterTool(ctx, Call, *ToolOutcome); OnEvent(Event)}`，用于护栏、审计、实验，例如在 BeforeTool 中做额外的策略检查。返回 error 的效果等同于拒绝该调用，错误码为 `blocked_by_policy`。
@@ -1572,23 +1571,14 @@ export type RunEvent = { seq:number; run_id:string; type:string; ts:string; step
 - **重连**：流意外中断时（不是用户点停止），按 1s、2s、4s 退避调用 resumeRun，累计 30s 后放弃，消息标记为失败，提示“连接中断”。
 - **页面加载**：`GET messages` 的响应里如果有 `active_run`，自动执行 resumeRun(after=0)，从 PG 重放全部事件后接上实时流；`pending_approvals` 直接渲染。
 - **停止按钮**：先调用 `POST /runs/{id}/cancel`，再 abort 掉 fetch。消息状态改为 stopped，与现有行为一致。
-- 旧的 `streamMessage` 保留但不再使用，P7 完成后删除。
+- 用户端已使用 `streamRun`，旧的 `streamMessage` 已移除；服务端默认 v1 协议继续兼容。
 
 ### 19.3 组件
-- **`ToolCallChip`**（嵌在 `MessageList` 的 assistant 气泡中，按 parts 顺序穿插在文本之间）：
-  - 显示图标、标题和状态：准备中、执行中用 spinner；成功 ✓；失败 ⚠；被拒绝或已取消显示灰色；
-  - 点开后展示 summary 和 items，以及“查看详情”。详情调用 tool-results 接口，只对 owner 显示。
-- **`ApprovalPrompt`**（贴在当前 assistant 气泡底部）：
-  - 显示标题，例如“删除记忆”，以及 summary、items（要删除的具体记忆内容）和剩余时间；
-  - 按钮为“确认 / 拒绝”。拒绝时可以填写原因，可选。
-  - 调用 decision API 后按钮进入 loading，直到收到 `approval.resolved`。
-- **输入框**：run 处于 `waiting_approval` 时禁用输入，提示“请先处理上方的确认请求”。后端在这种情况下也会返回 409 `run_waiting_approval`。
-- **`ToolsCard`**（放在 `AgentDetails` 的“模块”标签页，在现有 2 列网格中，Model 卡和 MemoryCard 之后）：
-  - 列表展示 `GET /agents/{id}/tools` 的结果：名称、简介和启用开关。占位工具禁用开关，并标“即将上线”。记忆关闭时，记忆类工具显示“需开启记忆”。
-  - 点击“配置”打开 Dialog：审批（不可覆盖时禁用该选项）、每次对话最多调用次数、超时时间、params（按 config_schema 渲染简单表单，本期只需要 timezone 下拉）、runtime_limits（高级折叠区：最大轮次、最大工具调用、并行数）。
-  - 保存时调用 `PUT /agents/{id}/tools` 并带上 expected_version_id。409 时提示“配置已被更新，请刷新”。
-  - 只有 owner 能看到编辑入口，与 MemoryCard 一致。
-- **e2e**：在 Playwright 中新增 `tests/agent-tools.spec.ts`（与现有 `tests/workspace.spec.ts` 同级）。后端用 fixture 模式（`XA_PROVIDER_FIXTURE_DIR` 回放；FixtureProvider 实现 ChatProvider，仅在该 env 设置且 `XA_ENV!=production` 时装配），保证测试稳定。覆盖：工具 chip、审批的确认与拒绝、停止、刷新后自动重连、Tools 卡片的保存。
+- **`ProcessRail`**：展示模型思考与工具过程，状态随事件更新；`ToolResultDetails` 读取服务端授权的结果详情。
+- **`ApprovalDock`**：展示待确认操作，提交确认或拒绝决定，按服务端审批状态更新；等待审批时不能发送新一轮消息，后端返回 409 `run_waiting_approval`。
+- **`AgentDetails`**：右侧分为动态、记忆和设置。设置中提供保存或删除记忆前的确认开关；高级配置由 `AgentTools` 和 `ToolConfigDialog` 提供，保存带 `expected_version_id` 并处理 409 冲突。
+- **`MemoryPanel`**：查看和编辑条目、恢复归档、处理失败任务，并响应工具写入后的记忆更新事件。公共 Agent 配置在用户端只读，私人记忆仍按当前用户归属处理。
+- **e2e**：Playwright 使用真实后端、数据库与百炼，覆盖工具过程、审批确认与拒绝、停止、刷新恢复和工具配置保存。生产路径不得注册测试替身；模型和工具替身仅用于引擎及工具循环单元测试。
 
 ---
 
@@ -1611,7 +1601,7 @@ export type RunEvent = { seq:number; run_id:string; type:string; ts:string; step
    - Description 快照。
 2. **引擎测试**：用脚本化的 `FakeProvider`（按顺序返回预设 Response，或返回 Emitted 的错误），加内存 Store 或真实 PG，覆盖所有分支。
 3. **集成测试**（`make integration`，`-tags=integration -race`，位于 `server/internal/bootstrap/agent_loop_integration_test.go`，沿用现有模式：临时库加真实百炼，key 从 .env 读取）。真实模型的输出不确定，所以断言只针对**结构和不变量**：调用是否配对、状态、表行数、权限；不断言具体措辞。需要“模型必然调用工具”的场景，在 prompt 中给出强指令，并允许最多 2 次重试，取至少一次成功。
-4. **前端**：lint/build，以及 Playwright（fixture 后端）。
+4. **前端**：lint/build、既有逻辑单元测试，以及 Playwright（真实后端）。
 
 ### 20.2 验收清单（每项都对应一个测试，P8 必须全部通过）
 
@@ -1642,11 +1632,13 @@ export type RunEvent = { seq:number; run_id:string; type:string; ts:string; step
 | 23 | 安全 | 单测 + 集成 | 工具白名单外的调用被拒绝；访问他人 run、approval、tool-result 返回 404；fixture 和日志中没有 `sk-`；v1 error 不泄露内部错误 |
 | 24 | Trace | 集成测试 | `GET /runs/{id}/spans` 的树结构完整（run → context/llm/tool/approval），token 合计等于 runs 中的值，preview 已脱敏且 ≤512 |
 | 25 | Tools 配置 API | 集成测试 | PUT 后生成新版本；非 owner 返回 403/404；版本冲突返回 409；非法配置返回 400 并指明字段；下一个 run 的 toolset_hash 随之变化 |
-| 26 | 前端 e2e | Playwright + fixture | 工具 chip、审批、停止、刷新后重连、Tools 卡片保存，全部通过 |
+| 26 | 前端 e2e | Playwright + 真实后端 | 工具过程、审批、停止、刷新后重连、工具配置保存，全部通过 |
 
 ---
 
-## 21. 分期与完成标准（每期一个或多个 PR，`make check` 必须是绿的）
+## 21. 分期与完成标准
+
+P0–P7 的实现已进入 main，本轮验收已由用户确认完成。下表保留各期职责与验收要求，不作为待开发清单；实际测试结果以对应 PR 为准。每期独立分支和一个 PR，由独立验收方合并。下一阶段见 [路线图](ROADMAP.md)。
 
 | 期 | 内容 | 完成标准（DoD） |
 |---|---|---|
@@ -1657,14 +1649,14 @@ export type RunEvent = { seq:number; run_id:string; type:string; ts:string; step
 | **P4 流与并发** | Emitter（Redis Stream + PG）、Subscribe/重放、SSE v2、`/runs/{id}/events`、cancel API、presence 与宽限、Redis 租约 + fencing、幂等键、Sweeper、优雅关停、降级 | 验收 #9、#14–#18 通过；`-race` 无告警 |
 | **P5 审批** | run_approvals、挂起与恢复、decision API、过期、v1 排除需审批工具、`run_waiting_approval` | 验收 #6–#8 通过 |
 | **P6 追踪** | Tracer、Builder Observer、spans 写入、`/runs`、`/runs/{id}`、`/spans`、`/tool-results`、保留期清理、messages 的 parts 和 active_run | 验收 #23、#24 通过 |
-| **P7 前端** | streamRun v2、重连、ToolCallChip、ApprovalPrompt、停止改为调用 cancel、ToolsCard、记忆面板联动；Playwright 的 fixture 后端 | 验收 #26 通过；lint/build 通过；手工走查截图附在 PR 中 |
-| **P8 验收与文档** | 全量验收（真实 PG + 真实百炼）；`docs/agent-loop.md`（架构与扩展指南）、`docs/api/runs.md`（API 与 SSE）；更新 blueprint 的状态；`.env.example` | `make check` 和 `make integration` 全部通过；§20 的 26 项全部通过；文档中的示例可以跑通 |
+| **P7 前端** | streamRun v2、重连、工具过程、审批、取消、工具配置与记忆面板联动；Playwright 使用真实后端 | 验收 #26 通过；lint/build 通过；手工走查截图附在 PR 中 |
+| **P8 验收与文档** | 真实 PG 与百炼验收；维护本文、当前架构、路线图和生成接口说明 | `make check` 和 `make integration` 全部通过；§20 的 26 项全部通过；文档示例可运行。用户已确认本轮验收完成，本文不替代对应 PR 的测试记录 |
 
 **实施要求**（给 codex）：
-- 每期提交前运行 `make check`。P3 起每期都要运行 `make integration`。
+- 功能变更按范围运行 `make check` 和真实依赖集成验证；仅修改文档时检查内容、链接和差异。
 - 不得修改已有迁移文件，不得删除已有 API 字段。
 - 不得在代码、日志、测试输出中写入密钥。
-- 不确定的地方，按本文给出的默认值实现，并在 PR 描述中列出。
+- 尚未确认的设计按项目规范先查阅资料并确认方案；已经实现的规则以代码和接口约定为准。
 
 ---
 
@@ -1684,7 +1676,7 @@ export type RunEvent = { seq:number; run_id:string; type:string; ts:string; step
 | 改动 Send 带来回归 | 现有聊天出问题 | v1 默认；现有集成测试不改也要通过；P3 单独提交 PR |
 
 ### 22.2 【待定】（需要 lqlq 拍板，括号内为本期的默认做法）
-1. 管理员能否查看他人的 trace，即 blueprint §8 #10。（本期不开放）
+1. 管理员访问他人 trace 不在当前范围；仅能读取本人运行。
 2. 非主 Agent 能否经审批写入用户级记忆。（不允许）
 3. 为了 prefix cache 调整 Builder 顺序，把动态段后移。（不调整，先观察 cached_tokens）
 4. 旧客户端（v1）如何处理需审批的工具。（不提供这些工具）

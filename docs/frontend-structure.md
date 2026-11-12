@@ -1,15 +1,18 @@
 # Web 页面结构
 
-两个前端共用 Go API，工程、构建产物、开发端口和登录会话各自独立。用户端面向正式用户，管理端维护平台资源。Flutter 在 Web 能力完整验证后开发。
+两个前端共用 Go API，工程、构建产物、开发端口和登录会话各自独立。用户端面向正式用户，管理端维护平台资源。Flutter 是否接入在 Web 主线完成后按需求决定。
 
 ## 管理端 `web/`
 
-采用 Ant Design Pro v6，只有管理员能使用管理页面。普通用户注册入口指向独立用户端。
+采用 React 19、Umi 4、Tailwind CSS 4、Radix UI、Lucide 和 TanStack Table，只有管理员能使用管理页面。普通用户注册入口指向独立用户端。
 
 | 路由 | 模块 | 当前状态 |
 | --- | --- | --- |
-| `/overview` | 平台概览 | 提供 Agent 管理入口与功能说明 |
+| `/overview` | 今天 | 确认事项统计与管理入口 |
 | `/agents` | Agent 管理 | 真实查询、配置保存、版本检查、启停和删除 |
+| `/agents/new`、`/agents/:id` | Agent 配置 | 整页创建和编辑，保留未编辑的配置与绑定 |
+| `/approvals` | 确认记录 | 只读查看脱敏记录 |
+| `/runs`、`/runs/:id` | 运行追踪 | 当前用户运行列表、详情、spans 与工具结果 |
 
 菜单只保留已接入的管理页面，后续模块统一记录在 ROADMAP 的 Icebox 中。已删除的占位页面地址返回 404。
 
@@ -26,9 +29,11 @@
 
 公共列表为空时展示真实空状态，不创建演示 Agent。注册自动创建不可删除的主 Agent，创建其他私有 Agent 后可直接进入对话。普通用户可在配置栏编辑自己的名称、简介、SOUL 和模型；公共 Agent 在用户端只读。管理员继续在管理端维护有权管理的 Agent。
 
-对话界面按 `AgentSidebar`、`MessageList`、`MessageComposer`、`AgentDetails` 拆分，页面只负责组合。SOUL 默认显示 Markdown，点击编辑后可切换源文与预览；SOUL 和模型分别保存新版本，公共 Agent 只读。`useChatSession` 按会话 ID 保存消息、草稿和请求状态，URL 决定当前选择。`services/chat.ts` 处理聊天接口和 SSE 解析，`services/http.ts` 统一认证和错误；样式使用 Tailwind，入口是 `tailwind.css`。
+对话界面按 `AgentSidebar`、`MessageList`、`MessageComposer`、`AgentDetails` 拆分。右侧提供“动态、记忆、设置”：动态展示活动与确认事项，记忆面板管理条目与任务，设置提供模型、SOUL、保存或删除记忆前的确认开关及高级工具配置。配置保存使用版本校验，公共 Agent 在用户端只读。
 
-会话历史、个人记忆、学习反馈和账号设置的独立页面与入口已移除，旧地址返回 404；当前账号身份和退出登录保留在导航中。
+`useChatSession` 管理消息、草稿、运行恢复与审批；`services/chat.ts` 处理 SSE v2，普通 JSON 请求使用生成客户端。`ProcessRail` 展示工具过程，`ApprovalDock` 处理确认，工具结果可查看详情。样式使用 Tailwind，入口是 `tailwind.css`。
+
+会话历史在对话中分页加载，个人记忆位于右侧面板；没有独立 `/history` 或 `/memory` 页面。学习反馈与账号设置没有独立业务页面；当前账号身份和退出登录保留在导航中。
 
 ## 启动与部署
 
@@ -38,9 +43,10 @@
 
 ## 验证
 
-- `make check`：Go test、vet、build，以及两个 Web 工程的 Biome、TypeScript 和生产构建；Ant Design 检查只运行于管理端。
+- `make check`：接口生成一致性、Go 格式与 test / vet / build，以及两个 Web 工程的 Biome、TypeScript 和生产构建。
+- `cd web-user && npm run test:unit`：用户端既有逻辑单元测试；`npm test` 使用真实后端验证对话、工具、记忆、审批和恢复。
 - `cd web && npm test`：使用真实后端、PostgreSQL 和 Redis，覆盖管理端 Agent 操作与版本冲突、登录异常、可用模块导航与刷新、已删除路由的 404、用户端真实创建与独立会话、对话布局、窄屏导航、重复注册及错误密码。
 - `XA_BROWSER_INTEGRATION=1 make integration`：生产前端接独立 server，使用真实 `qwen3.8-flash` 验证发送、Markdown、复制代码、停止后保存、历史分页、草稿隔离和窄屏焦点。
 - 从 Windows 请求两个 `localhost` 前端及其 `/health/ready`，检查 WSL 访问与后端代理。
 
-日常浏览器测试账号通过环境变量提供，模型浏览器测试自动注册独立账号并清理其数据。测试不替换接口响应，不采集截图或录屏。知识检索、语音、记忆和评价尚未接入此页面。
+日常浏览器测试账号通过环境变量提供，模型浏览器测试自动注册独立账号并清理其数据。验收使用真实后端，界面变更随 PR 附实际截图。知识检索、语音和评价尚未接入。
