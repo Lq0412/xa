@@ -86,7 +86,7 @@ func (s *Service) prepareSend(ctx context.Context, tx pgx.Tx, p auth.Principal, 
 		return preparedSend{}, fmt.Errorf("工具注册表未配置")
 	}
 	toolset, err := s.Registry.Resolve(tool.ResolveInput{
-		Bindings: version.Configuration.Tools, MemoryPolicy: policy, Principal: p, CanApprove: protocol >= 2,
+		Bindings: version.Configuration.Tools, Knowledge: version.Configuration.Knowledge, MemoryPolicy: policy, Principal: p, CanApprove: protocol >= 2,
 	})
 	if err != nil {
 		return preparedSend{}, err

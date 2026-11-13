@@ -21,6 +21,7 @@ import (
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/postgres"
 	"linq-bs/server/internal/infra/provider"
+	"linq-bs/server/internal/rag"
 	"linq-bs/server/internal/system/user"
 	"linq-bs/server/internal/tool"
 )
@@ -50,11 +51,17 @@ func testToolsEnv(t *testing.T) (*pgxpool.Pool, definition.Service, *tool.Regist
 	mem := &memory.Service{DB: db, Agents: agents, Model: model, QueryEmbed: func(_ context.Context, query string) ([]float32, error) {
 		return integrationVector(query), nil
 	}}
-	reg, err := bootstrap.NewToolRegistry(mem, db)
+	knowledge := &rag.Service{DB: db, Config: cfg.Knowledge}
+	search, err := rag.NewSearcher(knowledge, agents, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := bootstrap.NewToolRegistry(mem, db, search)
 	if err != nil {
 		t.Fatal(err)
 	}
 	agents.ToolValidator = reg.ValidateBindings
+	agents.KnowledgeValidator = knowledge.ValidateBindings
 	return db, agents, reg, mem, p1, p2
 }
 

@@ -510,7 +510,9 @@ declare namespace API {
 
   type KnowledgeBinding = {
     enabled: boolean;
+    /** 保留字段，目前必须为空；不支持过滤表达式 */
     filter: string;
+    /** 知识库 ID；保存时校验所有权及可见性，检索时再次检查当前权限 */
     knowledge_base_id: string;
   };
 

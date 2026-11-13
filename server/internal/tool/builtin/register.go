@@ -17,7 +17,7 @@ func RegisterProduction(r *tool.Registry, deps Deps) error {
 		NewMemoryWrite(deps.Memory),
 		NewMemoryForget(deps.Memory),
 		NewToolResultRead(deps.DB),
-		&KbSearch{},
+		NewKbSearch(deps.Knowledge),
 		&AskAgent{},
 	}
 	for _, t := range tools {

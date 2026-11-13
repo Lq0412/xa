@@ -83,6 +83,8 @@ make web-user
 
 同一个 worker 也独立领取 `kb_ingest_jobs`，处理知识文档摄取和原文清理。知识库迁移通过 `make migrate` 显式执行；server 不隐式建表。缺少 `pdftotext` 时 worker 启动失败。知识库配额、切片参数、失败码和接口验收方法见 [知识库文档摄取](knowledge-ingestion.md)。知识摄取使用独立队列，不向 `memory_jobs` 或 `memory_items` 写入数据。
 
+server 提供 R2 知识库检索，要求 pgvector ≥ 0.8，查询事务中开启 HNSW 迭代扫描。保存 Agent 版本的知识库绑定后，模型可按需调用 `kb_search`；检索预算、绑定约束和接口验收步骤见 [知识库检索](knowledge-search.md)。
+
 ```bash
 curl --fail http://127.0.0.1:18080/health/live
 curl --fail http://127.0.0.1:18080/health/ready

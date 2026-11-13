@@ -188,7 +188,7 @@ func (h *ToolsHandler) agentToolsView(ctx context.Context, p auth.Principal, age
 		return agentToolsResponse{}, err
 	}
 	toolset, err := h.Registry.Resolve(tool.ResolveInput{
-		Bindings: v.Configuration.Tools, MemoryPolicy: policy, Principal: p, CanApprove: true,
+		Bindings: v.Configuration.Tools, Knowledge: v.Configuration.Knowledge, MemoryPolicy: policy, Principal: p, CanApprove: true,
 	})
 	if err != nil {
 		return agentToolsResponse{}, err

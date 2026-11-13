@@ -25,6 +25,8 @@ type ServiceImpl struct {
 	defaultModel  string
 	// ToolValidator 由启动层注入，避免 definition 反向依赖 tool。
 	ToolValidator func([]binding.ToolBinding) error
+	// KnowledgeValidator 由启动层注入；避免 definition 依赖 rag 的存储和检索实现。
+	KnowledgeValidator func(context.Context, auth.Principal, Visibility, []binding.KnowledgeBinding) error
 }
 
 func NewService(repository Repository, allowed ...[]string) *ServiceImpl {
@@ -107,7 +109,7 @@ func (s *ServiceImpl) Save(ctx context.Context, actor auth.Principal, input Save
 	return Saved{Definition: definition, Version: version}, nil
 }
 
-func (s *ServiceImpl) Validate(_ context.Context, actor auth.Principal, input SaveInput) error {
+func (s *ServiceImpl) Validate(ctx context.Context, actor auth.Principal, input SaveInput) error {
 	if s.ToolValidator != nil {
 		if err := s.ToolValidator(input.Configuration.Tools); err != nil {
 			return fmt.Errorf("工具配置无效: %s: %w", redact.String(err.Error()), ErrInvalid)
@@ -137,6 +139,14 @@ func (s *ServiceImpl) Validate(_ context.Context, actor auth.Principal, input Sa
 		}
 	default:
 		return ErrInvalid
+	}
+	if len(input.Configuration.Knowledge) > 0 {
+		if s.KnowledgeValidator == nil {
+			return fmt.Errorf("知识库绑定校验未配置: %w", ErrInvalid)
+		}
+		if err := s.KnowledgeValidator(ctx, actor, input.Visibility, input.Configuration.Knowledge); err != nil {
+			return err
+		}
 	}
 	if model := input.Configuration.Model; model != "" {
 		if _, ok := s.allowedModels[model]; !ok {

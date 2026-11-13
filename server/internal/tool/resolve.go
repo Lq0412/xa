@@ -34,6 +34,7 @@ type Entry struct {
 // ResolveInput 汇总绑定、记忆策略与客户端能力。
 type ResolveInput struct {
 	Bindings     []binding.ToolBinding
+	Knowledge    []binding.KnowledgeBinding
 	MemoryPolicy definition.MemoryPolicy
 	Principal    auth.Principal
 	CanApprove   bool
@@ -45,6 +46,7 @@ func (r *Registry) Resolve(in ResolveInput) (Toolset, error) {
 		return Toolset{}, fmt.Errorf("注册表未初始化")
 	}
 	memoryEnabled := in.MemoryPolicy.Enabled
+	knowledgeBound := slices.ContainsFunc(in.Knowledge, func(b binding.KnowledgeBinding) bool { return b.Enabled })
 	entries := make([]Entry, 0, len(r.tools))
 	for _, spec := range r.Catalog() {
 		b, bound := bindingFor(spec.Name, in.Bindings)
@@ -93,10 +95,13 @@ func (r *Registry) Resolve(in ResolveInput) (Toolset, error) {
 			}
 		}
 		for _, req := range spec.Requires {
-			if !requirementMet(req, memoryEnabled) {
+			if !requirementMet(req, memoryEnabled, knowledgeBound) {
 				entry.Enabled = false
 				if entry.Reason == "" {
 					entry.Reason = "memory_disabled"
+					if req == RequireKnowledgeBound {
+						entry.Reason = "knowledge_unbound"
+					}
 				}
 			}
 		}

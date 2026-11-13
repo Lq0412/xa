@@ -96,7 +96,7 @@ func (h *ManagementHandler) RegisterRoutes(api huma.API, resolver auth.Resolver)
 	allowPublic := func(next http.Handler) http.Handler { return frameworkhttp.OptionalPrincipal(resolver, next) }
 	descriptions := map[int]string{
 		400: "请求 JSON 无效（invalid_json）", 401: "会话无效（unauthenticated）", 403: "没有 Agent 操作权限（agent_forbidden）",
-		404: "Agent 或配置版本不存在（agent_not_found）", 409: "配置版本冲突（agent_conflict）", 422: "Agent 信息或配置无效（invalid_agent）",
+		404: "Agent 或配置版本不存在（agent_not_found）", 409: "配置版本冲突（agent_conflict）", 422: "Agent 信息或配置无效，包括知识库绑定权限、可见性或 filter 不受支持（invalid_agent）",
 		503: "认证或 Agent 服务不可用（unauthenticated、agent_unavailable）",
 	}
 	protected := func(id, method, path, summary string, status int, maxBodyBytes int64, codes ...int) huma.Operation {
