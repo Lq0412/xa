@@ -78,7 +78,7 @@ enabled, core_budget_tokens(800), recall_top_k(5), min_relevance(0.35), history_
 10. 现有 6 个接口行为不变（前端已在用）。
 11. 真实项目长文超过历史预算后仍正常回复，历史具有 over_budget/truncated 明细，当前原文完整；删除已进入摘要的记忆，幂等入队并生成不含该事实的新摘要版本；超模型上下文返回 422。
 检查：gofmt、go vet/test/build、make migrate、make integration 全过；make up 后服务正常；diff 无 Key。
-更新 docs/blueprint.md 记忆章节，标明后续 6.4 的遗忘曲线已在此完成，只剩多 Agent 共享与评测扩展。
+遗忘排序、归档和维护合并已包含在记忆 v2；后续安排为多 Agent 共享授权与评测扩展，见 [路线图](ROADMAP.md)。
 
 ## 实现说明（S1 收尾）
 
