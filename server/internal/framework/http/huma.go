@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -50,6 +51,19 @@ func init() {
 		return &apiError{Message: message, status: status}
 	}
 	huma.NewErrorWithContext = func(ctx huma.Context, status int, message string, errs ...error) huma.StatusError {
+		// 新知识库接口保留统一 JSON 错误体，解析错误不暴露上传内容。
+		if slices.Contains(ctx.Operation().Tags, "knowledge-bases") {
+			if status == http.StatusRequestEntityTooLarge {
+				return newAPIError(ctx.Context(), 413, "file_too_large", "文件超过知识库单文件大小限制")
+			}
+			if status < 500 {
+				if ctx.Operation().RequestBody != nil && ctx.Operation().RequestBody.Content["multipart/form-data"] != nil {
+					return newAPIError(ctx.Context(), 400, "invalid_upload", "请使用 multipart/form-data 上传一份 file 文件")
+				}
+				return newAPIError(ctx.Context(), 400, "invalid_request", "请求字段或分页参数无效")
+			}
+			return newAPIError(ctx.Context(), status, "knowledge_unavailable", message)
+		}
 		if ctx.Operation().MaxBodyBytes != 0 {
 			switch message {
 			case "request body is required":

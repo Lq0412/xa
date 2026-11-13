@@ -2,6 +2,7 @@ import { request as fetchJSON } from './http';
 
 type RequestOptions = Pick<RequestInit, 'method' | 'headers' | 'signal'> & {
   data?: unknown;
+  requestType?: 'form';
   params?: Record<string, string | number | boolean | undefined>;
 };
 
@@ -18,7 +19,12 @@ export function request<T>(
   const search = query.size ? `?${query}` : '';
   return fetchJSON<T>(
     `${path}${search}`,
-    { method, headers, signal, body: JSON.stringify(data) },
+    {
+      method,
+      headers,
+      signal,
+      body: data instanceof FormData ? data : JSON.stringify(data),
+    },
     path !== '/auth/login' && path !== '/auth/register',
   );
 }

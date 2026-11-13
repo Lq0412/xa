@@ -18,7 +18,10 @@ import (
 	"linq-bs/server/internal/framework/auth"
 	"linq-bs/server/internal/framework/config"
 	frameworkhttp "linq-bs/server/internal/framework/http"
+	"linq-bs/server/internal/framework/storage"
 	"linq-bs/server/internal/infra/provider"
+	"linq-bs/server/internal/rag"
+	raghttp "linq-bs/server/internal/rag/transport/http"
 	systemhttp "linq-bs/server/internal/system/transport/http"
 	"linq-bs/server/internal/system/user"
 	"log/slog"
@@ -38,8 +41,8 @@ func NewServer(cfg config.Config, logger *slog.Logger) *Server {
 
 // Run 启动 server 进程。
 func (s *Server) Run(ctx context.Context) error {
-	return runWithHandler(ctx, "server", s.config.HTTP.ServerAddress, s.config, s.logger, func(db *pgxpool.Pool, cache *redisclient.Client, checks []frameworkhttp.Check) (http.Handler, error) {
-		h, err := s.handler(db, cache, checks)
+	return runWithHandler(ctx, "server", s.config.HTTP.ServerAddress, s.config, s.logger, func(db *pgxpool.Pool, cache *redisclient.Client, objects *storage.Client, checks []frameworkhttp.Check) (http.Handler, error) {
+		h, err := s.handler(db, cache, objects, checks)
 		if err != nil {
 			return nil, err
 		}
@@ -48,7 +51,7 @@ func (s *Server) Run(ctx context.Context) error {
 	})
 }
 
-func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []frameworkhttp.Check) (http.Handler, error) {
+func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, objects *storage.Client, checks []frameworkhttp.Check) (http.Handler, error) {
 	users := user.NewPGRepository(db)
 	if s.config.Admin.Email != "" {
 		if err := users.EnsureAdmin(context.Background(), s.config.Admin.Email, s.config.Admin.Password); err != nil {
@@ -100,7 +103,8 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, checks []f
 	registerRoutes(mux, resolver, routeHandlers{
 		auth: authHandler, agents: agentHandler, library: libraryHandler, tools: toolsHandler,
 		memory: memoryHandler, conversations: conversationHandler, runs: runHandler,
-		checks: checks, healthTimeout: s.config.HealthTimeout, logger: s.logger,
+		knowledge: &raghttp.Handler{Knowledge: &rag.Service{DB: db, Objects: objects, Config: s.config.Knowledge}, Config: s.config.Knowledge},
+		checks:    checks, healthTimeout: s.config.HealthTimeout, logger: s.logger,
 	})
 	handler := http.Handler(mux)
 	if raw := strings.TrimSpace(os.Getenv("XA_HTTP_CORS_ORIGINS")); raw != "" {
@@ -124,6 +128,7 @@ type routeHandlers struct {
 	memory        *agenthttp.MemoryHandler
 	conversations *agenthttp.ConversationHandler
 	runs          *agenthttp.RunHandler
+	knowledge     *raghttp.Handler
 	checks        []frameworkhttp.Check
 	healthTimeout time.Duration
 	logger        *slog.Logger
@@ -139,6 +144,7 @@ func registerRoutes(mux routeMux, resolver auth.Resolver, handlers routeHandlers
 	handlers.tools.RegisterRoutes(api, resolver)
 	handlers.conversations.RegisterRoutes(api, resolver)
 	handlers.runs.RegisterRoutes(api, resolver)
+	handlers.knowledge.RegisterRoutes(api, resolver)
 	frameworkhttp.RegisterHealthRoutes(api, handlers.checks, handlers.healthTimeout, handlers.logger)
 	handlers.conversations.RegisterStreams(api)
 	handlers.runs.RegisterStreams(api)
@@ -159,5 +165,6 @@ func documentationHandlers() routeHandlers {
 		library: &agenthttp.LibraryHandler{}, tools: &agenthttp.ToolsHandler{},
 		memory: &agenthttp.MemoryHandler{}, conversations: &agenthttp.ConversationHandler{},
 		runs: &agenthttp.RunHandler{}, healthTimeout: time.Second, logger: slog.Default(),
+		knowledge: &raghttp.Handler{Config: config.DefaultKnowledge()},
 	}
 }

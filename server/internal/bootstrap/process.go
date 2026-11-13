@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisclient "github.com/redis/go-redis/v9"
@@ -22,9 +23,9 @@ func run(ctx context.Context, name, address string, cfg config.Config, logger *s
 	return runWithHandler(ctx, name, address, cfg, logger, nil)
 }
 
-type handlerFactory func(*pgxpool.Pool, *redisclient.Client, []httpserver.Check) (http.Handler, error)
+type handlerFactory func(*pgxpool.Pool, *redisclient.Client, *storage.Client, []httpserver.Check) (http.Handler, error)
 
-func runWithHandler(ctx context.Context, name, address string, cfg config.Config, logger *slog.Logger, factory handlerFactory, workers ...func(context.Context, *pgxpool.Pool)) (runErr error) {
+func runWithHandler(ctx context.Context, name, address string, cfg config.Config, logger *slog.Logger, factory handlerFactory, workers ...func(context.Context, *pgxpool.Pool, *storage.Client)) (runErr error) {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -57,7 +58,7 @@ func runWithHandler(ctx context.Context, name, address string, cfg config.Config
 	}
 	handler := httpserver.HealthHandler(checks, cfg.HealthTimeout, logger)
 	if factory != nil {
-		handler, err = factory(db, cache, checks)
+		handler, err = factory(db, cache, objects, checks)
 		if err != nil {
 			return err
 		}
@@ -72,9 +73,11 @@ func runWithHandler(ctx context.Context, name, address string, cfg config.Config
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		var group sync.WaitGroup
 		for _, worker := range workers {
-			worker(workerCtx, db)
+			group.Go(func() { worker(workerCtx, db, objects) })
 		}
+		group.Wait()
 	}()
 	defer func() { stopWorkers(); <-done }()
 	logger.Info("进程已启动", "process", name, "address", listener.Addr().String())

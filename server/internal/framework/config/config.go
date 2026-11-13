@@ -26,6 +26,7 @@ type Config struct {
 	LightModel      string            `env:"XA_LIGHT_MODEL" envDefault:"qwen3.8-flash"`
 	ChatModels      []string          `env:"XA_CHAT_MODELS" envDefault:"qwen3.7-plus,qwen3.8-flash"`
 	Run             RunConfig         `envPrefix:"XA_RUN_"`
+	Knowledge       KnowledgeConfig   `envPrefix:"XA_KB_"`
 	StartupTimeout  time.Duration     `env:"XA_STARTUP_TIMEOUT" envDefault:"15s"`
 	ShutdownTimeout time.Duration     `env:"XA_SHUTDOWN_TIMEOUT" envDefault:"10s"`
 	HealthTimeout   time.Duration     `env:"XA_HEALTH_TIMEOUT" envDefault:"3s"`
@@ -118,6 +119,9 @@ func Load() (Config, error) {
 
 // Validate 校验进程必需的配置，不尝试自动补充凭证或替换依赖。
 func (c Config) Validate() error {
+	if err := c.Knowledge.Validate(); err != nil {
+		return err
+	}
 	for name, address := range map[string]string{"server": c.HTTP.ServerAddress, "worker": c.HTTP.WorkerAddress, "redis": c.Redis.Address} {
 		_, port, err := net.SplitHostPort(address)
 		if err != nil {

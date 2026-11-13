@@ -5,6 +5,7 @@
 ## 1. 环境
 
 - WSL / Linux、Bash、Go 1.26 或更新版本、Make、OpenSSL；race 检查需要 GCC 等 C 编译器。
+- 知识摄取 worker 需要 Poppler：Debian / Ubuntu 安装 `poppler-utils`，运行 `pdftotext -v` 确认可用。当前 worker 在本机运行，仓库没有 worker 容器镜像；部署到自建镜像时也必须安装此依赖。
 - Web 使用 Node.js 24 和 npm，在仓库根目录执行 `nvm use`。管理端使用普通 Umi 4，用户端使用 Umi Max 4；两端使用 React 19、Tailwind CSS、Radix UI 和 Lucide 图标。
 - Docker Engine 与 Compose。WSL 使用 `/usr/bin/docker` 原生客户端；其他安装路径通过 `make DOCKER=/path/to/docker ...` 指定。
 - Go module 位于 `server/`；下列 Make 命令均在仓库根目录运行。
@@ -80,6 +81,8 @@ make web-user
 
 配置无效或任一依赖无法连接时，进程直接退出且返回非零状态。worker 领取 PostgreSQL 中的 `memory_jobs`，执行记忆抽取、滚动摘要、摘要重写和维护；需同时启动 server 和 worker。抽取使用 qwen3.8-flash（关闭思考、严格 JSON Schema），向量使用 qwen3.7-text-embedding（1024 维）。任务失败前两次分别等待 30 秒、2 分钟重试，第三次进入 `dead`，可在用户端重试；失败不改变已完成回复。
 
+同一个 worker 也独立领取 `kb_ingest_jobs`，处理知识文档摄取和原文清理。知识库迁移通过 `make migrate` 显式执行；server 不隐式建表。缺少 `pdftotext` 时 worker 启动失败。知识库配额、切片参数、失败码和接口验收方法见 [知识库文档摄取](knowledge-ingestion.md)。知识摄取使用独立队列，不向 `memory_jobs` 或 `memory_items` 写入数据。
+
 ```bash
 curl --fail http://127.0.0.1:18080/health/live
 curl --fail http://127.0.0.1:18080/health/ready
@@ -107,6 +110,8 @@ make web-build
 集成测试需要已启动的真实依赖，验证事务、缓存、对象上传读取删除、依赖异常、HTTP 启停和端口冲突。使用实际项目文件作为存储内容；测试创建的对象和缓存键会清理，不删除业务数据。
 
 S1 记忆验收在同一个 PostgreSQL 实例中创建独立临时数据库，执行全部迁移后调用真实百炼，结束时删除该数据库；测试数据库账号需要 CREATEDB 权限，本仓库 Compose 的初始化账号具备该权限。独立数据库避免已运行的 worker 领取测试任务。验收覆盖超过 20 条真实历史后的召回、新 Agent 共享 profile、自动与手动取代链、权限隔离、预算、开关、模型连接失败及失效 Agent 的任务处理。
+
+R1 知识库集成验收也创建独立数据库；用 `XA_KB_TEST_TEXT_PDF` 指定至少两页的真实中文文本 PDF、`XA_KB_TEST_SCAN_PDF` 指定真实扫描件 PDF。两个变量必须是可读取的文件路径，未配置会失败。测试原文按数据库前缀隔离并清理，PDF 样本不提交到仓库。运行全量 `make integration` 前需准备这两份文件。
 
 `make check` 检查接口生成一致性、Go 格式及 test / vet / build，并执行两个 Web 工程的 Biome、TypeScript 和构建。管理端浏览器验收运行 `cd web && npm test`，需要管理员测试账号通过 `XA_E2E_EMAIL`、`XA_E2E_PASSWORD` 注入，并保持两个 Web 和 server 启动。可用 `XA_WEB_URL`、`XA_USER_WEB_URL` 覆盖测试访问地址。用户端既有逻辑测试运行 `cd web-user && npm run test:unit`，浏览器场景运行 `npm test`。
 

@@ -4,6 +4,7 @@ type ErrorBody = Partial<API.ApiError>;
 type Options = {
   method?: string;
   data?: unknown;
+  requestType?: 'form';
   anonymous?: boolean;
   signal?: AbortSignal;
   headers?: HeadersInit;
@@ -32,7 +33,8 @@ export async function request<T>(
   headers.set('Accept', 'application/json');
   const token = options.anonymous ? null : localStorage.getItem(TOKEN_KEY);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  if (options.data !== undefined)
+  const formData = options.data instanceof FormData;
+  if (options.data !== undefined && !formData)
     headers.set('Content-Type', 'application/json');
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(options.params ?? {})) {
@@ -48,8 +50,11 @@ export async function request<T>(
     response = await fetch(url, {
       method: options.method,
       headers,
-      body:
-        options.data === undefined ? undefined : JSON.stringify(options.data),
+      body: formData
+        ? (options.data as FormData)
+        : options.data === undefined
+          ? undefined
+          : JSON.stringify(options.data),
       signal,
     });
   } catch (cause) {
