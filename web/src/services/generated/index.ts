@@ -10,6 +10,7 @@ import * as memory from "./memory";
 import * as tools from "./tools";
 import * as auth from "./auth";
 import * as conversations from "./conversations";
+import * as knowledgeBases from "./knowledgeBases";
 import * as health from "./health";
 export default {
   approvals,
@@ -20,5 +21,6 @@ export default {
   tools,
   auth,
   conversations,
+  knowledgeBases,
   health,
 };

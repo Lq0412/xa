@@ -192,6 +192,26 @@ declare namespace API {
     next_cursor: string;
   };
 
+  type Base = {
+    chunk_count: number;
+    chunker_version: string;
+    created_at: string;
+    description: string;
+    document_count: number;
+    embed_model: string;
+    id: string;
+    name: string;
+    owner_user_id: string;
+    updated_at: string;
+    visibility: "private" | "public";
+    workspace_id: string;
+  };
+
+  type BasePage = {
+    items: Base[] | null;
+    total: number;
+  };
+
   type CancelResult = {
     status: string;
   };
@@ -199,6 +219,29 @@ declare namespace API {
   type cancelRunParams = {
     /** 运行 ID */
     run_id: string;
+  };
+
+  type Chunk = {
+    /** 规范化文本中的 Unicode 字符终点，不包含此位置 */
+    char_end: number;
+    /** 规范化文本中的 Unicode 字符起点，包含此位置 */
+    char_start: number;
+    chunk_index: number;
+    content: string;
+    document_id: string;
+    embed_model: string;
+    heading_path: string[] | null;
+    id: string;
+    knowledge_base_id: string;
+    page_from: number | null;
+    page_to: number | null;
+    /** 切片估算 token 数 */
+    token_count: number;
+  };
+
+  type ChunkPage = {
+    items: Chunk[] | null;
+    total: number;
   };
 
   type Configuration = {
@@ -226,6 +269,12 @@ declare namespace API {
 
   type ConversationList = {
     conversations: Conversation[];
+  };
+
+  type CreateInput = {
+    description?: string;
+    name: string;
+    visibility?: "private" | "public";
   };
 
   type CredentialsRequest = {
@@ -268,6 +317,15 @@ declare namespace API {
     agent_id: string;
   };
 
+  type deleteKnowledgeBaseParams = {
+    id: string;
+  };
+
+  type deleteKnowledgeDocumentParams = {
+    id: string;
+    docId: string;
+  };
+
   type deleteMemoryParams = {
     /** 记忆条目 ID */
     memory_id: string;
@@ -276,6 +334,35 @@ declare namespace API {
   type DisplayItem = {
     label: string;
     value: string;
+  };
+
+  type Document = {
+    chunk_count: number;
+    chunker_version: string;
+    content_sha256: string;
+    created_at: string;
+    embed_model: string;
+    /** 摄取失败码：unsupported_file_type、invalid_file_type、invalid_utf8、file_too_large、empty_document、too_many_pages、too_many_characters、scanned_pdf、pdf_parse_failed、source_unavailable、embedding_failed、ingest_failed、delete_failed */
+    error_code: string;
+    error_message: string;
+    filename: string;
+    id: string;
+    knowledge_base_id: string;
+    mime: string;
+    owner_user_id: string;
+    page_count: number;
+    ready_at: string | null;
+    size_bytes: number;
+    status: "pending" | "processing" | "ready" | "failed" | "deleting";
+    title: string;
+    token_count: number;
+    updated_at: string;
+    workspace_id: string;
+  };
+
+  type DocumentPage = {
+    items: Document[] | null;
+    total: number;
   };
 
   type EditInput = {
@@ -355,6 +442,15 @@ declare namespace API {
   type getConversationSummaryParams = {
     /** 会话 ID */
     conversation_id: string;
+  };
+
+  type getKnowledgeBaseParams = {
+    id: string;
+  };
+
+  type getKnowledgeDocumentParams = {
+    id: string;
+    docId: string;
   };
 
   type getRunParams = {
@@ -464,6 +560,24 @@ declare namespace API {
     before?: string;
     /** 每页条数，范围 1 至 100，默认 50 */
     limit?: string;
+  };
+
+  type listKnowledgeBasesParams = {
+    limit?: number;
+    offset?: number;
+  };
+
+  type listKnowledgeChunksParams = {
+    id: string;
+    docId: string;
+    limit?: number;
+    offset?: number;
+  };
+
+  type listKnowledgeDocumentsParams = {
+    id: string;
+    limit?: number;
+    offset?: number;
   };
 
   type listMemoriesParams = {
@@ -603,6 +717,11 @@ declare namespace API {
   type restoreMemoryParams = {
     /** 记忆条目 ID */
     memory_id: string;
+  };
+
+  type retryKnowledgeDocumentParams = {
+    id: string;
+    docId: string;
   };
 
   type retryMemoryJobParams = {
@@ -845,9 +964,22 @@ declare namespace API {
     tools: ToolBinding[] | null;
   };
 
+  type UpdateInput = {
+    description?: string;
+    name?: string;
+  };
+
+  type updateKnowledgeBaseParams = {
+    id: string;
+  };
+
   type updateMemoryPolicyParams = {
     /** Agent ID */
     agent_id: string;
+  };
+
+  type uploadKnowledgeDocumentParams = {
+    id: string;
   };
 
   type UserApproval = {

@@ -18,6 +18,7 @@ type ObjectStore interface {
 	Put(ctx context.Context, key string, content io.Reader, size int64, contentType string) error
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 	Delete(ctx context.Context, key string) error
+	ListBefore(ctx context.Context, prefix string, before time.Time, visit func(string) error) error
 }
 
 // Client 包装 S3 SDK 并持有独立 HTTP 连接池。
@@ -102,6 +103,23 @@ func (s *Client) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 // Delete 删除指定对象，保留 S3 的幂等删除语义。
 func (s *Client) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
+}
+
+// ListBefore 逐个访问指定前缀下早于给定时间的对象，供原文孤儿清理使用。
+func (s *Client) ListBefore(ctx context.Context, prefix string, before time.Time, visit func(string) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	for item := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if item.Err != nil {
+			return item.Err
+		}
+		if item.LastModified.Before(before) {
+			if err := visit(item.Key); err != nil {
+				return err
+			}
+		}
+	}
+	return ctx.Err()
 }
 
 // Close 释放空闲 HTTP 连接，须在正在进行的对象操作结束后调用。

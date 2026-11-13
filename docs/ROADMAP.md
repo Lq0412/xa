@@ -31,6 +31,8 @@ xa 是通用的个人 Agent 平台。用户注册后拥有默认主 Agent，也�
 
 记忆 v2 已包含遗忘排序、摘要、归档和维护合并，后续不重复安排。详细演示目标见 [蓝图](blueprint.md)，运行机制见 [工具循环设计](agent-loop-design.md)，记忆实现见 [记忆 v2](memory-v2.md)。
 
+知识库按已确认的四步推进：R0 设计已确认；R1 [文档摄取](knowledge-ingestion.md) 通过接口和后台验收；R2 实现检索与 Agent 接入；R3 实现页面与质量验收。R2 继续使用不可变 Agent 版本中的 `configuration.knowledge[]`，不新增绑定表；保存绑定与每次检索均校验当前权限。检索范围是版本绑定与调用者当前可读知识库的交集。私有库只能绑定所有者自己的 Agent，公共库只能绑定公共 Agent，绑定不授予额外权限。pgvector 0.8 以上的权限过滤检索需开启 `hnsw.iterative_scan`。
+
 ## 边界与取舍
 
 - 当前以 Web 文本交互为主；本轮验收不表示 RAG、口语评分、FSRS、委派或完整 S6 评测已经完成。
