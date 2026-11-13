@@ -6,24 +6,28 @@ import (
 	"time"
 )
 
-// KnowledgeConfig 集中定义摄取配额、切片参数和后台任务运行边界。
+// KnowledgeConfig 集中定义摄取配额、切片参数、检索预算和后台任务运行边界。
 type KnowledgeConfig struct {
-	MaxFileBytes       int64         `env:"MAX_FILE_BYTES" envDefault:"20971520"`
-	MaxPDFPages        int           `env:"MAX_PDF_PAGES" envDefault:"300"`
-	MaxCharacters      int           `env:"MAX_CHARACTERS" envDefault:"500000"`
-	MaxDocuments       int           `env:"MAX_DOCUMENTS" envDefault:"100"`
-	MaxBasesPerUser    int           `env:"MAX_BASES_PER_USER" envDefault:"10"`
-	MaxUserBytes       int64         `env:"MAX_USER_BYTES" envDefault:"209715200"`
-	MinPDFCharacters   int           `env:"MIN_PDF_CHARACTERS" envDefault:"50"`
-	TargetTokens       int           `env:"TARGET_TOKENS" envDefault:"500"`
-	MinTokens          int           `env:"MIN_TOKENS" envDefault:"50"`
-	OverlapPercent     int           `env:"OVERLAP_PERCENT" envDefault:"15"`
-	EmbeddingBatchSize int           `env:"EMBEDDING_BATCH_SIZE" envDefault:"20"`
-	TextType           string        `env:"TEXT_TYPE" envDefault:"document"`
-	JobTimeout         time.Duration `env:"JOB_TIMEOUT" envDefault:"10m"`
-	OrphanGrace        time.Duration `env:"ORPHAN_GRACE" envDefault:"24h"`
-	CleanupInterval    time.Duration `env:"CLEANUP_INTERVAL" envDefault:"1h"`
-	TempDir            string        `env:"TEMP_DIR" envDefault:"../.output/kb"`
+	MaxFileBytes        int64         `env:"MAX_FILE_BYTES" envDefault:"20971520"`
+	MaxPDFPages         int           `env:"MAX_PDF_PAGES" envDefault:"300"`
+	MaxCharacters       int           `env:"MAX_CHARACTERS" envDefault:"500000"`
+	MaxDocuments        int           `env:"MAX_DOCUMENTS" envDefault:"100"`
+	MaxBasesPerUser     int           `env:"MAX_BASES_PER_USER" envDefault:"10"`
+	MaxUserBytes        int64         `env:"MAX_USER_BYTES" envDefault:"209715200"`
+	MinPDFCharacters    int           `env:"MIN_PDF_CHARACTERS" envDefault:"50"`
+	TargetTokens        int           `env:"TARGET_TOKENS" envDefault:"500"`
+	MinTokens           int           `env:"MIN_TOKENS" envDefault:"50"`
+	OverlapPercent      int           `env:"OVERLAP_PERCENT" envDefault:"15"`
+	EmbeddingBatchSize  int           `env:"EMBEDDING_BATCH_SIZE" envDefault:"20"`
+	TextType            string        `env:"TEXT_TYPE" envDefault:"document"`
+	JobTimeout          time.Duration `env:"JOB_TIMEOUT" envDefault:"10m"`
+	OrphanGrace         time.Duration `env:"ORPHAN_GRACE" envDefault:"24h"`
+	CleanupInterval     time.Duration `env:"CLEANUP_INTERVAL" envDefault:"1h"`
+	TempDir             string        `env:"TEMP_DIR" envDefault:"../.output/kb"`
+	SearchCandidates    int           `env:"SEARCH_CANDIDATES" envDefault:"50"`
+	SearchMaxChars      int           `env:"SEARCH_MAX_CHARS" envDefault:"6000"`
+	SearchMinSimilarity float64       `env:"SEARCH_MIN_SIMILARITY" envDefault:"0.3"`
+	RRFConstant         int           `env:"RRF_CONSTANT" envDefault:"60"`
 }
 
 // DefaultKnowledge 返回与环境加载一致的默认值，供离线接口导出和纯函数测试使用。
@@ -51,6 +55,9 @@ func (c KnowledgeConfig) Validate() error {
 	}
 	if c.JobTimeout <= 0 || c.OrphanGrace <= c.JobTimeout || c.CleanupInterval <= 0 || c.TempDir == "" {
 		return fmt.Errorf("知识库任务超时、清理间隔或临时目录无效")
+	}
+	if c.SearchCandidates < 20 || c.SearchCandidates > 1000 || c.SearchMaxChars < 1 || c.SearchMaxChars > 50000 || c.SearchMinSimilarity < -1 || c.SearchMinSimilarity > 1 || c.RRFConstant < 1 {
+		return fmt.Errorf("知识库检索候选数、片段预算、相似度阈值或 RRF 参数无效")
 	}
 	return nil
 }

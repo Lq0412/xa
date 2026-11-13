@@ -17,7 +17,7 @@
   - 审批（暂停/恢复）、取消、断线重连、单写者锁、幂等；
   - SSE v2（兼容 v1）；
   - runs/run_spans 追踪与查询 API；
-  - 内置工具 current_time、memory_search、memory_write、memory_forget、tool_result_read；kb_search、ask_agent 只做接口和占位；
+  - 内置工具 current_time、memory_search、memory_write、memory_forget、tool_result_read；后续 R2 已接入 kb_search，ask_agent 仍为占位；
   - 前端：工具 chip、审批卡片、重连、右栏 Tools 卡片；
   - 百炼回归 fixture；
   - 真实 PG 和真实百炼验收。
@@ -50,7 +50,7 @@
 ### 1.2 非目标（本里程碑不做，但接口已预留，见 §18）
 - 不做 MCP 接入（Tool 接口、ACL、审批、超时已能覆盖）。
 - 不做 ask_agent 子代理的执行（接口、表字段、span 类型已预留）。
-- 不做 kb_search 的真实检索（知识库模块尚未上线，只做占位工具，`available=false`）。
+- 知识库检索由 R2 提供，见 [检索与 Agent 接入](knowledge-search.md)。
 - 不接 Eino ADK 内核，不保证 prefix cache 收益（只做稳定排序）。当前已接入思考事件展示，是否产生思考内容由模型配置与响应决定。
 - 不做后台 run（`mode=background`），不做定时触发。
 - 管理端已提供 `/runs` 与 `/runs/:id`，查询仍限制当前用户归属。
@@ -92,7 +92,7 @@ flowchart TB
     REG[Registry]
     RES[Resolver<br/>binding→Toolset 快照]
     VAL[Schema 子集校验器]
-    BI[builtin: current_time / memory_* / tool_result_read<br/>占位: kb_search / ask_agent]
+    BI[builtin: current_time / memory_* / tool_result_read / kb_search<br/>占位: ask_agent]
   end
 
   subgraph CTX[agent/runtime]
@@ -680,7 +680,7 @@ type ToolBinding struct {
 | memory_write | ✅ TxTool | write | 是（需记忆开启） | never（可改成 always） | `{content 1–500, namespace, subject_key?, kind?, importance? 1–10（默认 6）}`。同 subject_key 已存在时更新（§9.5） |
 | memory_forget | ✅ TxTool | destructive | 是（需记忆开启） | **always**（可覆盖，因为 restore 能恢复） | `{memory_id: string, reason: string 1–200}` |
 | tool_result_read | ✅ | read，幂等 | 是 | never | `{result_ref: string, offset?: int ≥0, limit?: 1–4000 字符}`。只能读本对话的结果 |
-| kb_search | ⛔ 占位（Available=false） | read | 否 | never | 接口和 schema 先定义：`{query, top_k?, collection_ids?}`。知识库模块上线后实现 |
+| kb_search | ✅ R2 | read，幂等 | 是（需知识库绑定） | never | `{query, top_k?, collection_ids?}`；版本绑定与当前权限取交集，命中保存为运行快照 |
 | ask_agent | ⛔ 占位（Available=false） | write | 否 | always | `{agent_id, task, context?}`，见 §18.3 |
 
 工具描述（Description）写进代码常量，并有单元测试快照。要点（中文）：
@@ -1501,10 +1501,10 @@ run (invoke_agent <agent_name>)                        attributes: run_id, agent
 
 不需要改动循环、协议或前端：前端的 Tools 卡片从 `/tools` 目录动态渲染，chip 使用通用渲染。
 
-### 18.2 kb_search（知识库上线时）
-- 知识库模块提供 `knowledge.Service.Search(ctx, p, agentID, query, opts)`。
-- `kb_search` 的 `Available` 改为 `true`，`Requires` 加上 `RequireKnowledgeBound`，用 config 指定 collection 范围。
-- Builder 的 knowledge 插槽与 kb_search 共享同一个 Search 实现，前者用于预取，后者用于按需检索。
+### 18.2 kb_search（R2）
+- 知识库模块提供 `rag.Searcher.Search(ctx, p, agentID, versionID, input)`，使用运行固定的不可变版本。
+- `Available=true`，`Requires` 包含 `RequireKnowledgeBound`；`configuration.knowledge[]` 决定绑定范围，工具参数只能缩小范围。
+- 仅由模型按需调用，不启用 Builder 的 knowledge 预取插槽。权限、检索和来源快照见 [R2 说明](knowledge-search.md)。
 
 ### 18.3 ask_agent（子代理即工具）
 - `RunService.StartChild(ctx, parent RunContext, call, ChildSpec{AgentID, Task, Budget})`，规则如下：

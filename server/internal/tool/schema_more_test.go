@@ -19,7 +19,7 @@ func TestSchemaStringIntegerBoolean(t *testing.T) {
 }
 
 func TestRequirementUnknown(t *testing.T) {
-	if !requirementMet(Requirement("unknown"), false) {
+	if !requirementMet(Requirement("unknown"), false, false) {
 		t.Fatal("未知 requirement 默认放行")
 	}
 }

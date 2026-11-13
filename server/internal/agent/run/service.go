@@ -69,7 +69,7 @@ func (s *RunService) ExecuteChat(ctx context.Context, tx pgx.Tx, in ChatStartInp
 		s.Engine = &NativeEngine{}
 	}
 	toolset, err := s.Registry.Resolve(tool.ResolveInput{
-		Bindings: in.Version.Configuration.Tools, MemoryPolicy: in.MemoryPolicy,
+		Bindings: in.Version.Configuration.Tools, Knowledge: in.Version.Configuration.Knowledge, MemoryPolicy: in.MemoryPolicy,
 		Principal: in.Principal, CanApprove: false,
 	})
 	if err != nil {

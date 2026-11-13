@@ -1124,8 +1124,10 @@ components:
           type: boolean
         filter:
           contentEncoding: base64
+          description: 保留字段，目前必须为空；不支持过滤表达式
           type: string
         knowledge_base_id:
+          description: 知识库 ID；保存时校验所有权及可见性，检索时再次检查当前权限
           type: string
       required:
         - knowledge_base_id
@@ -2583,7 +2585,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
-          description: Agent 信息或配置无效（invalid_agent）
+          description: Agent 信息或配置无效，包括知识库绑定权限、可见性或 filter 不受支持（invalid_agent）
         "503":
           content:
             application/json:
@@ -2856,7 +2858,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
-          description: Agent 信息或配置无效（invalid_agent）
+          description: Agent 信息或配置无效，包括知识库绑定权限、可见性或 filter 不受支持（invalid_agent）
         "503":
           content:
             application/json:

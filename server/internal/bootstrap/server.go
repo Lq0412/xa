@@ -74,7 +74,13 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, objects *s
 	model := provider.NewBailian(s.config.Bailian.APIKey, s.config.Bailian.BaseURL)
 	var chatProvider provider.ChatProvider = model
 	memories := &memory.Service{DB: db, Agents: agents, Model: model}
-	registry, err := NewToolRegistry(memories, db)
+	knowledge := &rag.Service{DB: db, Objects: objects, Config: s.config.Knowledge}
+	search, err := rag.NewSearcher(knowledge, agents, model)
+	if err != nil {
+		return nil, err
+	}
+	agents.KnowledgeValidator = knowledge.ValidateBindings
+	registry, err := NewToolRegistry(memories, db, search)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +109,7 @@ func (s *Server) handler(db *pgxpool.Pool, cache *redisclient.Client, objects *s
 	registerRoutes(mux, resolver, routeHandlers{
 		auth: authHandler, agents: agentHandler, library: libraryHandler, tools: toolsHandler,
 		memory: memoryHandler, conversations: conversationHandler, runs: runHandler,
-		knowledge: &raghttp.Handler{Knowledge: &rag.Service{DB: db, Objects: objects, Config: s.config.Knowledge}, Config: s.config.Knowledge},
+		knowledge: &raghttp.Handler{Knowledge: knowledge, Config: s.config.Knowledge},
 		checks:    checks, healthTimeout: s.config.HealthTimeout, logger: s.logger,
 	})
 	handler := http.Handler(mux)

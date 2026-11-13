@@ -23,9 +23,9 @@ type ToolBinding struct {
 
 // KnowledgeBinding 描述 Agent 版本可访问的知识库。
 type KnowledgeBinding struct {
-	KnowledgeBaseID string `json:"knowledge_base_id"`
+	KnowledgeBaseID string `json:"knowledge_base_id" doc:"知识库 ID；保存时校验所有权及可见性，检索时再次检查当前权限"`
 	Enabled         bool   `json:"enabled"`
-	Filter          []byte `json:"filter"`
+	Filter          []byte `json:"filter" doc:"保留字段，目前必须为空；不支持过滤表达式"`
 }
 
 // EvaluationBinding 描述 Agent 版本使用的评价规则。

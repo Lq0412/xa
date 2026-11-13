@@ -15,6 +15,7 @@ import (
 	"linq-bs/server/internal/framework/config"
 	"linq-bs/server/internal/framework/redis"
 	"linq-bs/server/internal/infra/provider"
+	"linq-bs/server/internal/rag"
 )
 
 // newChatService 按生产 server 装配对话 Send 所需的 RunService 与工具注册表。
@@ -27,12 +28,18 @@ func newChatService(t *testing.T, db *pgxpool.Pool, agents definition.Service, m
 			return integrationVector(query), nil
 		}}
 	}
-	reg, err := bootstrap.NewToolRegistry(mem, db)
+	knowledge := &rag.Service{DB: db, Config: cfg.Knowledge}
+	search, err := rag.NewSearcher(knowledge, agents, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := bootstrap.NewToolRegistry(mem, db, search)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if impl, ok := agents.(*definition.ServiceImpl); ok {
 		impl.ToolValidator = reg.ValidateBindings
+		impl.KnowledgeValidator = knowledge.ValidateBindings
 	}
 	runSvc := &run.RunService{
 		DB: db, Store: run.NewPGStore(db), Registry: reg, Provider: model,
